@@ -8,7 +8,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 
 namespace NatureFX {
-	[KSLMeta("NatureFX", "0.1.0", "nec093")]
+	[KSLMeta("NatureFX", "1.0.0", "nec093")]
 	public class NatureFXMod : BaseMod {
 		private const float RescanInterval = 10.0f;
 

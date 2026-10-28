@@ -23,6 +23,7 @@ namespace NatureFX.Nature {
 		private const string DefaultRules =
 			"# NatureFX material replacement rules\n" +
 			"# <game shader regex> | <material name regex> => <NFX shader name>\n" +
+			"# The separator is ' | ' with spaces; '|' without spaces is regex alternation.\n" +
 			"# The first matching rule wins. Use the shader dump (mod menu > Tools) to find names.\n" +
 			"# Lines starting with # are ignored.\n" +
 			"\n" +
@@ -51,18 +52,23 @@ namespace NatureFX.Nature {
 						continue;
 					}
 
+					// " | " (with spaces) separates the fields; a bare '|' belongs to the regex.
 					int arrow = line.LastIndexOf("=>", StringComparison.Ordinal);
-					int bar = line.IndexOf('|');
+					int bar = line.IndexOf(" | ", StringComparison.Ordinal);
 					if (arrow < 0 || bar < 0 || bar > arrow) {
 						Kino.Log.Warning($"[NatureFX] Bad rule: {line}");
 						continue;
 					}
 
-					rules_.Add(new Rule {
-						Shader = new Regex(line.Substring(0, bar).Trim()),
-						Material = new Regex(line.Substring(bar + 1, arrow - bar - 1).Trim()),
-						Target = line.Substring(arrow + 2).Trim()
-					});
+					try {
+						rules_.Add(new Rule {
+							Shader = new Regex(line.Substring(0, bar).Trim()),
+							Material = new Regex(line.Substring(bar + 3, arrow - bar - 3).Trim()),
+							Target = line.Substring(arrow + 2).Trim()
+						});
+					} catch (ArgumentException e) {
+						Kino.Log.Warning($"[NatureFX] Bad regex in rule '{line}': {e.Message}");
+					}
 				}
 			} catch (Exception e) {
 				Kino.Log.Error($"[NatureFX] Failed to read rules '{path}': {e.Message}");

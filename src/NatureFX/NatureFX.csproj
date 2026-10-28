@@ -4,7 +4,7 @@
 		<LangVersion>9</LangVersion>
 		<AssemblyName>NatureFX</AssemblyName>
 		<RootNamespace>NatureFX</RootNamespace>
-		<Version>0.1.0</Version>
+		<Version>1.0.0</Version>
 		<Nullable>disable</Nullable>
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
 		<GenerateDocumentationFile>false</GenerateDocumentationFile>
@@ -14,8 +14,14 @@
 		<ManagedDir>$(GameDir)\Drift Racing Online_Data\Managed</ManagedDir>
 		<KslApiDir Condition="'$(KslApiDir)' == ''">$(MSBuildThisFileDirectory)..\..\lib</KslApiDir>
 
-		<!-- Copy the raw .dll into kino/mods after build (developer mode loads raw dlls). -->
+		<!-- Copy the raw .dll into kino/mods after build (only if your KSL account may load raw dlls). -->
 		<DeployToGame Condition="'$(DeployToGame)' == ''">false</DeployToGame>
+
+		<!-- Build a .ksm with KSL maykr after build when both maykr.exe and the build key exist.
+		     Key: KSL control panel > NatureFX > Generate maykr key, saved as NatureFX_maykr.kmc (never commit it). -->
+		<MaykrExe Condition="'$(MaykrExe)' == ''">$(MSBuildThisFileDirectory)..\..\tools\maykr.exe</MaykrExe>
+		<MaykrKey Condition="'$(MaykrKey)' == ''">$(MSBuildThisFileDirectory)..\..\NatureFX_maykr.kmc</MaykrKey>
+		<MaykrOutDir Condition="'$(MaykrOutDir)' == ''">$(GameDir)\kino\mods</MaykrOutDir>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -39,5 +45,10 @@
 	<Target Name="DeployRawDll" AfterTargets="Build" Condition="'$(DeployToGame)' == 'true'">
 		<Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\kino\mods" />
 		<Message Importance="high" Text="NatureFX deployed to $(GameDir)\kino\mods" />
+	</Target>
+
+	<Target Name="MaykrBuild" AfterTargets="Build" Condition="'$(Configuration)' == 'Release' And Exists('$(MaykrExe)') And Exists('$(MaykrKey)')">
+		<Exec Command="&quot;$(MaykrExe)&quot; &quot;$(TargetPath)&quot; -c &quot;$(MaykrKey)&quot; -o &quot;$(MaykrOutDir)&quot; -np" />
+		<Message Importance="high" Text="NatureFX.ksm built into $(MaykrOutDir)" />
 	</Target>
 </Project>

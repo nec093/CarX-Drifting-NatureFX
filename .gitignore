@@ -9,3 +9,6 @@ unity/Build/
 # KSL SDK binaries (get them from https://github.com/trbflxr/ksl_sdk, sdk/API)
 lib/*
 !lib/README.md
+
+# KSL maykr (from ksl_sdk/sdk)
+tools/maykr.exe
