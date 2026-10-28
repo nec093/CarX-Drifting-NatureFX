@@ -32,6 +32,14 @@ namespace NatureFX.Nature {
 			"# Lines starting with # are ignored.\n" +
 			"\n" +
 			"(?i)(foliage|grass|vegetation|leaf|leaves|bush|tree|speedtree) | .* => NatureFX/Foliage\n" +
+			"\n" +
+			"# KN maps: the object name prefix is the Kino surface tag (road_ grass_ kerb_ gravel_ dirt_ sand_ snow_ icyroad_,\n" +
+			"# nocol_, alpha_/alphaCol_/alphaLit_ for transparent cards). Keep these above the generic name rules,\n" +
+			"# otherwise 'grass_' ground would be caught as foliage. Tags are case-sensitive.\n" +
+			"(?i)^HDRP/Lit$ | (^|/)alpha(Lit|Col)?_ => NatureFX/Foliage\n" +
+			"(?i)^HDRP/Lit$ | (^|/)(road|kerb|gravel|dirt|sand|grass|snow|icyroad)_ => NatureFX/LitAccumulation\n" +
+			"\n" +
+			"# Generic name rules (official tracks and other maps)\n" +
 			"(?i)^HDRP/Lit$ | (?i)(grass|leaf|leaves|bush|foliage|fern|hedge) => NatureFX/Foliage\n" +
 			"(?i)^HDRP/Lit$ | (?i)(ground|terrain|dirt|soil|rock|cliff|gravel|road|asphalt|concrete|curb|kerb|sidewalk|roof) => NatureFX/LitAccumulation\n";
 
