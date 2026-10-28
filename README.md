@@ -120,6 +120,10 @@ Blackboard のプロパティは **HDRP/Lit と同じ Reference 名** にして�
 マテリアルごとの使用数・オブジェクトの階層パスが `kino/config/NatureFX_dump_*.txt` に出力されます。
 それを見てルールを調整し、**Reload replacement rules** で再適用します。
 
+## マップ作者向け
+
+KN マップ側から揺れ方・雪の積もり方・区域ごとの天候を指定する仕様（草案）は [docs/map-authoring.md](docs/map-authoring.md) にあります。
+
 ## 既知の制限 / 未検証事項
 
 - このコードは実機のゲーム DLL に対してコンパイル済みですが、**ゲーム内での動作はまだ未検証** です
