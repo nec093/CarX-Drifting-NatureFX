@@ -12,17 +12,24 @@ namespace NatureFX.Tools {
 	// Writes every shader / material / volume in the loaded scenes to a text file,
 	// so replacement rules can be written against the game's real shader names.
 	public static class SceneShaderDumper {
+		private const int MaxObjectsPerMaterial = 12;
+
+		private class MaterialInfo {
+			public int Renderers;
+			public readonly HashSet<string> Objects = new();
+		}
+
 		private class ShaderInfo {
 			public Shader Shader;
 			public int Renderers;
-			public readonly HashSet<string> Materials = new();
-			public readonly HashSet<string> Objects = new();
+			public readonly Dictionary<Material, MaterialInfo> Materials = new();
 		}
 
 		public static string Dump() {
 			var byShader = new Dictionary<string, ShaderInfo>();
 
 			foreach (var r in UnityEngine.Object.FindObjectsByType<Renderer>(FindObjectsInactive.Include, FindObjectsSortMode.None)) {
+				string objectPath = null;
 				foreach (var m in r.sharedMaterials) {
 					if (m == null || m.shader == null) {
 						continue;
@@ -32,11 +39,17 @@ namespace NatureFX.Tools {
 						info = new ShaderInfo { Shader = m.shader };
 						byShader[m.shader.name] = info;
 					}
+					if (!info.Materials.TryGetValue(m, out var mat)) {
+						mat = new MaterialInfo();
+						info.Materials[m] = mat;
+					}
 
 					++info.Renderers;
-					info.Materials.Add(m.name);
-					if (info.Objects.Count < 10) {
-						info.Objects.Add(r.gameObject.name);
+					++mat.Renderers;
+					if (mat.Objects.Count < MaxObjectsPerMaterial) {
+						// same path format the replacement rules match against
+						objectPath ??= Nature.MaterialReplacer.ObjectPath(r.transform);
+						mat.Objects.Add(objectPath);
 					}
 				}
 			}
@@ -52,8 +65,6 @@ namespace NatureFX.Tools {
 			foreach (var info in byShader.Values.OrderByDescending(x => x.Renderers)) {
 				var s = info.Shader;
 				sb.AppendLine($"=== {s.name}  (renderers: {info.Renderers}, materials: {info.Materials.Count})");
-				sb.AppendLine($"  materials: {string.Join(", ", info.Materials.Take(30))}");
-				sb.AppendLine($"  objects:   {string.Join(", ", info.Objects)}");
 
 				int count = s.GetPropertyCount();
 				var props = new List<string>(count);
@@ -61,6 +72,11 @@ namespace NatureFX.Tools {
 					props.Add($"{s.GetPropertyName(p)}:{s.GetPropertyType(p)}");
 				}
 				sb.AppendLine($"  properties: {string.Join(", ", props)}");
+
+				foreach (var kv in info.Materials.OrderByDescending(x => x.Value.Renderers)) {
+					sb.AppendLine($"  - {kv.Key.name}  (renderers: {kv.Value.Renderers})");
+					sb.AppendLine($"      {string.Join(", ", kv.Value.Objects)}");
+				}
 				sb.AppendLine();
 			}
 

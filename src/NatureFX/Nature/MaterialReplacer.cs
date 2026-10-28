@@ -14,15 +14,19 @@ namespace NatureFX.Nature {
 	public class MaterialReplacer {
 		private class Rule {
 			public Regex Shader;
-			public Regex Material;
+			public Regex Name;
 			public string Target;
 		}
 
 		private const string RulesFileName = "NatureFX.rules.txt";
+		private const int ObjectPathDepth = 3;
 
 		private const string DefaultRules =
 			"# NatureFX material replacement rules\n" +
-			"# <game shader regex> | <material name regex> => <NFX shader name>\n" +
+			"# <game shader regex> | <name regex> => <NFX shader name>\n" +
+			"# <name regex> is tested against the material name AND the object path of every renderer using it\n" +
+			"# (up to 3 levels, e.g. 'Track/Road/main_LOD0'). CarX hashes most material names, so prefer object names.\n" +
+			"# Materials are shared: if any renderer matches, every object using that material is changed.\n" +
 			"# The separator is ' | ' with spaces; '|' without spaces is regex alternation.\n" +
 			"# The first matching rule wins. Use the shader dump (mod menu > Tools) to find names.\n" +
 			"# Lines starting with # are ignored.\n" +
@@ -63,7 +67,7 @@ namespace NatureFX.Nature {
 					try {
 						rules_.Add(new Rule {
 							Shader = new Regex(line.Substring(0, bar).Trim()),
-							Material = new Regex(line.Substring(bar + 3, arrow - bar - 3).Trim()),
+							Name = new Regex(line.Substring(bar + 3, arrow - bar - 3).Trim()),
 							Target = line.Substring(arrow + 2).Trim()
 						});
 					} catch (ArgumentException e) {
@@ -84,15 +88,20 @@ namespace NatureFX.Nature {
 
 			int replaced = 0;
 			foreach (var r in Object.FindObjectsByType<Renderer>(FindObjectsInactive.Include, FindObjectsSortMode.None)) {
+				string path = null;
 				foreach (var m in r.sharedMaterials) {
-					if (TryReplace(m, bundle)) {
+					if (m == null || originals_.ContainsKey(m)) {
+						continue;
+					}
+					path ??= ObjectPath(r.transform);
+					if (TryReplace(m, path, bundle)) {
 						++replaced;
 					}
 				}
 			}
 
 			foreach (var t in Object.FindObjectsByType<Terrain>(FindObjectsInactive.Include, FindObjectsSortMode.None)) {
-				if (TryReplace(t.materialTemplate, bundle)) {
+				if (TryReplace(t.materialTemplate, ObjectPath(t.transform), bundle)) {
 					++replaced;
 				}
 			}
@@ -112,7 +121,17 @@ namespace NatureFX.Nature {
 			originals_.Clear();
 		}
 
-		private bool TryReplace(Material m, ShaderBundle bundle) {
+		// "grandparent/parent/object", the part of the hierarchy that usually carries a readable name.
+		public static string ObjectPath(Transform t) {
+			string path = t.name;
+			var p = t.parent;
+			for (int i = 1; i < ObjectPathDepth && p != null; ++i, p = p.parent) {
+				path = p.name + "/" + path;
+			}
+			return path;
+		}
+
+		private bool TryReplace(Material m, string objectPath, ShaderBundle bundle) {
 			if (m == null || m.shader == null || originals_.ContainsKey(m)) {
 				return false;
 			}
@@ -123,7 +142,7 @@ namespace NatureFX.Nature {
 			}
 
 			foreach (var rule in rules_) {
-				if (!rule.Shader.IsMatch(shaderName) || !rule.Material.IsMatch(m.name)) {
+				if (!rule.Shader.IsMatch(shaderName) || !(rule.Name.IsMatch(m.name) || rule.Name.IsMatch(objectPath))) {
 					continue;
 				}
 

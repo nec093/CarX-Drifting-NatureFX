@@ -102,11 +102,23 @@ Blackboard のプロパティは **HDRP/Lit と同じ Reference 名** にして�
 初回起動時に `kino/config/NatureFX.rules.txt` が作られます。
 
 ```
-<ゲームのシェーダー名 正規表現> | <マテリアル名 正規表現> => <NFX シェーダー名>
+<ゲームのシェーダー名 正規表現> | <名前 正規表現> => <NFX シェーダー名>
 ```
 
-**Tools > Dump scene shaders** で、いま読み込まれているシーンの全シェーダー名・マテリアル名・プロパティ一覧が
-`kino/config/NatureFX_dump_*.txt` に出力されるので、それを見てルールを調整し、**Reload replacement rules** で再適用します。
+- 区切りは前後に空白のある ` | ` です。空白なしの `|` は正規表現の「または」として扱われます
+- `<名前 正規表現>` は **マテリアル名** と、そのマテリアルを使う各オブジェクトの **階層パス** (最大 3 階層、例: `Track/Road/main_LOD0`) の両方に当てはめます
+- CarX のマテリアル名はほとんどが `0x4C6A925E` のような番号に置き換えられているので、オブジェクト名で書くのが確実です
+- マテリアルは共有されるため、1 つでも当てはまるオブジェクトがあれば、そのマテリアルを使う全オブジェクトが変わります
+
+例 (道路と柵に雪・濡れを足す):
+
+```
+(?i)^HDRP/Lit$ | (?i)(road|asphalt|concrete_barrier) => NatureFX/LitAccumulation
+```
+
+**Tools > Dump scene shaders** で、いま読み込まれているシーンのシェーダーごとに、プロパティ一覧と
+マテリアルごとの使用数・オブジェクトの階層パスが `kino/config/NatureFX_dump_*.txt` に出力されます。
+それを見てルールを調整し、**Reload replacement rules** で再適用します。
 
 ## 既知の制限 / 未検証事項
 

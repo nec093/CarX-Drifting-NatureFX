@@ -22,6 +22,7 @@ namespace NatureFX {
 		private bool dirty_ = true;
 		private bool photoMode_;
 		private float nextRescan_;
+		private Coroutine pendingRescan_;
 
 		internal bool PhotoMode => photoMode_;
 
@@ -49,7 +50,7 @@ namespace NatureFX {
 			SceneManager.sceneLoaded += OnSceneLoaded;
 			Kino.Input.Bind(new[] { KeyCode.LeftControl, KeyCode.P }, TogglePhotoMode, "Photo mode (path tracing)");
 
-			StartCoroutine(RescanAfterDelay(1.0f));
+			ScheduleRescan(1.0f);
 		}
 
 		private void OnDestroy() {
@@ -134,11 +135,20 @@ namespace NatureFX {
 		}
 
 		private void OnSceneLoaded(Scene scene, LoadSceneMode mode) {
-			StartCoroutine(RescanAfterDelay(2.0f));
+			ScheduleRescan(2.0f);
+		}
+
+		// Tracks load several additive scenes in a row; restart the timer so they share one rescan.
+		private void ScheduleRescan(float delay) {
+			if (pendingRescan_ != null) {
+				StopCoroutine(pendingRescan_);
+			}
+			pendingRescan_ = StartCoroutine(RescanAfterDelay(delay));
 		}
 
 		private IEnumerator RescanAfterDelay(float delay) {
 			yield return new WaitForSecondsRealtime(delay);
+			pendingRescan_ = null;
 
 			Capabilities.Refresh();
 			Accumulation.CollectSceneMaterials();
