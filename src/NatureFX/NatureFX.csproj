@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net472</TargetFramework>
+		<LangVersion>9</LangVersion>
+		<AssemblyName>NatureFX</AssemblyName>
+		<RootNamespace>NatureFX</RootNamespace>
+		<Version>0.1.0</Version>
+		<Nullable>disable</Nullable>
+		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+		<GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+		<!-- Override on the command line: dotnet build -p:GameDir="D:\SteamLibrary\steamapps\common\CarX Drift Racing Online" -->
+		<GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\CarX Drift Racing Online</GameDir>
+		<ManagedDir>$(GameDir)\Drift Racing Online_Data\Managed</ManagedDir>
+		<KslApiDir Condition="'$(KslApiDir)' == ''">$(MSBuildThisFileDirectory)..\..\lib</KslApiDir>
+
+		<!-- Copy the raw .dll into kino/mods after build (developer mode loads raw dlls). -->
+		<DeployToGame Condition="'$(DeployToGame)' == ''">false</DeployToGame>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<Reference Include="KSL.API" HintPath="$(KslApiDir)\KSL.API.dll" Private="false" />
+		<Reference Include="0Harmony" HintPath="$(KslApiDir)\0Harmony.dll" Private="false" />
+
+		<Reference Include="UnityEngine.CoreModule" HintPath="$(ManagedDir)\UnityEngine.CoreModule.dll" Private="false" />
+		<Reference Include="UnityEngine.AssetBundleModule" HintPath="$(ManagedDir)\UnityEngine.AssetBundleModule.dll" Private="false" />
+		<Reference Include="UnityEngine.PhysicsModule" HintPath="$(ManagedDir)\UnityEngine.PhysicsModule.dll" Private="false" />
+		<Reference Include="UnityEngine.TerrainModule" HintPath="$(ManagedDir)\UnityEngine.TerrainModule.dll" Private="false" />
+		<Reference Include="UnityEngine.WindModule" HintPath="$(ManagedDir)\UnityEngine.WindModule.dll" Private="false" />
+		<Reference Include="UnityEngine.IMGUIModule" HintPath="$(ManagedDir)\UnityEngine.IMGUIModule.dll" Private="false" />
+		<Reference Include="Unity.RenderPipelines.Core.Runtime" HintPath="$(ManagedDir)\Unity.RenderPipelines.Core.Runtime.dll" Private="false" />
+		<Reference Include="Unity.RenderPipelines.HighDefinition.Runtime" HintPath="$(ManagedDir)\Unity.RenderPipelines.HighDefinition.Runtime.dll" Private="false" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<EmbeddedResource Include="Resources\icon.png" Condition="Exists('Resources\icon.png')" />
+	</ItemGroup>
+
+	<Target Name="DeployRawDll" AfterTargets="Build" Condition="'$(DeployToGame)' == 'true'">
+		<Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\kino\mods" />
+		<Message Importance="high" Text="NatureFX deployed to $(GameDir)\kino\mods" />
+	</Target>
+</Project>
