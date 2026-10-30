@@ -37,6 +37,7 @@ Shader "Hidden/NatureFX/RTShadow"
     float4 _NFX_SunFilter;            // x: 2 tan(sun angular radius), y: angle one sun trace pixel covers (radians)
     float4 _NFX_RTSunDir;             // xyz: direction towards the sun, w: 1 when the sun is up
     float4 _NFX_RTSunColor;           // rgb: sun illuminance at the ground (lux)
+    StructuredBuffer<float4> _NFX_AmbientProbe; // HDRP's diffuse sky probe (7 float4, the SH9 constants)
     float4 _NFX_LeafParams;           // x: share of the sun leaves let through, y: 1 = light shafts, z: 1 = local light shadows,
                                       // w: own engine GI bounce strength (0: the ambient texture is the one bounce factor)
     float4 _NFX_SunExact;             // x: 1 when _NFX_SunExactTex holds this frame's exact sun light
@@ -247,6 +248,17 @@ Shader "Hidden/NatureFX/RTShadow"
 
     float4 CompositeSurface(Varyings v);
 
+    // HDRP's diffuse sky light for a normal (the probe's SH9 constants, as NFXNative's SampleSH9)
+    float3 ProbeSH9(float3 n)
+    {
+        float4 vA = float4(n, 1.0);
+        float3 x1 = float3(dot(_NFX_AmbientProbe[0], vA), dot(_NFX_AmbientProbe[1], vA), dot(_NFX_AmbientProbe[2], vA));
+        float4 vB = n.xyzz * n.yzzx;
+        float3 x2 = float3(dot(_NFX_AmbientProbe[3], vB), dot(_NFX_AmbientProbe[4], vB), dot(_NFX_AmbientProbe[5], vB));
+        float vC = n.x * n.x - n.y * n.y;
+        return max(x1 + x2 + _NFX_AmbientProbe[6].rgb * vC, 0.0);
+    }
+
     // the shadowed and ambient-scaled image, plus the light the air scatters towards the camera
     float3 EstimateSunPart(uint2 pixel, float depth, float3 color, float3 n, float perceptualRoughness, float3 L, float ndl, float4 surface, bool known);
 
@@ -356,8 +368,25 @@ Shader "Hidden/NatureFX/RTShadow"
         // Without the ray traced shadows HDRP's shadow maps already darken the sun light, so the sun cannot be told
         // apart from the rest: the ambient light scales all of it, a little less to spare the sunlit share.
         // Facing away from the sun, all of the pixel's light is ambient.
+        // GI: the sky's share scales only the sky light HDRP gave (its probe on the surface's colour), not the lamps,
+        // glows and reflections in the rest (scaling all of it put out the lamps of a garage, whose sky share is ~0)
+        bool gi = _NFX_LeafParams.w > 0.0 && ambientStrength > 0.0;
+        float3 skyPart = 0.0;
+        if (gi)
+        {
+            float diffuseMetal = known ? saturate((surface.a - (surface.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0;
+            float3 diffuseAlbedo = (known ? surface.rgb : 0.3) * (1.0 - diffuseMetal);
+            skyPart = diffuseAlbedo * ProbeSH9(n) * GetCurrentExposureMultiplier();
+        }
         if (shadowStrength <= 0.0)
+        {
+            if (gi)
+            {
+                skyPart *= min(1.0, Luminance(color) / max(Luminance(skyPart), 1e-6));
+                return float4(color - skyPart * (1.0 - ambientFactor) + bounceLight, 1.0);
+            }
             return float4(color * lerp(1.0, ambientFactor, 0.6) + bounceLight, 1.0);
+        }
 
         // split the pixel into the sun's share and the rest (sky, bounce, reflections); shadow the first, scale the
         // second. Facing away from the sun the share is zero, except where HDRP lets the sun through (transmission).
@@ -372,7 +401,17 @@ Shader "Hidden/NatureFX/RTShadow"
             sunPart = EstimateSunPart(pixel, depth, color, n, nd.perceptualRoughness, L, ndl, surface, known);
         }
         float sunFactor = 1.0 - (1.0 - sunVisible) * shadowStrength;
-        float3 result = sunPart * sunFactor + (color - sunPart) * ambientFactor + bounceLight;
+        float3 rest = max(color - sunPart, 0.0);
+        float3 result;
+        if (gi)
+        {
+            skyPart *= min(1.0, Luminance(rest) / max(Luminance(skyPart), 1e-6));
+            result = sunPart * sunFactor + rest - skyPart * (1.0 - ambientFactor) + bounceLight;
+        }
+        else
+        {
+            result = sunPart * sunFactor + rest * ambientFactor + bounceLight;
+        }
         // A leaf lit from behind glows: sunlight passes through the thin blade, tinted twice by its colour,
         // brightest when looking towards the sun. HDRP lights it from the front only.
         if (!sunLit && surfaceW < 0.0 && _NFX_RTSunDir.w > 0.0 && _NFX_LeafParams.x > 0.0)

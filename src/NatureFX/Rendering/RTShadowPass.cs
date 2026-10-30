@@ -32,6 +32,7 @@ namespace NatureFX.Rendering {
 		private static readonly int DenoiseStep = Shader.PropertyToID("_NFX_DenoiseStep");
 		private static readonly int DenoiseMode = Shader.PropertyToID("_NFX_DenoiseMode");
 		private static readonly int TraceJitter = Shader.PropertyToID("_NFX_TraceJitter");
+		private static readonly int AmbientProbeId = Shader.PropertyToID("_NFX_AmbientProbe");
 		private static readonly int RTSunDir = Shader.PropertyToID("_NFX_RTSunDir");
 		private static readonly int RTSunColor = Shader.PropertyToID("_NFX_RTSunColor");
 		private static readonly int LeafParams = Shader.PropertyToID("_NFX_LeafParams");
@@ -389,6 +390,7 @@ namespace NatureFX.Rendering {
 			props_.SetVector(RTSunColor, SunIlluminance);
 			props_.SetVector(LeafParams, new Vector4(TraceShadows ? LeafTranslucency : 0.0f, Shafts ? 1.0f : 0.0f, localShadows ? 1.0f : 0.0f,
 				giUsed_ ? Mathf.Max(0.001f, GIIntensity) : 0.0f));
+			props_.SetBuffer(AmbientProbeId, probe); // GI: the sky light HDRP gave, which the sky's share scales
 			CoreUtils.SetRenderTarget(cmd, ctx.cameraColorBuffer, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, Material, props_, PassComposite);
 			RTTimings.ShadowFilter.End(cmd);
