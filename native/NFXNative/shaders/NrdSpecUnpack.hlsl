@@ -27,5 +27,5 @@ void main(uint3 id : SV_DispatchThreadID)
     float3 fresnel = asfloat(TraceSurface.Load3(index * 48 + 32));
     float3 radiance = max(REBLUR_BackEnd_UnpackRadianceAndNormHitDist(Signal[id.xy]).rgb, 0.0);
     float4 result = asfloat(TraceResult.Load4(index * 32));
-    TraceResult.Store4(index * 32, asuint(float4(radiance * max(fresnel, 1e-3), result.a)));
+    TraceResult.Store4(index * 32, asuint(float4(radiance * max(fresnel, 0.02), result.a)));
 }

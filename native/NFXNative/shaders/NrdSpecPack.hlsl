@@ -45,7 +45,9 @@ void main(uint3 id : SV_DispatchThreadID)
     OutNormalRoughness[id.xy] = NRD_FrontEnd_PackNormalAndRoughness(n, saturate(roughness), 0.0);
     OutViewZ[id.xy] = viewZ;
     OutMotion[id.xy] = guide.yz;
-    float3 radiance = traced ? result.rgb / max(c.rgb, 1e-3) : 0.0;
+    // (pre-exposed; a sun glint capped so REBLUR's half float moments do not overflow, the Fresnel floored at a
+    // dielectric's so dividing by it cannot blow a dark pixel up)
+    float3 radiance = traced ? min(result.rgb / max(c.rgb, 0.02), 64.0) : 0.0;
     float norm = dist > 0.0 ? REBLUR_FrontEnd_GetNormHitDist(dist, viewZ, HitDistParams, roughness) : 1.0;
     OutSignal[id.xy] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(radiance, norm, true);
 }

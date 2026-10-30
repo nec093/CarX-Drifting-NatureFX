@@ -7,7 +7,9 @@
 // light added by emissive stand ins (negative) to the second, both without a hit distance (soft, wide). A pixel
 // without a valid surface is put out of NRD's range (view Z 1e6).
 // Root: t0 guides (2 float4 per pixel), t1 surfaces (3 float4 per pixel), t2 result (float4 per pixel), u0..u4 a table
-// (normal and roughness, view Z, motion, radiance and hit distance 0 and 1), b0 { width, height, mode }.
+// (normal and roughness, view Z, motion, radiance and hit distance 0 and 1), b0 { width, height, mode, scale }.
+// Scale shrinks light before exposure (GI's bounce, the lamps' lux: tens of thousands in the sun) into what REBLUR's
+// half float moments hold (their squares overflowed: infinities spread over the whole image, white).
 // Compiled into NrdReblurPack.h (NRD's Shaders folder on the include path).
 #include "NRD.hlsli"
 
@@ -25,7 +27,7 @@ cbuffer Params : register(b0)
     uint Width;
     uint Height;
     uint Mode;
-    uint Pad;
+    float Scale;
 };
 
 // ReblurHitDistanceParameters' defaults (NRDSettings.h): the settings Nrd.inl sends leave them so
@@ -47,8 +49,8 @@ void main(uint3 id : SV_DispatchThreadID)
     OutViewZ[id.xy] = viewZ;
     OutMotion[id.xy] = b.yz;
     float norm = Mode == 2u ? 1.0 : REBLUR_FrontEnd_GetNormHitDist(max(hitDist, 0.0), viewZ, HitDistParams, 1.0);
-    float3 first = Mode == 2u ? max(result.rgb, 0.0) : result.rgb;
-    float3 second = Mode == 1u ? result.aaa : Mode == 2u ? max(-result.rgb, 0.0) : 0.0;
+    float3 first = (Mode == 2u ? max(result.rgb, 0.0) : result.rgb) * Scale;
+    float3 second = Mode == 1u ? result.aaa : Mode == 2u ? max(-result.rgb, 0.0) * Scale : 0.0;
     OutSignal0[id.xy] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(first, norm, true);
     OutSignal1[id.xy] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(second, norm, true);
 }

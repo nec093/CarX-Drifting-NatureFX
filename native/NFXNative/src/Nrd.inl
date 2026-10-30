@@ -604,7 +604,11 @@ void NrdReblur(const NrdEventData* data) {
 	ID3D12DescriptorHeap* heaps[] = { g_nrdHeap.Get() };
 	list->SetDescriptorHeaps(1, heaps);
 	bool two = data->mode == 1 || data->mode == 2;
+	// light before exposure (GI, lamps) shrunk into REBLUR's half float range (NrdReblurPack.hlsl), the ambient light's
+	// factor as it is
+	float scale = data->mode == 0 ? 1.0f : 1.0f / 1024.0f;
 	UINT constants[4] = { data->width, data->height, data->mode, 0 };
+	memcpy(&constants[3], &scale, 4);
 	NrdPack(list, c, data, 2, constants);
 	// one ray a pixel (GI, ambient light) or two lights (lamps): the fast history (6 frames by default), which the
 	// long one is clamped to, followed the noise and the image flickered on a moving car. A longer fast history and
