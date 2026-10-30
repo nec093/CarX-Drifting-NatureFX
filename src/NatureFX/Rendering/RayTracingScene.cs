@@ -423,7 +423,11 @@ namespace NatureFX.Rendering {
 		private static readonly string[] NotGlass = {
 			"blobshadow", "fakeshadow", "shadowplane", "shadow", "decal", "particle", "unlit", "additive", "sprite", "ui/", "text",
 			"flare", "glow", "smoke", "dust", "fog", "cloud", "water", "skid", "tire", "trail", "light shaft", "beam",
+			// overlays blended onto roads and walls (a touge map's blend_road_wear dimmed the whole road as "glass")
+			"blend", "wear", "dirt", "overlay", "puddle", "stain", "leak", "grime", "moss", "crack", "mark",
 		};
+		// what a material's name or shader says glass is, whatever its smoothness
+		private static readonly string[] GlassWords = { "glass", "window", "windshield", "lens", "screen", "mirror", "visor", "lamp", "light" };
 
 		private static bool Glass(Material m) {
 			if (m.renderQueue < (int)RenderQueue.Transparent && !(m.HasProperty("_SurfaceType") && m.GetFloat("_SurfaceType") > 0.5f)) {
@@ -436,7 +440,14 @@ namespace NatureFX.Rendering {
 					return false;
 				}
 			}
-			return true;
+			foreach (string word in GlassWords) {
+				if (shader.Contains(word) || name.Contains(word)) {
+					return true;
+				}
+			}
+			// glass is smooth: a rough see-through surface is some overlay or effect, not a pane
+			float smoothness = m.HasProperty("_Smoothness") ? m.GetFloat("_Smoothness") : m.HasProperty("_Glossiness") ? m.GetFloat("_Glossiness") : 1.0f;
+			return smoothness >= 0.6f;
 		}
 		private readonly Dictionary<SkinnedMeshRenderer, Mesh> baked_ = new();
 
