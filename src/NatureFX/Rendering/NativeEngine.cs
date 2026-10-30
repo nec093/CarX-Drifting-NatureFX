@@ -219,13 +219,18 @@ namespace NatureFX.Rendering {
 
 		// NVIDIA Real-Time Denoisers (NFXNative Nrd.inl): SIGMA denoises the sun shadows right after their trace (render
 		// event 5); the shadow pass then skips its own filter for them. Set per frame by RayTracingEffects.
-		public static bool NrdSigma;
-		public static bool NrdAmbient;     // REBLUR denoises the ambient light / GI too (half resolution only: set by the shadow pass)
-		public static bool NrdReflections; // REBLUR_SPECULAR denoises the reflections (set with NrdSigma)
+		public static bool NrdEnabled;     // the NVIDIA NRD denoiser is chosen (Settings.RTDenoiser 2)
+		public static bool NrdSun;         // SIGMA denoises the sun shadows
+		public static bool NrdAmbient;     // REBLUR denoises the ambient light / GI (set by the shadow pass)
+		public static bool NrdLamps;       // REBLUR denoises the lamp shadows (set by the shadow pass)
+		public static bool NrdReflections; // REBLUR_SPECULAR denoises the reflections
+		// Developer tab: each signal can go back to NatureFX's own filter, and the cars' motion vector pass stay off,
+		// to find which part of NRD a problem comes from (not saved)
+		public static bool DevNrdSun = true, DevNrdAmbient = true, DevNrdLamps = true, DevNrdReflections = true, DevCarMotionVectors = true;
 		public static bool NrdReset;       // the shadow pass dropped its history this frame
 		public static string NrdStatus {
 			get {
-				if (!NrdSigma) {
+				if (!NrdEnabled) {
 					return "off";
 				}
 				try {
@@ -697,7 +702,7 @@ namespace NatureFX.Rendering {
 			cmd.SetComputeBufferParam(bridge, prepare, NativeSunId, b.Result);
 			cmd.DispatchCompute(bridge, prepare, (width + 7) / 8, (height + 7) / 8, TextureXR.slices);
 			Issue(cmd, TraceSun_, b.SurfacePtr, b.ResultPtr, width, height);
-			if (NrdSigma) {
+			if (NrdSun) {
 				IssueNrd(cmd, bridge, ctx, nrdSunGuide_, b.SurfacePtr, b.ResultPtr, width, height, size, 5, 0);
 			}
 			cmd.SetComputeBufferParam(bridge, unpack, NativeSunId, b.Result);
@@ -844,7 +849,7 @@ namespace NatureFX.Rendering {
 				surface = PrepareAmbient(cmd, bridge, ctx, surfaceNormal, size, result, Vector4.zero);
 			}
 			Issue(cmd, TraceLocal_, surface.SurfacePtr, result.ResultPtr, width, height);
-			if (NrdAmbient) {
+			if (NrdLamps) {
 				IssueNrd(cmd, bridge, ctx, nrdAmbientGuide_, surface.SurfacePtr, result.ResultPtr, width, height, size, 6, 2);
 			}
 			Unpack4(cmd, bridge, result, target, size);

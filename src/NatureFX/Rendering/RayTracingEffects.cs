@@ -164,7 +164,7 @@ namespace NatureFX.Rendering {
 			lights_.Update(Camera.main);
 			RTTimings.BeginSceneUpdate();
 			dxrScene_.Update();
-			dxrScene_.SetCarMotionVectors(NativeEngine.NrdSigma);
+			dxrScene_.SetCarMotionVectors(NativeEngine.NrdEnabled && NativeEngine.DevCarMotionVectors);
 			RTTimings.EndSceneUpdate();
 
 			if (sun != null && sun.isActiveAndEnabled) {
@@ -311,7 +311,7 @@ namespace NatureFX.Rendering {
 			d.Features.Add(("lamp shadows", LampShadows));
 			d.Features.Add((shadows_ != null && shadows_.QuarterResolution ? "quarter resolution" : "half resolution", true));
 
-			if (NativeEngine.NrdSigma) {
+			if (NativeEngine.NrdEnabled) {
 				// "sun: ...; ambient: ...; lamps: ...; reflections: ..."
 				foreach (string part in NativeEngine.NrdStatus.Split(new[] { "; " }, System.StringSplitOptions.RemoveEmptyEntries)) {
 					int colon = part.IndexOf(": ");
@@ -615,8 +615,9 @@ namespace NatureFX.Rendering {
 				NativeEngine.GlassShadows = s.RTGlassShadows;
 				shadows_.QuarterResolution = s.RTTraceScale == 1;
 				shadows_.VarianceDenoiser = s.RTDenoiser >= 1;
-				NativeEngine.NrdSigma = s.RTDenoiser == 2 && s.Enabled;
-				NativeEngine.NrdReflections = NativeEngine.NrdSigma;
+				NativeEngine.NrdEnabled = s.RTDenoiser == 2 && s.Enabled;
+				NativeEngine.NrdSun = NativeEngine.NrdEnabled && NativeEngine.DevNrdSun;
+				NativeEngine.NrdReflections = NativeEngine.NrdEnabled && NativeEngine.DevNrdReflections;
 				shadows_.ShaftDensity = s.RTShaftDensity;
 				shadows_.ShaftAnisotropy = s.RTShaftAnisotropy;
 				shadows_.SunAngularDiameter = Mathf.Clamp(s.SunSize, 0.05f, 5.0f);

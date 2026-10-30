@@ -903,6 +903,15 @@ namespace NatureFX {
 			}
 			Widgets.Info($"Engine shaders now: {NativeEngine.ShaderStatus}");
 			Widgets.EndCard();
+			Widgets.BeginCard("NRD parts", "With the NVIDIA NRD denoiser chosen: each signal off here goes back to NatureFX's own filter, " +
+				"to find which part a problem comes from. Not saved.");
+			Widgets.Switch("Sun shadows (SIGMA)", NativeEngine.DevNrdSun, v => NativeEngine.DevNrdSun = v);
+			Widgets.Switch("Ambient light / GI (REBLUR)", NativeEngine.DevNrdAmbient, v => NativeEngine.DevNrdAmbient = v);
+			Widgets.Switch("Lamp shadows (REBLUR)", NativeEngine.DevNrdLamps, v => NativeEngine.DevNrdLamps = v);
+			Widgets.Switch("Reflections (REBLUR)", NativeEngine.DevNrdReflections, v => NativeEngine.DevNrdReflections = v);
+			Widgets.Switch("Cars' motion vector pass", NativeEngine.DevCarMotionVectors, v => NativeEngine.DevCarMotionVectors = v,
+				"NRD follows a moving car's pixels by its motion vectors; the game draws cars without that pass.");
+			Widgets.EndCard();
 			Widgets.BeginCard("System", null, true);
 			Widgets.Info(Capabilities.Describe());
 			Widgets.Info($"Shader bundle: {mod_.Bundle.Shaders.Count} shaders · replaced materials: {mod_.Replacer.ReplacedCount}");

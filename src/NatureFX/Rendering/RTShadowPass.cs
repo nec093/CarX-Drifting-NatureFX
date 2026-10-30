@@ -272,7 +272,12 @@ namespace NatureFX.Rendering {
 			// frame (an R2 sequence); the accumulation gathers them, the composite's depth weighted upsample spreads them.
 			// Not under NRD: REBLUR follows each pixel through time and needs it to stay where it is.
 			var jitter = Vector2.zero;
-			if (QuarterResolution && !NativeEngine.NrdSigma) {
+			// NRD (NativeEngine.NrdEnabled): REBLUR takes the ambient light and the lamp shadows too, at half or quarter
+			// resolution (unjittered); the Developer tab can hand each back to the filter here
+			NativeEngine.NrdReset = resetHistory;
+			NativeEngine.NrdAmbient = NativeEngine.NrdEnabled && NativeEngine.DevNrdAmbient;
+			NativeEngine.NrdLamps = NativeEngine.NrdEnabled && NativeEngine.DevNrdLamps;
+			if (QuarterResolution && !NativeEngine.NrdAmbient && !NativeEngine.NrdLamps) {
 				jitter = new Vector2((0.5f + frame_ * 0.7548776662f) % 1.0f - 0.5f, (0.5f + frame_ * 0.5698402910f) % 1.0f - 0.5f);
 			}
 			ctx.cmd.SetComputeVectorParam(Bridge, TraceJitter, jitter);
@@ -304,9 +309,6 @@ namespace NatureFX.Rendering {
 
 			// 1. trace: one point of the sun's disc per pixel, one ambient ray per half resolution pixel
 			RTTimings.ShadowTrace.Begin(cmd);
-			// NRD (NativeEngine.NrdSigma): REBLUR takes the ambient light too, at half or quarter resolution (unjittered)
-			NativeEngine.NrdReset = resetHistory;
-			NativeEngine.NrdAmbient = NativeEngine.NrdSigma;
 			if (TraceShadows) {
 				RTTimings.Sun.Begin(cmd);
 				NativeEngine.TraceSun(cmd, Bridge, ctx, Surfaces.Normal, sun_.Raw, sunSize);
@@ -346,9 +348,9 @@ namespace NatureFX.Rendering {
 			float StillShare(float moving, float floor) => moving >= 1.0f ? 1.0f : History.StillBlend(moving, floor) / Mathf.Max(moving, 1e-4f);
 			bool converged = History.StillFrames > 30;
 			// the DXR 1.2 device's sun shadows arrive one frame late (RtDevice.inl): the filter reads them reprojected
-			// NRD's SIGMA (NativeEngine.NrdSigma) already denoised them, history included: passed through as they are
+			// NRD's SIGMA (NativeEngine.NrdSun) already denoised them, history included: passed through as they are
 			var sunResult = !TraceShadows ? null
-				: NativeEngine.NrdSigma ? Filter(cmd, sun_, sunSize, 1.0f, PassDenoiseSun, sunRadius, fov, 0)
+				: NativeEngine.NrdSun ? Filter(cmd, sun_, sunSize, 1.0f, PassDenoiseSun, sunRadius, fov, 0)
 				: Filter(cmd, sun_, sunSize, blend, PassDenoiseSun, sunRadius, fov, 2, NativeEngine.Dxr12SunActive, StillShare(blend, 1.0f / 16.0f));
 			// GI: one ray per half resolution pixel with every bounce behind it varies far more than the one bounce
 			// ambient light: a longer history (about 20 frames) and a fifth, wider blur step. Ambient light and lamp
@@ -364,7 +366,7 @@ namespace NatureFX.Rendering {
 				: giUsed_ ? Filter(cmd, ambient_, ambientSize, giBlend, PassDenoise, sunRadius, fov, wide + 1, false, Mathf.Min(0.25f, StillShare(giBlend, 1.0f / 64.0f)))
 				          : Filter(cmd, ambient_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, Mathf.Min(0.25f, StillShare(slowBlend, 1.0f / 64.0f)));
 			var localResult = !localShadows ? null
-				: NativeEngine.NrdAmbient ? Filter(cmd, local_, ambientSize, 1.0f, PassDenoise, sunRadius, fov, 0)
+				: NativeEngine.NrdLamps ? Filter(cmd, local_, ambientSize, 1.0f, PassDenoise, sunRadius, fov, 0)
 				: Filter(cmd, local_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, Mathf.Min(0.25f, StillShare(slowBlend, 1.0f / 64.0f)));
 			// one sample per pixel along a whole view ray: lean on the history longer than the surfaces do
 			var shaftResult = Shafts ? Filter(cmd, shafts_, shaftSize, resetHistory ? 1.0f : blend * 0.5f, PassDenoise, sunRadius, fov, 3) : null;
