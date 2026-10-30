@@ -939,7 +939,7 @@ namespace NatureFX.Rendering {
 			float metallic = material.HasProperty(MetallicId) ? Mathf.Clamp01(material.GetFloat(MetallicId)) : 0.0f;
 			float smoothness = material.HasProperty(SmoothnessId) ? Mathf.Clamp01(material.GetFloat(SmoothnessId)) : 0.5f;
 			// what the surface gives off (HDRP's _EmissiveColor, intensity included, times its map): the GI's light sources
-			var emission = material.HasProperty(EmissiveColorId) ? material.GetColor(EmissiveColorId).linear : Color.black;
+			var emission = material.HasProperty(EmissiveColorId) ? material.GetColor(EmissiveColorId) : Color.black; // HDR: already linear
 			var emissionTexture = emission.maxColorComponent > 0.0f && material.HasProperty(EmissiveColorMapId) ? material.GetTexture(EmissiveColorMapId) : null;
 			var emissionMap = emissionTexture != null ? emissionTexture.GetNativeTexturePtr() : IntPtr.Zero;
 			bool emissionSrgb = emissionTexture != null && UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsSRGBFormat(emissionTexture.graphicsFormat);
@@ -1250,7 +1250,7 @@ namespace NatureFX.Rendering {
 				if (instance.Follow != null || instance.Glass || m == null || !m.HasProperty(EmissiveColorId)) {
 					continue;
 				}
-				var emission = m.GetColor(EmissiveColorId).linear;
+				var emission = m.GetColor(EmissiveColorId); // HDR: already linear (.linear made 3000 nits 44 million)
 				float luminance = 0.2126f * emission.r + 0.7152f * emission.g + 0.0722f * emission.b;
 				if (luminance < EmitterMinLuminance) {
 					continue;
