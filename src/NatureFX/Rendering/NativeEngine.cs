@@ -701,11 +701,18 @@ namespace NatureFX.Rendering {
 
 			if (nrdFrame_ != Time.frameCount) {
 				var cam = ctx.hdCamera.camera;
+				// Unity's camera space looks down -Z; the guides' view Z is the positive distance. NRD rebuilds each
+				// pixel's position from both, so the view looks down +Z here (Z flipped in the view, and back in the
+				// projection: the same clip space). Mixed, the positions came out mirrored and the history was never
+				// thrown away where things moved: heavy ghosting.
+				var flip = Matrix4x4.Scale(new Vector3(1.0f, 1.0f, -1.0f));
+				var view = flip * cam.worldToCameraMatrix;
+				var proj = cam.nonJitteredProjectionMatrix * flip;
 				bool continuous = nrdFrame_ == Time.frameCount - 1;
-				nrdViewPrev_ = continuous ? nrdView_ : cam.worldToCameraMatrix;
-				nrdProjPrev_ = continuous ? nrdProj_ : cam.nonJitteredProjectionMatrix;
-				nrdView_ = cam.worldToCameraMatrix;
-				nrdProj_ = cam.nonJitteredProjectionMatrix;
+				nrdViewPrev_ = continuous ? nrdView_ : view;
+				nrdProjPrev_ = continuous ? nrdProj_ : proj;
+				nrdView_ = view;
+				nrdProj_ = proj;
 				nrdFrame_ = Time.frameCount;
 			}
 			var f = nrdFloats_;
