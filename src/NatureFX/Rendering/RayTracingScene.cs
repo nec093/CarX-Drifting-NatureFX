@@ -35,6 +35,38 @@ namespace NatureFX.Rendering {
 
 		public int InstanceCount { get; private set; }
 
+		// Car materials (moving renderers'). The game draws them without their motion vector pass, so HDRP's motion
+		// vectors give their pixels the camera's motion only: NRD, which follows each pixel through time by them, then
+		// lost a moving car's history every frame (GI and shadows on it stayed noise). SetCarMotionVectors turns the
+		// pass on while NRD runs and puts back what it changed when it stops.
+		private readonly HashSet<Material> carMaterials_ = new();
+		private readonly HashSet<Material> motionVectorsOn_ = new();
+		private int carMaterialsSeen_ = -1;
+		private bool carMotionVectors_;
+
+		public void SetCarMotionVectors(bool on) {
+			if (on == carMotionVectors_ && carMaterials_.Count == carMaterialsSeen_) {
+				return;
+			}
+			carMotionVectors_ = on;
+			carMaterialsSeen_ = carMaterials_.Count;
+			if (on) {
+				foreach (var m in carMaterials_) {
+					if (m != null && !m.GetShaderPassEnabled("MotionVectors") && motionVectorsOn_.Add(m)) {
+						m.SetShaderPassEnabled("MotionVectors", true);
+					}
+				}
+				KSL.API.Kino.Log.Info($"[NatureFX] NRD: motion vector pass on for {motionVectorsOn_.Count} car materials");
+			} else {
+				foreach (var m in motionVectorsOn_) {
+					if (m != null) {
+						m.SetShaderPassEnabled("MotionVectors", false);
+					}
+				}
+				motionVectorsOn_.Clear();
+			}
+		}
+
 		// the scene is the own engine's only (NativeEngine): instances get handles from here (glass: negative ones)
 		private int nextOwnHandle_ = 1;
 		public int GlassCount => glass_; // glass surfaces in the own engine's scene (RTGlassPass)
@@ -411,6 +443,13 @@ namespace NatureFX.Rendering {
 		private List<int> AddRenderer(Renderer r, Mesh mesh, int firstSubMesh, Matrix4x4 matrix, bool moving, bool unscaled, Renderer owner) {
 			var handles = new List<int>();
 			var materials = r.sharedMaterials;
+			if (moving) {
+				foreach (var m in materials) {
+					if (m != null) {
+						carMaterials_.Add(m);
+					}
+				}
+			}
 			for (int i = 0; i < materials.Length; ++i) {
 				int subMesh = firstSubMesh + i;
 				var source = materials[i];

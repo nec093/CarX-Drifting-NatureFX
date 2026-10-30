@@ -156,6 +156,7 @@ namespace NatureFX.Rendering {
 			lights_.Update(Camera.main);
 			RTTimings.BeginSceneUpdate();
 			dxrScene_.Update();
+			dxrScene_.SetCarMotionVectors(NativeEngine.NrdSigma);
 			RTTimings.EndSceneUpdate();
 
 			if (sun != null && sun.isActiveAndEnabled) {
