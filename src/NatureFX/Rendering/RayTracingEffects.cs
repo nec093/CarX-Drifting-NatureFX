@@ -351,7 +351,7 @@ namespace NatureFX.Rendering {
 			overlayFps_ = Make(20, FontStyle.Bold, Theme.Accent, TextAnchor.MiddleRight);
 			overlayLabel_ = Make(11, FontStyle.Normal, Theme.Muted);
 			overlayValue_ = Make(11, FontStyle.Normal, Theme.Foreground, TextAnchor.MiddleRight);
-			overlaySection_ = Make(10, FontStyle.Bold, Theme.Faint);
+			overlaySection_ = Make(10, FontStyle.Bold, new Color(Theme.Accent.r, Theme.Accent.g, Theme.Accent.b, 0.8f));
 			overlayChip_ = Make(10, FontStyle.Normal, Theme.Foreground, TextAnchor.MiddleCenter);
 			overlayNote_ = Make(10, FontStyle.Normal, Theme.Muted, TextAnchor.UpperLeft, true);
 		}
@@ -477,8 +477,8 @@ namespace NatureFX.Rendering {
 				}
 				if (draw) {
 					var r = new Rect(cx, y, w, h);
-					Theme.Fill(r, on ? new Color(Theme.Accent.r, Theme.Accent.g, Theme.Accent.b, 0.22f) : new Color(1.0f, 1.0f, 1.0f, 0.06f), h * 0.5f);
-					overlayChip_.normal.textColor = on ? Theme.Accent : Theme.Faint;
+					Theme.Fill(r, on ? new Color(Theme.Accent.r, Theme.Accent.g, Theme.Accent.b, 0.22f) : new Color(1.0f, 1.0f, 1.0f, 0.08f), h * 0.5f);
+					overlayChip_.normal.textColor = on ? Theme.Accent : Theme.Muted;
 					GUI.Label(r, name, overlayChip_);
 				}
 				cx += w + 5.0f;

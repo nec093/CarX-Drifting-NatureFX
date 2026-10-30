@@ -669,12 +669,12 @@ void NrdReflection(const NrdEventData* data) {
 	// ghosted and lagged behind. A short history, quicker to throw away (anti-lag), and the smoothest surfaces
 	// (car paint's varnish, mirrors, wet roads) responsive down to a couple of frames.
 	nrd::ReblurSettings reblur = {};
-	reblur.maxAccumulatedFrameNum = 12;
-	reblur.maxFastAccumulatedFrameNum = 2;
-	reblur.maxStabilizedFrameNum = 6;
+	reblur.maxAccumulatedFrameNum = 16;
+	reblur.maxFastAccumulatedFrameNum = 3;
+	reblur.maxStabilizedFrameNum = 8;
 	reblur.antilagSettings.luminanceSensitivity = 2.0f;
 	reblur.responsiveAccumulationSettings.roughnessThreshold = 0.2f;
-	reblur.responsiveAccumulationSettings.minAccumulatedFrameNum = 2;
+	reblur.responsiveAccumulationSettings.minAccumulatedFrameNum = 4; // 2 left one ray's noise flickering on car paint
 	nrd::Identifier id = 0;
 	const void* settings[] = { &reblur };
 	uint32_t dispatched = 0;
