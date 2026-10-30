@@ -334,9 +334,14 @@ namespace NatureFX.Rendering {
 
 			// 2. accumulate, 3. blur along surfaces (two a-trous steps; the sun's sized by its penumbra)
 			float blend = resetHistory ? 1.0f : Mathf.Clamp01(TemporalBlend);
+			// Still camera: progressive accumulation (HistoryGuard.StillBlend) on the pixels that do not move on screen
+			// (the share passed on is the still blend over the moving one); the sun stops at 1/16, its shadows move
+			// with cars over still ground. Converged, the light needs no wide blur any more: one step.
+			float StillShare(float moving, float floor) => moving >= 1.0f ? 1.0f : History.StillBlend(moving, floor) / Mathf.Max(moving, 1e-4f);
+			bool converged = History.StillFrames > 60;
 			// the DXR 1.2 device's sun shadows arrive one frame late (RtDevice.inl): the filter reads them reprojected
 			var sunResult = TraceShadows
-				? Filter(cmd, sun_, sunSize, blend, PassDenoiseSun, sunRadius, fov, 2, NativeEngine.Dxr12SunActive)
+				? Filter(cmd, sun_, sunSize, blend, PassDenoiseSun, sunRadius, fov, 2, NativeEngine.Dxr12SunActive, StillShare(blend, 1.0f / 16.0f))
 				: null;
 			// GI: one ray per half resolution pixel with every bounce behind it varies far more than the one bounce
 			// ambient light: a longer history (about 20 frames) and a fifth, wider blur step. Ambient light and lamp
@@ -345,12 +350,15 @@ namespace NatureFX.Rendering {
 			// at quarter resolution a trace pixel already spans twice as much: one step fewer for the same reach.
 			// Wider blurs only smeared the noise into blotches and softened the contact shadows: the noise goes in time
 			// instead, still pixels keeping a quarter of the blend (about 40 frames).
-			int wide = QuarterResolution ? 2 : 3;
+			int wide = converged ? 1 : QuarterResolution ? 2 : 3;
+			float giBlend = resetHistory ? 1.0f : Mathf.Min(blend, 0.05f);
 			var ambientResult = TraceAO
-				? giUsed_ ? Filter(cmd, ambient_, ambientSize, resetHistory ? 1.0f : Mathf.Min(blend, 0.05f), PassDenoise, sunRadius, fov, wide + 1, false, 0.25f)
-				          : Filter(cmd, ambient_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, 0.25f)
+				? giUsed_ ? Filter(cmd, ambient_, ambientSize, giBlend, PassDenoise, sunRadius, fov, wide + 1, false, Mathf.Min(0.25f, StillShare(giBlend, 1.0f / 256.0f)))
+				          : Filter(cmd, ambient_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, Mathf.Min(0.25f, StillShare(slowBlend, 1.0f / 256.0f)))
 				: null;
-			var localResult = localShadows ? Filter(cmd, local_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, 0.25f) : null;
+			var localResult = localShadows
+				? Filter(cmd, local_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, Mathf.Min(0.25f, StillShare(slowBlend, 1.0f / 256.0f)))
+				: null;
 			// one sample per pixel along a whole view ray: lean on the history longer than the surfaces do
 			var shaftResult = Shafts ? Filter(cmd, shafts_, shaftSize, resetHistory ? 1.0f : blend * 0.5f, PassDenoise, sunRadius, fov, 3) : null;
 
