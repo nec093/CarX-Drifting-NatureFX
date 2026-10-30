@@ -642,7 +642,16 @@ void NrdReflection(const NrdEventData* data) {
 	list->SetDescriptorHeaps(1, heaps);
 	UINT constants[4] = { data->width, data->height, 0, 0 };
 	NrdPack(list, c, data, 1, constants);
+	// what a reflection shows changes as fast as the car moves: REBLUR's defaults (30 frames, stabilized over 63)
+	// ghosted and lagged behind. A short history, quicker to throw away (anti-lag), and the smoothest surfaces
+	// (car paint's varnish, mirrors, wet roads) responsive down to a couple of frames.
 	nrd::ReblurSettings reblur = {};
+	reblur.maxAccumulatedFrameNum = 12;
+	reblur.maxFastAccumulatedFrameNum = 2;
+	reblur.maxStabilizedFrameNum = 6;
+	reblur.antilagSettings.luminanceSensitivity = 2.0f;
+	reblur.responsiveAccumulationSettings.roughnessThreshold = 0.2f;
+	reblur.responsiveAccumulationSettings.minAccumulatedFrameNum = 2;
 	nrd::Identifier id = 0;
 	const void* settings[] = { &reblur };
 	uint32_t dispatched = 0;
