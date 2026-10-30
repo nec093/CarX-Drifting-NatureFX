@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using UnityEngine.Rendering;
@@ -50,6 +51,24 @@ namespace NatureFX.Rendering {
 		}
 
 		// One line per stage that ran recently: "shadow rays  1.23 ms"
+		// The stages that ran, as (label, ms, part of the one above), and the total of the top level ones
+		public static List<(string Label, float Ms, bool Part)> Readings(out float total) {
+			var list = new List<(string, float, bool)>();
+			total = 0.0f;
+			foreach (var (label, sampler) in Stages) {
+				float ms = sampler.gpuElapsedTime;
+				if (ms <= 0.0f) {
+					continue;
+				}
+				bool part = label.StartsWith(" ");
+				if (!part) {
+					total += ms;
+				}
+				list.Add((label.Trim(), ms, part));
+			}
+			return list;
+		}
+
 		public static string Summary() {
 			var text = new StringBuilder();
 			float total = 0.0f;

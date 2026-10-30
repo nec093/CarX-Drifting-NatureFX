@@ -39,6 +39,15 @@ namespace NatureFX.Rendering {
 		[DllImport(DllName)] private static extern int NFX_Native_GpuMemory(out ulong usedMb, out ulong budgetMb);
 
 		// The game's video memory use and budget (MB), as the OS counts them; logged every 30 s while the engine runs
+		public static bool GpuMemoryMB(out ulong used, out ulong budget) {
+			used = budget = 0;
+			try {
+				return Ready && NFX_Native_GpuMemory(out used, out budget) == 1;
+			} catch (Exception) {
+				return false;
+			}
+		}
+
 		public static string GpuMemory {
 			get {
 				try {

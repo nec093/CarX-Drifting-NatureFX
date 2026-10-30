@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using KSL.API;
 using NatureFX.Nature;
+using NatureFX.Ui;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
@@ -253,43 +254,236 @@ namespace NatureFX.Rendering {
 		}
 		private readonly HashSet<Light> loggedLights_ = new();
 
-		// The measurement overlay (Settings.RTOverlay): GPU time per stage, rays, lights, scene and memory, refreshed
-		// twice a second so it can be read
-		private string overlay_ = "";
+		// The measurement overlay (Settings.RTOverlay): a panel in the window's style at the top left with the frame
+		// rate, GPU time per stage, rays, memory, the scene, which RT features are on, the denoisers and the passes'
+		// state. Read twice a second (steady enough to read), drawn every repaint.
+		private class OverlayData {
+			public float Fps, FrameMs;
+			public string Mode = "";
+			public readonly List<(string Label, string Value, bool Part)> Timings = new();
+			public string TimingNote;
+			public ulong MemoryUsed, MemoryBudget;
+			public readonly List<(string Label, string Value)> Scene = new();
+			public readonly List<(string Name, bool On)> Features = new();
+			public readonly List<(string Name, string State, bool Ok)> Denoisers = new();
+			public readonly List<(string Name, string State)> Passes = new();
+		}
+		private OverlayData overlay_;
 		private float nextOverlay_;
-		private GUIStyle overlayStyle_;
+		private GUIStyle overlayTitle_, overlayFps_, overlayLabel_, overlayValue_, overlaySection_, overlayChip_, overlayNote_;
+
+		private const float OverlayWidth = 400.0f;
+		private const float OverlayPad = 12.0f;
+
+		private OverlayData ReadOverlay() {
+			var d = new OverlayData();
+			d.Fps = 1.0f / Mathf.Max(Time.smoothDeltaTime, 1e-4f);
+			d.FrameMs = Time.smoothDeltaTime * 1000.0f;
+			d.Mode = NativeEngine.ModeName + (NativeEngine.Dxr12SunActive ? " + DXR 1.2 sun" : "");
+			var readings = RTTimings.Readings(out float total);
+			foreach (var (label, ms, part) in readings) {
+				d.Timings.Add((label.Replace("NFX RT ", ""), $"{ms:0.00} ms", part));
+			}
+			if (d.Timings.Count > 0) {
+				d.Timings.Add(("total GPU", $"{total:0.00} ms", false));
+			} else {
+				d.TimingNote = "GPU stage timings are not reported on this GPU / API";
+			}
+			d.Timings.Add(("car instances (CPU)", $"{RTTimings.SceneUpdateMs:0.00} ms", false));
+			long rays = shadows_ != null && shadows_.enabled ? shadows_.TracedRays : 0;
+			d.Timings.Add(("shadow / ambient rays", $"{rays / 1e6:0.00} M / frame", false));
+			NativeEngine.GpuMemoryMB(out d.MemoryUsed, out d.MemoryBudget);
+
+			// "678 geometries (0 new), 200 instances (3 alpha tested), 0.1 M triangles, BLAS 23.8 MB, ..." into rows
+			foreach (string part in NativeEngine.SceneStatus.Split(new[] { ", " }, System.StringSplitOptions.RemoveEmptyEntries)) {
+				d.Scene.Add(("", part));
+			}
+			d.Scene.Add(("lamps", $"{lights_.Count} ({lights_.ShadowCount} traced, {NativeEngine.Emitters.Count} glowing surfaces)"));
+
+			bool glassOn = glass_ != null && glass_.enabled;
+			bool wet = reflection_ != null && reflection_.enabled && reflection_.WetStreaks;
+			float wetness = Mathf.Max(NatureFX.Nature.Weather.Current.Wetness, NatureFX.Nature.Weather.Current.Rain);
+			d.Features.Add(("light through glass", NativeEngine.GlassShadows));
+			d.Features.Add(("glass reflections", glassOn));
+			d.Features.Add((glassOn ? $"refraction {glass_.Refraction:0.00}" : "refraction", glassOn && glass_.Refraction > 0.0f));
+			d.Features.Add(($"wet streaks {wetness:0.00}", wet && wetness > 0.0f));
+			d.Features.Add(("glowing surfaces", lights_.Emissive));
+			d.Features.Add(("lamp shadows", LampShadows));
+			d.Features.Add((shadows_ != null && shadows_.QuarterResolution ? "quarter resolution" : "half resolution", true));
+
+			if (NativeEngine.NrdSigma) {
+				// "sun: ...; ambient: ...; lamps: ...; reflections: ..."
+				foreach (string part in NativeEngine.NrdStatus.Split(new[] { "; " }, System.StringSplitOptions.RemoveEmptyEntries)) {
+					int colon = part.IndexOf(": ");
+					string name = colon > 0 ? part.Substring(0, colon) : "NRD";
+					string state = colon > 0 ? part.Substring(colon + 2) : part;
+					bool ok = state.Contains("dispatches");
+					// "SIGMA on the sun shadows, 1886x986, 16 dispatches" -> "SIGMA · 1886x986 · 16 passes"
+					if (ok) {
+						var bits = state.Split(new[] { ", " }, System.StringSplitOptions.None);
+						string what = bits[0].Split(' ')[0];
+						state = bits.Length >= 3 ? $"{what} · {bits[1]} · {bits[2].Replace(" dispatches", " passes")}" : state;
+					}
+					d.Denoisers.Add((name, state, ok));
+				}
+			} else {
+				d.Denoisers.Add(("NatureFX", shadows_ != null && shadows_.VarianceDenoiser ? "variance guided" : "simple blur", true));
+			}
+
+			d.Passes.Add(("shadows", ShadowStatus));
+			d.Passes.Add(("reflections", ReflectionStatus));
+			d.Passes.Add(("glass", GlassStatus));
+			return d;
+		}
+
+		private void EnsureOverlayStyles() {
+			if (overlayLabel_ != null) {
+				return;
+			}
+			var font = Theme.Value != null ? Theme.Value.font : null;
+			GUIStyle Make(int size, FontStyle style, Color color, TextAnchor anchor = TextAnchor.MiddleLeft, bool wrap = false) {
+				var s = new GUIStyle(GUI.skin.label) { font = font, fontSize = size, fontStyle = style, alignment = anchor, wordWrap = wrap, richText = false,
+				                                       padding = new RectOffset(0, 0, 0, 0), margin = new RectOffset(0, 0, 0, 0) };
+				s.normal.textColor = color;
+				return s;
+			}
+			overlayTitle_ = Make(15, FontStyle.Bold, Theme.Foreground);
+			overlayFps_ = Make(20, FontStyle.Bold, Theme.Accent, TextAnchor.MiddleRight);
+			overlayLabel_ = Make(11, FontStyle.Normal, Theme.Muted);
+			overlayValue_ = Make(11, FontStyle.Normal, Theme.Foreground, TextAnchor.MiddleRight);
+			overlaySection_ = Make(10, FontStyle.Bold, Theme.Faint);
+			overlayChip_ = Make(10, FontStyle.Normal, Theme.Foreground, TextAnchor.MiddleCenter);
+			overlayNote_ = Make(10, FontStyle.Normal, Theme.Muted, TextAnchor.UpperLeft, true);
+		}
 
 		public void DrawOverlay() {
-			if (Time.unscaledTime >= nextOverlay_) {
-				nextOverlay_ = Time.unscaledTime + 0.5f;
-				var text = new System.Text.StringBuilder();
-				text.AppendLine($"NatureFX RT  {NativeEngine.ModeName}{(NativeEngine.Dxr12SunActive ? " + DXR 1.2 sun" : "")}   {1.0f / Mathf.Max(Time.smoothDeltaTime, 1e-4f):0} fps");
-				text.AppendLine(RTTimings.Summary());
-				long rays = shadows_ != null && shadows_.enabled ? shadows_.TracedRays : 0;
-				text.AppendLine($"shadow / ambient rays  {rays / 1e6:0.00} M per frame");
-				text.AppendLine($"lamps  {lights_.Count} ({lights_.ShadowCount} traced, {NativeEngine.Emitters.Count} emissive surfaces in the scene){(LampShadows ? ", shadow maps taken over" : "")}");
-				text.AppendLine($"scene  {NativeEngine.SceneStatus}");
-				text.AppendLine($"GPU memory  {NativeEngine.GpuMemory}");
-				// which of the switches the test map's signs name are on (refraction runs in the glass reflection pass)
-				string On(bool on) => on ? "on" : "off";
-				bool glassOn = glass_ != null && glass_.enabled;
-				text.AppendLine($"switches  light through glass {On(NativeEngine.GlassShadows)}, glass reflections {On(glassOn)}, " +
-				                $"refraction {(glassOn ? glass_.Refraction.ToString("0.00") : "off (needs glass reflections)")}, " +
-				                $"wet streaks {On(reflection_ != null && reflection_.enabled && reflection_.WetStreaks)} (wetness {Mathf.Max(NatureFX.Nature.Weather.Current.Wetness, NatureFX.Nature.Weather.Current.Rain):0.00}), " +
-				                $"glowing surfaces {On(lights_.Emissive)}, lamp shadows {On(LampShadows)}, " +
-				                $"{(shadows_ != null && shadows_.QuarterResolution ? "quarter" : "half")} resolution, {(NativeEngine.NrdSigma ? (NativeEngine.NrdAmbient ? "NRD SIGMA + REBLUR (reflections too)" : "NRD SIGMA, variance for the rest") : shadows_ != null && shadows_.VarianceDenoiser ? "variance" : "simple")} denoiser");
-				text.AppendLine($"shadows: {ShadowStatus}");
-				if (NativeEngine.NrdSigma) {
-					text.AppendLine($"NRD: {NativeEngine.NrdStatus}");
-				}
-				text.AppendLine($"reflections: {ReflectionStatus}");
-				text.Append($"glass: {GlassStatus}");
-				overlay_ = text.ToString();
+			if (Event.current.type != EventType.Repaint) {
+				return;
 			}
-			overlayStyle_ ??= new GUIStyle(GUI.skin.box) { alignment = TextAnchor.UpperLeft, fontSize = 13, wordWrap = true, richText = false };
-			overlayStyle_.normal.textColor = Color.white;
-			var size = overlayStyle_.CalcHeight(new GUIContent(overlay_), 520.0f);
-			GUI.Box(new Rect(10.0f, 10.0f, 520.0f, size + 8.0f), overlay_, overlayStyle_);
+			if (overlay_ == null || Time.unscaledTime >= nextOverlay_) {
+				nextOverlay_ = Time.unscaledTime + 0.5f;
+				overlay_ = ReadOverlay();
+			}
+			Theme.Ensure();
+			EnsureOverlayStyles();
+			// measured first (no drawing), then the panel behind, then the contents
+			float height = LayoutOverlay(overlay_, 10.0f, 10.0f, false);
+			var panel = new Rect(10.0f, 10.0f, OverlayWidth, height);
+			Theme.Fill(new Rect(panel.x + 2.0f, panel.y + 3.0f, panel.width, panel.height), new Color(0.0f, 0.0f, 0.0f, 0.25f), 10.0f); // shadow
+			Theme.Fill(panel, new Color(0.075f, 0.085f, 0.105f, 0.86f), 10.0f);
+			Theme.Fill(new Rect(panel.x, panel.y + 10.0f, 3.0f, panel.height - 20.0f), Theme.Accent, 1.5f);
+			LayoutOverlay(overlay_, 10.0f, 10.0f, true);
+		}
+
+		// Lays the overlay out from (x, y); draws it when draw is set. Returns its height.
+		private float LayoutOverlay(OverlayData d, float x, float y, bool draw) {
+			float left = x + OverlayPad + 4.0f;
+			float width = OverlayWidth - 2.0f * OverlayPad - 4.0f;
+			float top = y;
+			y += OverlayPad;
+
+			// header: title and mode, the frame rate on the right, coloured by how smooth it is
+			if (draw) {
+				GUI.Label(new Rect(left, y, width, 20.0f), "NatureFX RT", overlayTitle_);
+				var fpsColor = d.Fps >= 55.0f ? Theme.Accent : d.Fps >= 30.0f ? Theme.Warning : new Color(1.0f, 0.42f, 0.42f);
+				overlayFps_.normal.textColor = fpsColor;
+				GUI.Label(new Rect(left, y - 2.0f, width, 24.0f), $"{d.Fps:0}", overlayFps_);
+			}
+			y += 20.0f;
+			if (draw) {
+				GUI.Label(new Rect(left, y, width, 14.0f), d.Mode, overlayLabel_);
+				GUI.Label(new Rect(left, y, width, 14.0f), $"fps · {d.FrameMs:0.0} ms", overlayValue_);
+			}
+			y += 18.0f;
+
+			y = Section(draw, "PERFORMANCE", left, width, y);
+			if (d.TimingNote != null) {
+				y = Note(draw, d.TimingNote, left, width, y);
+			}
+			foreach (var (label, value, part) in d.Timings) {
+				y = Row(draw, (part ? "   " : "") + label, value, left, width, y);
+			}
+			if (d.MemoryBudget > 0) {
+				y = Row(draw, "GPU memory", $"{d.MemoryUsed:N0} / {d.MemoryBudget:N0} MB", left, width, y);
+				float share = Mathf.Clamp01((float)d.MemoryUsed / d.MemoryBudget);
+				if (draw) {
+					Theme.Fill(new Rect(left, y + 1.0f, width, 4.0f), new Color(1.0f, 1.0f, 1.0f, 0.08f), 2.0f);
+					Theme.Fill(new Rect(left, y + 1.0f, width * share, 4.0f), share > 0.85f ? Theme.Warning : Theme.Accent, 2.0f);
+				}
+				y += 9.0f;
+			}
+
+			y = Section(draw, "SCENE", left, width, y);
+			foreach (var (label, value) in d.Scene) {
+				y = label.Length > 0 ? Row(draw, label, value, left, width, y) : Note(draw, value, left, width, y, Theme.Foreground);
+			}
+
+			y = Section(draw, "FEATURES", left, width, y);
+			y = Chips(draw, d.Features, left, width, y);
+
+			y = Section(draw, "DENOISER", left, width, y);
+			foreach (var (name, state, ok) in d.Denoisers) {
+				if (draw) {
+					Theme.Fill(new Rect(left, y + 5.0f, 6.0f, 6.0f), ok ? Theme.Accent : Theme.Warning, 3.0f);
+				}
+				y = Row(draw, "    " + name, state, left, width, y);
+			}
+
+			y = Section(draw, "PASSES", left, width, y);
+			foreach (var (name, state) in d.Passes) {
+				y = Note(draw, $"{name}: {state}", left, width, y);
+			}
+			return y + OverlayPad - 4.0f - top;
+		}
+
+		private float Section(bool draw, string title, float x, float width, float y) {
+			y += 6.0f;
+			if (draw) {
+				GUI.Label(new Rect(x, y, width, 14.0f), title, overlaySection_);
+				float textWidth = overlaySection_.CalcSize(new GUIContent(title)).x;
+				Theme.Fill(new Rect(x + textWidth + 8.0f, y + 7.0f, width - textWidth - 8.0f, 1.0f), new Color(1.0f, 1.0f, 1.0f, 0.08f), 0.0f);
+			}
+			return y + 16.0f;
+		}
+
+		private float Row(bool draw, string label, string value, float x, float width, float y) {
+			if (draw) {
+				GUI.Label(new Rect(x, y, width * 0.5f, 16.0f), label, overlayLabel_);
+				GUI.Label(new Rect(x + width * 0.3f, y, width * 0.7f, 16.0f), value, overlayValue_);
+			}
+			return y + 16.0f;
+		}
+
+		private float Note(bool draw, string text, float x, float width, float y, Color? color = null) {
+			float h = overlayNote_.CalcHeight(new GUIContent(text), width);
+			if (draw) {
+				var previous = overlayNote_.normal.textColor;
+				overlayNote_.normal.textColor = color ?? Theme.Muted;
+				GUI.Label(new Rect(x, y, width, h), text, overlayNote_);
+				overlayNote_.normal.textColor = previous;
+			}
+			return y + h + 2.0f;
+		}
+
+		// rounded chips, wrapping onto new lines: on ones tinted with the accent, off ones faint
+		private float Chips(bool draw, List<(string Name, bool On)> chips, float x, float width, float y) {
+			float cx = x;
+			const float h = 18.0f;
+			foreach (var (name, on) in chips) {
+				float w = overlayChip_.CalcSize(new GUIContent(name)).x + 16.0f;
+				if (cx + w > x + width && cx > x) {
+					cx = x;
+					y += h + 4.0f;
+				}
+				if (draw) {
+					var r = new Rect(cx, y, w, h);
+					Theme.Fill(r, on ? new Color(Theme.Accent.r, Theme.Accent.g, Theme.Accent.b, 0.22f) : new Color(1.0f, 1.0f, 1.0f, 0.06f), h * 0.5f);
+					overlayChip_.normal.textColor = on ? Theme.Accent : Theme.Faint;
+					GUI.Label(r, name, overlayChip_);
+				}
+				cx += w + 5.0f;
+			}
+			return y + h + 4.0f;
 		}
 
 		// Point and spot lights lose their shadow maps while the traced lamp shadows run (LocalLights then traces them),
