@@ -35,11 +35,13 @@ float3 DirectLight(HitSurface s, float3 hitAWS)
     return e;
 }
 
-// All the light a surface receives: the cache's average, or (a cell nothing has fed yet) its direct light and the sky
+// All the light a surface receives: the cache's average, or (a cell nothing has fed yet) its direct light and the sky.
+// A car's surface is in other cells every frame: barely fed, it read a different few samples each frame (the ground
+// under and behind a moving car flickered), so a moving hit is always lit directly.
 float3 ReceivedLight(HitSurface s, float3 hitAWS)
 {
     float3 cached;
-    return CacheLookup(hitAWS, s.normal, cached) ? cached : DirectLight(s, hitAWS) + HitSkyLight(s.normal);
+    return !s.moving && CacheLookup(hitAWS, s.normal, cached) ? cached : DirectLight(s, hitAWS) + HitSkyLight(s.normal);
 }
 
 // The radiance a surface sends back along the ray (before exposure)
@@ -100,7 +102,8 @@ NFX_ENTRY(id)
 
             // a sample of what the hit receives, for the cache: its direct light, and one more ray for the light
             // bounced to it (what that ray hits sends back its own cached light: the bounces before)
-            if (!coarse)
+            // (not from a car: its cells would follow it through the world, fed a frame each)
+            if (!coarse && !s.moving)
             {
                 float3 hn = s.normal;
                 float3 dir2 = CosineSampleHemisphere(hn, Hash22(pixel, FrameIndex, 9));

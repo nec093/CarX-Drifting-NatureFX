@@ -4,7 +4,8 @@
 // Compiled into GICacheResolve.h.
 #include "NFXCommon.hlsli"
 
-static const uint CacheMaxFrames = 30;  // the running mean turns into an exponential one of about this length
+static const uint CacheMaxFrames = 45;  // the running mean turns into an exponential one of about this length
+                                        // (30 wobbled enough for REBLUR's anti-lag to see changes of light)
 static const uint CacheKeepFrames = 600;
 
 NFX_ENTRY(id)
