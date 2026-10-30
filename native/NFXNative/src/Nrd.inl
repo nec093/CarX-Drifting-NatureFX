@@ -63,10 +63,27 @@ struct NrdContext {
 NrdContext g_nrdSun, g_nrdAmbient, g_nrdLocal, g_nrdReflection;
 
 // shared by both: the descriptor ring, the constant ring, textures replaced on a resize
-constexpr UINT kNrdDescriptors = 16384;
+// About 2000 descriptors a frame: 16384 went round in 8 frames, and with the GPU a few frames behind the CPU wrote over
+// descriptors queued work still read (the shadows flickered after a while of driving). A large ring, and a wrap waits
+// for the GPU to be done with the previous round (NrdWrapWait).
+constexpr UINT kNrdDescriptors = 262144;
 ComPtr<ID3D12DescriptorHeap> g_nrdHeap;
 UINT g_nrdHeapStep = 0, g_nrdHeapNext = 0;
-constexpr UINT64 kNrdConstantBytes = 4ull << 20;
+constexpr UINT64 kNrdConstantBytes = 16ull << 20;
+UINT64 g_nrdHeapRound = 0, g_nrdConstantsRound = 0;  // the last submission recorded with the previous round of each ring
+
+// Before a ring starts over: everything recorded with its previous round must be done on the GPU (rarely waits:
+// a round is many frames). submitted: the submission the current list will be.
+void NrdWrapWait(UINT64& previousRound) {
+	UINT64 mine = g_render.submitted + 1;
+	if (previousRound > 0 && g_render.fence->GetCompletedValue() < previousRound) {
+		HANDLE done = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+		g_render.fence->SetEventOnCompletion(previousRound, done);
+		WaitForSingleObject(done, 2000);
+		CloseHandle(done);
+	}
+	previousRound = mine;
+}
 ComPtr<ID3D12Resource> g_nrdConstants;
 UINT8* g_nrdConstantsMapped = nullptr;
 UINT64 g_nrdConstantsNext = 0;
@@ -360,6 +377,7 @@ NrdTexture* NrdResource(NrdContext& c, nrd::Identifier id, const nrd::ResourceDe
 // count contiguous descriptors from the ring (wrapping to its start when they would not fit)
 D3D12_CPU_DESCRIPTOR_HANDLE NrdDescriptors(UINT count, D3D12_GPU_DESCRIPTOR_HANDLE* gpu) {
 	if (g_nrdHeapNext + count > kNrdDescriptors) {
+		NrdWrapWait(g_nrdHeapRound);
 		g_nrdHeapNext = 0;
 	}
 	D3D12_CPU_DESCRIPTOR_HANDLE cpu = g_nrdHeap->GetCPUDescriptorHandleForHeapStart();
@@ -401,6 +419,7 @@ void NrdTransition(std::vector<D3D12_RESOURCE_BARRIER>& barriers, NrdTexture* t,
 D3D12_GPU_VIRTUAL_ADDRESS NrdConstants(const void* data, UINT size) {
 	UINT64 aligned = (static_cast<UINT64>(size) + 255) & ~255ull;
 	if (g_nrdConstantsNext + aligned > kNrdConstantBytes) {
+		NrdWrapWait(g_nrdConstantsRound);
 		g_nrdConstantsNext = 0;
 	}
 	memcpy(g_nrdConstantsMapped + g_nrdConstantsNext, data, size);
