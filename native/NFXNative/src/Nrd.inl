@@ -657,6 +657,13 @@ void NrdReblur(const NrdEventData* data) {
 	nrd::ReblurSettings reblur = {};
 	reblur.maxFastAccumulatedFrameNum = 10;
 	reblur.fastHistoryClampingSigmaScale = 2.5f;
+	if (data->mode != 2) {
+		// GI and ambient light: the radiance cache's values wobble a little every frame once it has filled; the
+		// anti-lag took that for a change of light and threw the history away, and car shadows (dark, noisy) flickered
+		// after a while of driving. Less sensitive (REBLUR's older defaults).
+		reblur.antilagSettings.luminanceSigmaScale = 4.0f;
+		reblur.antilagSettings.luminanceSensitivity = 6.0f;
+	}
 	nrd::Identifier ids[2] = { 0, 1 };
 	const void* settings[] = { &reblur, &reblur };
 	uint32_t dispatched = 0;
