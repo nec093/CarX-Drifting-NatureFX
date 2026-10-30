@@ -301,7 +301,8 @@ bool NrdCreate(NrdContext& c, const nrd::Denoiser* denoisers, UINT count) {
 }
 
 // The pools and the input / output textures at this size (render thread); inFormat / outFormat: the signals'
-bool NrdResize(NrdContext& c, UINT width, UINT height, DXGI_FORMAT inFormat, DXGI_FORMAT outFormat, int signals) {
+bool NrdResize(NrdContext& c, UINT width, UINT height, DXGI_FORMAT inFormat, DXGI_FORMAT outFormat, int signals,
+               DXGI_FORMAT secondIn = DXGI_FORMAT_UNKNOWN) {
 	if (c.width == width && c.height == height && c.out[0].resource) {
 		return true;
 	}
@@ -323,6 +324,10 @@ bool NrdResize(NrdContext& c, UINT width, UINT height, DXGI_FORMAT inFormat, DXG
 	for (int i = 0; i < signals && ok; ++i) {
 		ok = NrdCreateTexture(c.in[i], inFormat, width, height) && NrdCreateTexture(c.out[i], outFormat, width, height);
 	}
+	// a second input of another kind for the same output (SIGMA's translucency)
+	if (ok && secondIn != DXGI_FORMAT_UNKNOWN) {
+		ok = NrdCreateTexture(c.in[1], secondIn, width, height);
+	}
 	if (!ok) {
 		c.status = "NRD textures could not be made";
 		c.failed = true;
@@ -340,6 +345,7 @@ NrdTexture* NrdResource(NrdContext& c, nrd::Identifier id, const nrd::ResourceDe
 	case nrd::ResourceType::IN_NORMAL_ROUGHNESS: return &c.normalRoughness;
 	case nrd::ResourceType::IN_VIEWZ: return &c.viewZ;
 	case nrd::ResourceType::IN_PENUMBRA: return &c.in[0];
+	case nrd::ResourceType::IN_TRANSLUCENCY: return &c.in[1];
 	case nrd::ResourceType::OUT_SHADOW_TRANSLUCENCY: return &c.out[0];
 	case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST: return &c.in[slot];
 	case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST: return &c.out[slot];
@@ -560,10 +566,11 @@ void NrdStatusLine(NrdContext& c, const char* what, const NrdEventData* data, ui
 
 // Render event 5: SIGMA over the sun trace that ran just before
 void NrdSigma(const NrdEventData* data) {
-	static const nrd::Denoiser kSigma[] = { nrd::Denoiser::SIGMA_SHADOW };
+	// with translucency: glass dims the sun instead of letting it all through (SunShadow.hlsl's share)
+	static const nrd::Denoiser kSigma[] = { nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY };
 	auto& c = g_nrdSun;
 	if (!c.pack.pso && !c.failed &&
-	    (!NrdPackKernel(c.pack, 4, NrdCode("NrdSigmaPack", g_NrdSigmaPack, sizeof(g_NrdSigmaPack))) || !NrdUnpackKernel(c.unpack, 1, NrdCode("NrdSigmaUnpack", g_NrdSigmaUnpack, sizeof(g_NrdSigmaUnpack))))) {
+	    (!NrdPackKernel(c.pack, 5, NrdCode("NrdSigmaPack", g_NrdSigmaPack, sizeof(g_NrdSigmaPack))) || !NrdUnpackKernel(c.unpack, 1, NrdCode("NrdSigmaUnpack", g_NrdSigmaUnpack, sizeof(g_NrdSigmaUnpack))))) {
 		c.failed = true;
 		c.status = "SIGMA pack / unpack pipelines could not be made";
 	}
@@ -572,7 +579,8 @@ void NrdSigma(const NrdEventData* data) {
 		return;
 	}
 	bool resized = c.width != data->width || c.height != data->height;
-	if (!NrdCreate(c, kSigma, 1) || !NrdResize(c, data->width, data->height, DXGI_FORMAT_R16_FLOAT, DXGI_FORMAT_R16_FLOAT, 1)) {
+	if (!NrdCreate(c, kSigma, 1) ||
+	    !NrdResize(c, data->width, data->height, DXGI_FORMAT_R16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, DXGI_FORMAT_R8G8B8A8_UNORM)) {
 		list->Close();
 		return;
 	}
@@ -580,7 +588,7 @@ void NrdSigma(const NrdEventData* data) {
 	list->SetDescriptorHeaps(1, heaps);
 	UINT packConstants[4] = { data->width, data->height, 0, 0 };
 	memcpy(&packConstants[2], &data->tanSunRadius, 4);
-	NrdPack(list, c, data, 1, packConstants);
+	NrdPack(list, c, data, 2, packConstants);  // penumbra and translucency
 	nrd::SigmaSettings sigma = {};
 	memcpy(sigma.lightDirection, data->sunDirection, sizeof(sigma.lightDirection));
 	nrd::Identifier id = 0;

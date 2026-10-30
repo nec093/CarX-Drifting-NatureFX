@@ -1,12 +1,13 @@
-// NFXNative: SIGMA's inputs from one sun trace (Nrd.inl), per trace pixel. Reads the guides Unity prepared
-// (NFX_NativeBridge PrepareNrdGuide: world normal and linear roughness; view depth, motion previous - current in uv),
-// the sun trace's surfaces (origin w: traced, i.e. facing the sun) and its result (visibility, blocker distance), and
-// writes NRD's input textures. A lit pixel has no occluder (NRD_FP16_MAX); one facing away from the sun is marked
-// back facing (0); a shadowed one gets the penumbra its blocker distance makes with the sun's disc. Glass lets the sun
-// through: SIGMA_SHADOW has no translucency, so a pixel behind glass counts as lit.
+// NFXNative: SIGMA_SHADOW_TRANSLUCENCY's inputs from one sun trace (Nrd.inl), per trace pixel. Reads the guides Unity
+// prepared (NFX_NativeBridge PrepareNrdGuide: world normal and linear roughness; view depth, motion previous - current
+// in uv), the sun trace's surfaces (origin w: traced, i.e. facing the sun) and its result (SunShadow.hlsl: lit (1, 0);
+// blocked (0, blocker distance); through glass only (the share let through, the first pane's distance times the
+// blocked share)), and writes NRD's input textures. Penumbra: none when lit (NRD_FP16_MAX), back facing (0) when the
+// pixel faces away from the sun, else from the first occluder's distance and the sun's disc. Translucency: what gets
+// through that occluder (glass: its share, grey; anything solid: 0).
 // Root: t0 guides (2 float4 per pixel), t1 sun surfaces (2 float4 per pixel), t2 sun result (float2 per pixel),
-// u0..u3 a table (normal and roughness, view Z, motion, penumbra), b0 { width, height, tan of the sun's angular radius }.
-// Compiled into NrdSigmaPack.h (NRD's Shaders folder on the include path).
+// u0..u4 a table (normal and roughness, view Z, motion, penumbra, translucency), b0 { width, height, tan of the sun's
+// angular radius }. Compiled into NrdSigmaPack.h (NRD's Shaders folder on the include path).
 #include "NRD.hlsli"
 
 ByteAddressBuffer Guide : register(t0);
@@ -16,6 +17,7 @@ RWTexture2D<float4> OutNormalRoughness : register(u0);
 RWTexture2D<float> OutViewZ : register(u1);
 RWTexture2D<float2> OutMotion : register(u2);
 RWTexture2D<float> OutPenumbra : register(u3);
+RWTexture2D<float4> OutTranslucency : register(u4);
 
 cbuffer Params : register(b0)
 {
@@ -38,6 +40,29 @@ void main(uint3 id : SV_DispatchThreadID)
     OutNormalRoughness[id.xy] = NRD_FrontEnd_PackNormalAndRoughness(normalize(a.xyz), saturate(a.w), 0.0);
     OutViewZ[id.xy] = b.x;
     OutMotion[id.xy] = b.yz;
-    float occluder = traced < 0.5 ? 0.0 : sun.x > 0.5 ? NRD_FP16_MAX : max(sun.y, 0.01);
+
+    float occluder;
+    float through;
+    if (traced < 0.5)
+    {
+        occluder = 0.0; // back facing
+        through = 0.0;
+    }
+    else if (sun.x >= 0.999)
+    {
+        occluder = NRD_FP16_MAX; // lit
+        through = 1.0;
+    }
+    else if (sun.x > 0.0)
+    {
+        occluder = max(sun.y / max(1.0 - sun.x, 1e-3), 0.01); // glass: the first pane
+        through = sun.x;
+    }
+    else
+    {
+        occluder = max(sun.y, 0.01); // solid
+        through = 0.0;
+    }
     OutPenumbra[id.xy] = occluder <= 0.0 ? 0.0 : SIGMA_FrontEnd_PackPenumbra(occluder, TanSunRadius);
+    OutTranslucency[id.xy] = SIGMA_FrontEnd_PackTranslucency(occluder <= 0.0 ? 0.0 : occluder, through.xxx);
 }
