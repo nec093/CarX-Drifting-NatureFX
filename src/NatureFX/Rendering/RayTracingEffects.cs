@@ -262,8 +262,17 @@ namespace NatureFX.Rendering {
 				text.AppendLine($"lamps  {lights_.Count} ({lights_.ShadowCount} traced, {NativeEngine.Emitters.Count} emissive surfaces in the scene){(LampShadows ? ", shadow maps taken over" : "")}");
 				text.AppendLine($"scene  {NativeEngine.SceneStatus}");
 				text.AppendLine($"GPU memory  {NativeEngine.GpuMemory}");
+				// which of the switches the test map's signs name are on (refraction runs in the glass reflection pass)
+				string On(bool on) => on ? "on" : "off";
+				bool glassOn = glass_ != null && glass_.enabled;
+				text.AppendLine($"switches  light through glass {On(NativeEngine.GlassShadows)}, glass reflections {On(glassOn)}, " +
+				                $"refraction {(glassOn ? glass_.Refraction.ToString("0.00") : "off (needs glass reflections)")}, " +
+				                $"wet streaks {On(reflection_ != null && reflection_.enabled && reflection_.WetStreaks)} (wetness {Mathf.Max(NatureFX.Nature.Weather.Current.Wetness, NatureFX.Nature.Weather.Current.Rain):0.00}), " +
+				                $"glowing surfaces {On(lights_.Emissive)}, lamp shadows {On(LampShadows)}, " +
+				                $"{(shadows_ != null && shadows_.QuarterResolution ? "quarter" : "half")} resolution, {(shadows_ != null && shadows_.VarianceDenoiser ? "variance" : "simple")} denoiser");
 				text.AppendLine($"shadows: {ShadowStatus}");
-				text.Append($"reflections: {ReflectionStatus}");
+				text.AppendLine($"reflections: {ReflectionStatus}");
+				text.Append($"glass: {GlassStatus}");
 				overlay_ = text.ToString();
 			}
 			overlayStyle_ ??= new GUIStyle(GUI.skin.box) { alignment = TextAnchor.UpperLeft, fontSize = 13, wordWrap = true, richText = false };
