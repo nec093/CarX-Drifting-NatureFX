@@ -447,6 +447,11 @@ namespace NatureFX {
 			Widgets.EndDependent();
 			Other(Widgets.Switch("Moonlight at night", S.Moonlight, v => S.Moonlight = v));
 			Other(Widgets.Slider("Headlight beams", S.HeadlightShafts, 0, 4, v => S.HeadlightShafts = v));
+			Other(Widgets.Slider("Sun in the fog", S.LightShafts, 0, 4, v => S.LightShafts = v));
+			Widgets.Info("How strongly the sun (and moon) light HDRP's volumetric fog: its shafts between trees and buildings. Needs volumetric fog in the map.");
+			Other(Widgets.Switch("Soft HDRP sun shadows", S.RealisticShadows, v => S.RealisticShadows = v,
+				"HDRP's own sun shadows soften with distance from the caster, by Sun size and more under clouds (High shadow filtering). " +
+				"The ray traced shadows have their own softness."));
 			Widgets.EndCard();
 		}
 

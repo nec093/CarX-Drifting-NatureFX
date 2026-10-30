@@ -70,9 +70,23 @@ NFX_ENTRY(id)
             float3 bent = refract(viewDir, n, 1.0 / 1.5);
             if (dot(bent, bent) > 0.0)
             {
-                bent = normalize(lerp(viewDir, bent, strength));
                 float3 glassAWS = Camera + viewDir * glass.t;
                 float3 origin = glassAWS - n * 0.02;
+                // out of the far side: a solid piece (a ball, a lens, a thick pane) bends the ray again where it leaves,
+                // a ball turning the view upside down and a flat pane giving it back unbent. Glass modelled as one sheet
+                // has no far side: the one bend stays.
+                Hit exitHit;
+                if (ClosestGlass(origin, bent, 10.0, exitHit))
+                {
+                    HitSurface e = SurfaceAt(exitHit, bent, 0.0); // its normal faces the ray: into the glass
+                    float3 leaving = refract(bent, e.normal, 1.5);
+                    if (dot(leaving, leaving) > 0.0) // else totally reflected inside: the first bend is kept
+                    {
+                        origin = origin + bent * exitHit.t - e.normal * 0.02;
+                        bent = normalize(leaving);
+                    }
+                }
+                bent = normalize(lerp(viewDir, bent, strength));
                 Hit behind;
                 if (Closest(origin, bent, 100.0, false, behind))
                 {
