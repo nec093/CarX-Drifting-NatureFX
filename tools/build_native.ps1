@@ -53,7 +53,7 @@ $agilityInclude = Join-Path $agility 'build\native\include'
 # NVIDIA Real-Time Denoisers (Nrd.inl): the static library built from %USERPROFILE%\NatureFX-Deps\NRD (cmake, NMake,
 # NRD_STATIC_LIBRARY=ON, DXIL only, /MT) and NRD.hlsli for the pack / unpack shaders
 $nrd = if ($env:NFX_NRD) { $env:NFX_NRD } else { Join-Path $env:USERPROFILE 'NatureFX-Deps\NRD' }
-foreach ($name in @('NrdSigmaPack', 'NrdSigmaUnpack', 'NrdReblurPack', 'NrdReblurUnpack')) {
+foreach ($name in @('NrdSigmaPack', 'NrdSigmaUnpack', 'NrdReblurPack', 'NrdReblurUnpack', 'NrdSpecPack', 'NrdSpecUnpack')) {
 	& $dxc -nologo -T cs_6_6 -E main -O3 -I (Join-Path $nrd 'Shaders') -Vn "g_$name" -Fh (Join-Path $out "$name.h") (Join-Path $src "shaders\$name.hlsl")
 	if ($LASTEXITCODE -ne 0) { throw "dxc failed on $name" }
 }

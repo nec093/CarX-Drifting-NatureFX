@@ -126,7 +126,8 @@ namespace NatureFX.Rendering {
 			RTTimings.ReflectionTrace.End(cmd);
 			RTTimings.ReflectionFilter.Begin(cmd);
 
-			// 2. temporal accumulation with the reprojected history, 3. two a-trous iterations
+			// 2. temporal accumulation with the reprojected history, 3. two a-trous iterations; under NRD
+			// (NativeEngine.NrdReflections) REBLUR_SPECULAR did both on the trace already: composited as it is
 			props_.Clear();
 			props_.SetTexture(RTSurfaceTrace.AlbedoTex, Surfaces.Albedo); // clear coat flag
 			props_.SetTexture(RTSurfaceTrace.NormalTex, Surfaces.Normal);
@@ -136,21 +137,23 @@ namespace NatureFX.Rendering {
 			props_.SetVector(ComposeParams, new Vector4(1.0f, 0.0f, resetHistory ? 1.0f : History.StillBlend(Mathf.Clamp01(TemporalBlend), 1.0f / 64.0f), frame_));
 			var history = flip_ ? historyA_ : historyB_;
 			var previous = flip_ ? historyB_ : historyA_;
-			props_.SetTexture(TraceTex, trace_);
-			props_.SetTexture(HistoryTex, previous);
-			props_.SetTexture(DistTex, distance_);
-			CoreUtils.SetRenderTarget(cmd, history, ClearFlag.None);
-			CoreUtils.DrawFullScreen(cmd, CompositeMaterial, props_, PassReflectionTemporal);
+			if (!NativeEngine.NrdReflections) {
+				props_.SetTexture(TraceTex, trace_);
+				props_.SetTexture(HistoryTex, previous);
+				props_.SetTexture(DistTex, distance_);
+				CoreUtils.SetRenderTarget(cmd, history, ClearFlag.None);
+				CoreUtils.DrawFullScreen(cmd, CompositeMaterial, props_, PassReflectionTemporal);
 
-			props_.SetTexture(SourceTex, history);
-			props_.SetFloat(DenoiseStep, 1.0f);
-			CoreUtils.SetRenderTarget(cmd, denoise_, ClearFlag.None);
-			CoreUtils.DrawFullScreen(cmd, CompositeMaterial, props_, PassReflectionDenoise);
+				props_.SetTexture(SourceTex, history);
+				props_.SetFloat(DenoiseStep, 1.0f);
+				CoreUtils.SetRenderTarget(cmd, denoise_, ClearFlag.None);
+				CoreUtils.DrawFullScreen(cmd, CompositeMaterial, props_, PassReflectionDenoise);
 
-			props_.SetTexture(SourceTex, denoise_);
-			props_.SetFloat(DenoiseStep, 2.0f);
-			CoreUtils.SetRenderTarget(cmd, trace_, ClearFlag.None);
-			CoreUtils.DrawFullScreen(cmd, CompositeMaterial, props_, PassReflectionDenoise);
+				props_.SetTexture(SourceTex, denoise_);
+				props_.SetFloat(DenoiseStep, 2.0f);
+				CoreUtils.SetRenderTarget(cmd, trace_, ClearFlag.None);
+				CoreUtils.DrawFullScreen(cmd, CompositeMaterial, props_, PassReflectionDenoise);
+			}
 
 
 			// 4. composite over the camera colour

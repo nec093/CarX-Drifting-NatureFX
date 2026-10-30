@@ -57,6 +57,8 @@
 #include "NrdSigmaUnpack.h"   // g_NrdSigmaUnpack: shaders/NrdSigmaUnpack.hlsl (SIGMA's shadow back)
 #include "NrdReblurPack.h"    // g_NrdReblurPack: shaders/NrdReblurPack.hlsl (REBLUR's inputs, Nrd.inl)
 #include "NrdReblurUnpack.h"  // g_NrdReblurUnpack: shaders/NrdReblurUnpack.hlsl (REBLUR's ambient light back)
+#include "NrdSpecPack.h"      // g_NrdSpecPack: shaders/NrdSpecPack.hlsl (REBLUR_SPECULAR's inputs)
+#include "NrdSpecUnpack.h"    // g_NrdSpecUnpack: shaders/NrdSpecUnpack.hlsl (the reflections back)
 
 using Microsoft::WRL::ComPtr;
 
@@ -1757,6 +1759,7 @@ void UNITY_INTERFACE_API OnRenderEvent(int eventId) {
 struct NrdEventData;
 void NrdSigma(const NrdEventData* data);
 void NrdReblur(const NrdEventData* data);
+void NrdReflection(const NrdEventData* data);
 
 void UNITY_INTERFACE_API OnRenderEventAndData(int eventId, void* data) {
 	if (eventId == 3) {
@@ -1765,6 +1768,8 @@ void UNITY_INTERFACE_API OnRenderEventAndData(int eventId, void* data) {
 		NrdSigma(static_cast<const NrdEventData*>(data));
 	} else if (eventId == 6) {
 		NrdReblur(static_cast<const NrdEventData*>(data));
+	} else if (eventId == 7) {
+		NrdReflection(static_cast<const NrdEventData*>(data));
 	}
 }
 

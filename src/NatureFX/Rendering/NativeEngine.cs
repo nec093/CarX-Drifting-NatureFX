@@ -176,6 +176,7 @@ namespace NatureFX.Rendering {
 		// event 5); the shadow pass then skips its own filter for them. Set per frame by RayTracingEffects.
 		public static bool NrdSigma;
 		public static bool NrdAmbient;     // REBLUR denoises the ambient light / GI too (half resolution only: set by the shadow pass)
+		public static bool NrdReflections; // REBLUR_SPECULAR denoises the reflections (set with NrdSigma)
 		public static bool NrdReset;       // the shadow pass dropped its history this frame
 		public static string NrdStatus {
 			get {
@@ -667,7 +668,7 @@ namespace NatureFX.Rendering {
 			public IntPtr Ptr;
 			public int Pixels;
 		}
-		private static readonly NrdGuide nrdSunGuide_ = new(), nrdAmbientGuide_ = new();
+		private static readonly NrdGuide nrdSunGuide_ = new(), nrdAmbientGuide_ = new(), nrdReflectionGuide_ = new();
 		private static IntPtr nrdEvents_;
 		private static int nrdEvent_;
 		private const int NrdEventSize = 328;
@@ -854,6 +855,9 @@ namespace NatureFX.Rendering {
 			cmd.SetComputeBufferParam(bridge, prepare, NativeResultId, b.Result);
 			cmd.DispatchCompute(bridge, prepare, (width + 7) / 8, (height + 7) / 8, TextureXR.slices);
 			Issue(cmd, TraceReflection_, b.SurfacePtr, b.ResultPtr, width, height, screenPtr_);
+			if (NrdReflections) {
+				IssueNrd(cmd, bridge, ctx, nrdReflectionGuide_, b.SurfacePtr, b.ResultPtr, width, height, size, 7, 0);
+			}
 			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
 			cmd.SetComputeBufferParam(bridge, unpack, NativeResultId, b.Result);
 			cmd.SetComputeTextureParam(bridge, unpack, NativeTargetId, trace);
