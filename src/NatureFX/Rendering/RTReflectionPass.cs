@@ -151,6 +151,17 @@ namespace NatureFX.Rendering {
 			CoreUtils.SetRenderTarget(cmd, trace_, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, CompositeMaterial, props_, PassReflectionDenoise);
 
+			// two wider steps for the rough reflections (the denoise spreads by roughness: mirrors stay sharp)
+			props_.SetTexture(SourceTex, trace_);
+			props_.SetFloat(DenoiseStep, 4.0f);
+			CoreUtils.SetRenderTarget(cmd, denoise_, ClearFlag.None);
+			CoreUtils.DrawFullScreen(cmd, CompositeMaterial, props_, PassReflectionDenoise);
+
+			props_.SetTexture(SourceTex, denoise_);
+			props_.SetFloat(DenoiseStep, 8.0f);
+			CoreUtils.SetRenderTarget(cmd, trace_, ClearFlag.None);
+			CoreUtils.DrawFullScreen(cmd, CompositeMaterial, props_, PassReflectionDenoise);
+
 			// 4. composite over the camera colour
 			props_.SetTexture(ColorTex, color_);
 			props_.SetTexture(SourceTex, trace_);

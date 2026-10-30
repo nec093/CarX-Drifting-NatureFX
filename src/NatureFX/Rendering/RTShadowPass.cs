@@ -339,14 +339,16 @@ namespace NatureFX.Rendering {
 				? Filter(cmd, sun_, sunSize, blend, PassDenoiseSun, sunRadius, fov, 2, NativeEngine.Dxr12SunActive)
 				: null;
 			// GI: one ray per half resolution pixel with every bounce behind it varies far more than the one bounce
-			// ambient light: a longer history (about 20 frames) and two more, wider blur steps
+			// ambient light: a longer history (about 20 frames) and a fifth, wider blur step. Ambient light and lamp
+			// shadows (two lights a pixel) get blur steps of 1, 2, 4 and 8 pixels: two left them grainy.
+			float slowBlend = resetHistory ? 1.0f : Mathf.Min(blend, 0.1f);
 			var ambientResult = TraceAO
-				? giUsed_ ? Filter(cmd, ambient_, ambientSize, resetHistory ? 1.0f : Mathf.Min(blend, 0.05f), PassDenoise, sunRadius, fov, 4)
-				          : Filter(cmd, ambient_, ambientSize, blend, PassDenoise, sunRadius, fov)
+				? giUsed_ ? Filter(cmd, ambient_, ambientSize, resetHistory ? 1.0f : Mathf.Min(blend, 0.05f), PassDenoise, sunRadius, fov, 5)
+				          : Filter(cmd, ambient_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, 4)
 				: null;
+			var localResult = localShadows ? Filter(cmd, local_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, 4) : null;
 			// one sample per pixel along a whole view ray: lean on the history longer than the surfaces do
-			var localResult = localShadows ? Filter(cmd, local_, ambientSize, blend, PassDenoise, sunRadius, fov) : null;
-			var shaftResult = Shafts ? Filter(cmd, shafts_, shaftSize, resetHistory ? 1.0f : blend * 0.5f, PassDenoise, sunRadius, fov) : null;
+			var shaftResult = Shafts ? Filter(cmd, shafts_, shaftSize, resetHistory ? 1.0f : blend * 0.5f, PassDenoise, sunRadius, fov, 3) : null;
 
 			// 4. take the blocked sun light away and scale the rest by the ambient light, at full resolution
 			props_.Clear();

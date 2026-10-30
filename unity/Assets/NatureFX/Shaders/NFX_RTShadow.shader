@@ -129,12 +129,14 @@ Shader "Hidden/NatureFX/RTShadow"
             float w = exp(-abs(sd - centerDepth) / max(centerDepth * 0.01, 0.02))
                       * pow(saturate(dot(nd.normalWS, snd.normalWS)), 32.0)
                       * ((x == 0 && y == 0) ? 1.0 : !guided ? 0.6 : (x == 0 || y == 0) ? 0.5 : 0.25); // guided: B-spline like
-            if (guided)
+            if (guided && _NFX_DenoiseStep < 2.5)
             {
                 // values far from the centre in units of the local noise belong to another feature (a contact
-                // shadow's edge): kept apart; where the rays agree the blur is light, where they scatter it is full
+                // shadow's edge): kept apart; where the rays agree the blur is light, where they scatter it is full.
+                // Only in the first, narrow steps: the wider ones see an already smoothed signal whose small spread
+                // would stop them everywhere (the noise then stayed).
                 float lum = dot(taps[i].rgb, float3(0.2126, 0.7152, 0.0722));
-                w *= exp(-abs(lum - centerLum) / (4.0 * sigma + 1e-3 + 0.05 * abs(centerLum)));
+                w *= exp(-abs(lum - centerLum) / (4.0 * sigma + 1e-3 + 0.2 * abs(centerLum)));
             }
             sum += taps[i] * w;
             weights += w;
