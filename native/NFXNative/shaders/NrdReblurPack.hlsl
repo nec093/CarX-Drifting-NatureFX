@@ -2,8 +2,10 @@
 // prepared (PrepareNrdGuide at the ambient resolution), the trace's surfaces (origin w: valid; the last float, where
 // Ambient.hlsl / GI.hlsl leave the distance their ray went) and its result, and writes NRD's input textures.
 // GI (Mode 1): the light bounced in (rgb) goes to the first REBLUR_DIFFUSE, the share of the sky seen (a, as grey) to
-// the second. Ambient light (Mode 0): its rgb (relative to HDRP's ambient light) to the first only. A pixel without a
-// valid surface is put out of NRD's range (view Z 1e6).
+// the second. Ambient light (Mode 0): its rgb (relative to HDRP's ambient light) to the first only. Lamp shadows
+// (Mode 2, LocalShadows.hlsl's blocked light on the ambient light's surfaces): the blocked light to the first, the
+// light added by emissive stand ins (negative) to the second, both without a hit distance (soft, wide). A pixel
+// without a valid surface is put out of NRD's range (view Z 1e6).
 // Root: t0 guides (2 float4 per pixel), t1 surfaces (3 float4 per pixel), t2 result (float4 per pixel), u0..u4 a table
 // (normal and roughness, view Z, motion, radiance and hit distance 0 and 1), b0 { width, height, mode }.
 // Compiled into NrdReblurPack.h (NRD's Shaders folder on the include path).
@@ -44,7 +46,9 @@ void main(uint3 id : SV_DispatchThreadID)
     OutNormalRoughness[id.xy] = NRD_FrontEnd_PackNormalAndRoughness(normalize(a.xyz), 1.0, 0.0);
     OutViewZ[id.xy] = viewZ;
     OutMotion[id.xy] = b.yz;
-    float norm = REBLUR_FrontEnd_GetNormHitDist(max(hitDist, 0.0), viewZ, HitDistParams, 1.0);
-    OutSignal0[id.xy] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(result.rgb, norm, true);
-    OutSignal1[id.xy] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(Mode == 1u ? result.aaa : 0.0, norm, true);
+    float norm = Mode == 2u ? 1.0 : REBLUR_FrontEnd_GetNormHitDist(max(hitDist, 0.0), viewZ, HitDistParams, 1.0);
+    float3 first = Mode == 2u ? max(result.rgb, 0.0) : result.rgb;
+    float3 second = Mode == 1u ? result.aaa : Mode == 2u ? max(-result.rgb, 0.0) : 0.0;
+    OutSignal0[id.xy] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(first, norm, true);
+    OutSignal1[id.xy] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(second, norm, true);
 }

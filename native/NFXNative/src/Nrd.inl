@@ -1,6 +1,7 @@
 // NFXNative: NVIDIA Real-Time Denoisers (NRD, static library from %USERPROFILE%\NatureFX-Deps\NRD) run on Unity's
 // queue without NRI, included at the end of NFXNative.cpp. SIGMA denoises the sun shadows (render event 5), REBLUR the
-// ambient light or GI (render event 6: two REBLUR_DIFFUSE, the light bounced in and the share of the sky seen).
+// ambient light or GI (render event 6: two REBLUR_DIFFUSE, the light bounced in and the share of the sky seen), and
+// with an instance of its own the lamp shadows (event 6, mode 2: the blocked light and the light emissive stand ins add).
 //
 // Right after a trace: a pack shader turns Unity's guides (PrepareNrdGuide) and the trace's result into NRD's input
 // textures, NRD's dispatches run (one shared root signature per instance: a root CBV, an SRV table, a UAV table, the
@@ -24,7 +25,7 @@ struct NrdEventData {
 	float worldToView[16], worldToViewPrev[16];  // column major
 	float denoisingRange;
 	float timeDelta;          // ms
-	UINT32 mode;              // event 6: 1 GI (two signals), 0 the one bounce ambient light
+	UINT32 mode;              // event 6: 1 GI (two signals), 0 the one bounce ambient light, 2 the lamp shadows
 	UINT32 pad;
 };
 static_assert(sizeof(NrdEventData) == 328, "NrdEventData: NativeEngine.IssueNrd writes 328 bytes");
@@ -58,7 +59,7 @@ struct NrdContext {
 	NrdKernel pack, unpack;
 	int runs = 0;
 };
-NrdContext g_nrdSun, g_nrdAmbient;
+NrdContext g_nrdSun, g_nrdAmbient, g_nrdLocal;
 
 // shared by both: the descriptor ring, the constant ring, textures replaced on a resize
 constexpr UINT kNrdDescriptors = 16384;
@@ -578,10 +579,11 @@ void NrdSigma(const NrdEventData* data) {
 	NrdStatusLine(c, "SIGMA on the sun shadows", data, dispatched);
 }
 
-// Render event 6: REBLUR over the ambient light or GI trace that ran just before (GI: two signals)
+// Render event 6: REBLUR over the ambient light, GI or lamp shadow trace that ran just before (GI and lamps: two
+// signals)
 void NrdReblur(const NrdEventData* data) {
 	static const nrd::Denoiser kReblur[] = { nrd::Denoiser::REBLUR_DIFFUSE, nrd::Denoiser::REBLUR_DIFFUSE };
-	auto& c = g_nrdAmbient;
+	auto& c = data != nullptr && data->mode == 2 ? g_nrdLocal : g_nrdAmbient;
 	if (!c.pack.pso && !c.failed &&
 	    (!NrdPackKernel(c.pack, 5, g_NrdReblurPack, sizeof(g_NrdReblurPack)) || !NrdUnpackKernel(c.unpack, 2, g_NrdReblurUnpack, sizeof(g_NrdReblurUnpack)))) {
 		c.failed = true;
@@ -598,25 +600,26 @@ void NrdReblur(const NrdEventData* data) {
 	}
 	ID3D12DescriptorHeap* heaps[] = { g_nrdHeap.Get() };
 	list->SetDescriptorHeaps(1, heaps);
-	bool gi = data->mode == 1;
-	UINT constants[4] = { data->width, data->height, gi ? 1u : 0u, 0 };
+	bool two = data->mode == 1 || data->mode == 2;
+	UINT constants[4] = { data->width, data->height, data->mode, 0 };
 	NrdPack(list, c, data, 2, constants);
 	nrd::ReblurSettings reblur = {};
 	nrd::Identifier ids[2] = { 0, 1 };
 	const void* settings[] = { &reblur, &reblur };
 	uint32_t dispatched = 0;
-	if (!NrdRun(list, c, data, resized, ids, settings, gi ? 2 : 1, &dispatched)) {
+	if (!NrdRun(list, c, data, resized, ids, settings, two ? 2 : 1, &dispatched)) {
 		list->Close();
 		return;
 	}
 	NrdUnpack(list, c, data, 2, constants);
 	g_render.Submit(g_unityQueue.load());
-	NrdStatusLine(c, gi ? "REBLUR on the GI (light and sky)" : "REBLUR on the ambient light", data, dispatched);
+	NrdStatusLine(c, data->mode == 2 ? "REBLUR on the lamp shadows" : data->mode == 1 ? "REBLUR on the GI (light and sky)" : "REBLUR on the ambient light",
+	              data, dispatched);
 }
 
 }  // namespace
 
 // What the NRD stages are doing (for the mod's status lines): the sun's, then the ambient light's
 NFX_EXPORT int NFX_Native_NrdStatus(char* buffer, int size) {
-	return CopyOut("sun: " + g_nrdSun.status + "; ambient: " + g_nrdAmbient.status, buffer, size);
+	return CopyOut("sun: " + g_nrdSun.status + "; ambient: " + g_nrdAmbient.status + "; lamps: " + g_nrdLocal.status, buffer, size);
 }

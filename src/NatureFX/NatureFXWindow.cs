@@ -835,7 +835,7 @@ namespace NatureFX {
 			Widgets.Info(denoiser == 0 ? "A fixed blur along surfaces."
 				: denoiser == 1 ? "Blurs where the rays disagree and keeps detail where they agree (sharper contact shadows, less smear)."
 				: "NVIDIA Real-Time Denoisers: SIGMA for the sun shadows, REBLUR for the ambient light and GI (at quarter resolution " +
-				  $"without the frame to frame offset); lamp shadows and reflections as Variance guided. Now: {NativeEngine.NrdStatus}");
+				  $"without the frame to frame offset) and the lamp shadows; reflections as Variance guided. Now: {NativeEngine.NrdStatus}");
 			Other(Widgets.Switch("Measurement overlay", S.RTOverlay, v => S.RTOverlay = v,
 				"GPU time of each ray traced stage, rays per frame, lamps, scene size and GPU memory, at the top left of the screen."));
 			if (backend == 1) {

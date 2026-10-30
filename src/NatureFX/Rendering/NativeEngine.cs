@@ -798,6 +798,9 @@ namespace NatureFX.Rendering {
 				surface = PrepareAmbient(cmd, bridge, ctx, surfaceNormal, size, result, Vector4.zero);
 			}
 			Issue(cmd, TraceLocal_, surface.SurfacePtr, result.ResultPtr, width, height);
+			if (NrdAmbient) {
+				IssueNrd(cmd, bridge, ctx, nrdAmbientGuide_, surface.SurfacePtr, result.ResultPtr, width, height, size, 6, 2);
+			}
 			Unpack4(cmd, bridge, result, target, size);
 		}
 

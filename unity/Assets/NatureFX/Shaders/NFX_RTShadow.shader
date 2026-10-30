@@ -286,7 +286,13 @@ Shader "Hidden/NatureFX/RTShadow"
         if (_NFX_LeafParams.z > 0.5 && !debug)
         {
             float3 localDiffuse = (known ? surface.rgb : 0.3) * (1.0 - (known ? saturate((surface.a - (surface.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0)) * INV_PI;
-            color -= min(Upsample(3, _NFX_LocalSize, uv, linearDepth).rgb * localDiffuse * GetCurrentExposureMultiplier(), color * 0.95);
+            // never more than 95 % of the pixel's brightness, scaled as a whole: clamping each channel took the warm
+            // lamp light's red and green away and left blue speckles where a noisy sample overshot
+            float3 removed = Upsample(3, _NFX_LocalSize, uv, linearDepth).rgb * localDiffuse * GetCurrentExposureMultiplier();
+            float removedLum = Luminance(removed);
+            if (removedLum > 0.0)
+                removed *= min(1.0, 0.95 * Luminance(color) / removedLum);
+            color = max(color - removed, 0.0);
         }
 
         // the sun at full resolution is read as is: an upsample would soften its sharp edges again

@@ -362,9 +362,9 @@ namespace NatureFX.Rendering {
 				: NativeEngine.NrdAmbient ? Filter(cmd, ambient_, ambientSize, 1.0f, PassDenoise, sunRadius, fov, 0)
 				: giUsed_ ? Filter(cmd, ambient_, ambientSize, giBlend, PassDenoise, sunRadius, fov, wide + 1, false, Mathf.Min(0.25f, StillShare(giBlend, 1.0f / 64.0f)))
 				          : Filter(cmd, ambient_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, Mathf.Min(0.25f, StillShare(slowBlend, 1.0f / 64.0f)));
-			var localResult = localShadows
-				? Filter(cmd, local_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, Mathf.Min(0.25f, StillShare(slowBlend, 1.0f / 64.0f)))
-				: null;
+			var localResult = !localShadows ? null
+				: NativeEngine.NrdAmbient ? Filter(cmd, local_, ambientSize, 1.0f, PassDenoise, sunRadius, fov, 0)
+				: Filter(cmd, local_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, Mathf.Min(0.25f, StillShare(slowBlend, 1.0f / 64.0f)));
 			// one sample per pixel along a whole view ray: lean on the history longer than the surfaces do
 			var shaftResult = Shafts ? Filter(cmd, shafts_, shaftSize, resetHistory ? 1.0f : blend * 0.5f, PassDenoise, sunRadius, fov, 3) : null;
 
