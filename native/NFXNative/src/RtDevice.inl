@@ -1062,6 +1062,7 @@ bool TraceRt(const TraceEventData* data, ID3D12CommandQueue* queue) {
 	// the hand over buffers of earlier traces may still be in use when they grow: wait for the GPU first
 	if (g_rt.inSize < inBytes || g_rt.outSize < outBytes) {
 		WaitRenderIdle();
+		RtWaitIdle();  // the 1.619 queue may still read or write the old ones
 		if (!RtEnsureHandover(inBytes, outBytes)) {
 			return false;
 		}

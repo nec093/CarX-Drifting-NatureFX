@@ -318,6 +318,8 @@ namespace NatureFX.Rendering {
 
 		// ------------------------------------------------------------------ Unity's command queue
 
+		private static int sizeWidth_, sizeHeight_;
+		private static float sizeLogAt_;
 		private static int captureStart_;
 		private static int queueTestFrame_ = -1;
 		private static bool queueReported_;
@@ -331,6 +333,21 @@ namespace NatureFX.Rendering {
 			if (Time.unscaledTime >= nextMemoryLog_) {
 				nextMemoryLog_ = Time.unscaledTime + 30.0f;
 				Kino.Log.Info($"[NatureFX] GPU memory: {GpuMemory}");
+			}
+			// 2 s after the camera size settles: what the GPU holds and how much of it is the engine's trace buffers
+			// (they follow the size; earlier ones are released 10 frames after being replaced)
+			if (sizeLogAt_ > 0.0f && Time.unscaledTime >= sizeLogAt_) {
+				sizeLogAt_ = 0.0f;
+				long bytes = 0, retiredBytes = 0;
+				foreach (var b in buffers_) {
+					bytes += b.Surface != null ? (long)b.Surface.count * b.Surface.stride + (long)b.Result.count * b.Result.stride : 0;
+				}
+				bytes += screen_ != null ? (long)screen_.count * screen_.stride : 0;
+				foreach (var r in retired_) {
+					retiredBytes += (long)r.Buffer.count * r.Buffer.stride;
+				}
+				Kino.Log.Info($"[NatureFX] Camera {sizeWidth_}x{sizeHeight_}: GPU memory {GpuMemory}; trace buffers {bytes / 1048576} MB, " +
+				              $"{retired_.Count} replaced ones still held ({retiredBytes / 1048576} MB)");
 			}
 			try {
 				UpdatePipeline();
@@ -499,6 +516,11 @@ namespace NatureFX.Rendering {
 			view.m03 = view.m13 = view.m23 = 0.0f;
 			viewProj_ = GL.GetGPUProjectionMatrix(cameraObject.projectionMatrix, true) * view;
 			screenSize_ = new Vector4(cameraObject.pixelWidth, cameraObject.pixelHeight, 1.0f / Mathf.Max(1, cameraObject.pixelWidth), 1.0f / Mathf.Max(1, cameraObject.pixelHeight));
+			if (cameraObject.pixelWidth != sizeWidth_ || cameraObject.pixelHeight != sizeHeight_) {
+				sizeWidth_ = cameraObject.pixelWidth;
+				sizeHeight_ = cameraObject.pixelHeight;
+				sizeLogAt_ = Time.unscaledTime + 2.0f;
+			}
 			sunDirection_ = sunDirection;
 			sunRadius_ = sunRadius;
 			sunColor_ = sunColor;
