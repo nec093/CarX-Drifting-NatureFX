@@ -1,0 +1,121 @@
+using System;
+using System.IO;
+using UnityEditor;
+using UnityEngine;
+
+namespace NatureFX.Editor {
+	// Generates NatureFX/* shaders as copies of the installed HDRP/Lit with the LitData include swapped for
+	// NFX_LitData.hlsl. Property names, keywords and passes stay identical to HDRP/Lit, so the mod can switch
+	// a game material's shader without losing its textures or settings.
+	public static class GenerateNatureFXShaders {
+		private const string LitShaderPath = "Packages/com.unity.render-pipelines.high-definition/Runtime/Material/Lit/Lit.shader";
+		private const string LitDataInclude = "#include \"Packages/com.unity.render-pipelines.high-definition/Runtime/Material/Lit/LitData.hlsl\"";
+		private const string NfxLitDataInclude = "#include \"Assets/NatureFX/ShaderLibrary/NFX_LitData.hlsl\"";
+		private const string LitPropertiesPath = "Packages/com.unity.render-pipelines.high-definition/Runtime/Material/Lit/LitProperties.hlsl";
+		private const string LitPropertiesInclude = "#include \"Packages/com.unity.render-pipelines.high-definition/Runtime/Material/Lit/LitProperties.hlsl\"";
+		private const string OutputFolder = "Assets/NatureFX/Shaders/Generated";
+
+		// Must match NFX_LitData.hlsl and src/NatureFX/Map/MaterialProfiles.cs
+		private const string NfxMaterialCBuffer =
+			"// NatureFX material profile (see NFX_LitData.hlsl)\n" +
+			"float4 _NFX_Material;       // x: porosity (<0: shader default), y: moss, z: rust, w: stain\n" +
+			"float4 _NFX_Material2;      // x: wear, y: dirt, z: water beading, w: retroreflection\n" +
+			"float4 _NFX_Emission;       // rgb: emitted colour in nits, w: when (0 off, 1 night, 2 dusk, 3 always)\n" +
+			"float4 _NFX_EmissionParams; // x: mask (0 bright texels, 1 alpha, 2 whole surface), y: share lit, z: flicker\n" +
+			"float4 _NFX_Paint;          // rgb: paint colour where the mask map's blue channel is white, a: 1 = on (CarX Colormask)\n\n";
+
+		private const string NfxMaterialProperties =
+			"        [HideInInspector] _NFX_Material(\"NFX Material\", Vector) = (-1, 0, 0, 0)\n" +
+			"        [HideInInspector] _NFX_Material2(\"NFX Material 2\", Vector) = (0, 0, 0, 0)\n" +
+			"        [HideInInspector] _NFX_Emission(\"NFX Emission\", Vector) = (0, 0, 0, 0)\n" +
+			"        [HideInInspector] _NFX_EmissionParams(\"NFX Emission Params\", Vector) = (0, 1, 0, 0)\n" +
+			"        [HideInInspector] _NFX_Paint(\"NFX Paint\", Vector) = (1, 1, 1, 0)\n";
+
+		private static readonly (string Name, string File, string[] Defines)[] Variants = {
+			("NatureFX/Foliage", "NFX_Foliage.shader", new[] { "NFX_WIND", "NFX_ACCUMULATION" }),
+			("NatureFX/LitAccumulation", "NFX_LitAccumulation.shader", new[] { "NFX_ACCUMULATION" })
+		};
+
+		[MenuItem("NatureFX/Generate Shaders From HDRP Lit")]
+		public static void Generate() {
+			string source = File.ReadAllText(Path.GetFullPath(LitShaderPath));
+			Directory.CreateDirectory(OutputFolder);
+
+			foreach (var v in Variants) {
+				string text = Patch(source, v.Name, v.Defines);
+				string path = $"{OutputFolder}/{v.File}";
+				File.WriteAllText(path, text);
+				AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+				Debug.Log($"[NatureFX] Generated {v.Name} -> {path}");
+			}
+		}
+
+		private static string Patch(string lit, string shaderName, string[] defines) {
+			const string header = "Shader \"HDRP/Lit\"";
+			if (!lit.StartsWith(header, StringComparison.Ordinal)) {
+				throw new Exception("Unexpected Lit.shader header; HDRP version changed?");
+			}
+			string text = $"Shader \"{shaderName}\"" + lit.Substring(header.Length);
+
+			// Drop HDRP's ray tracing SubShader: the game ships with HDRP ray tracing disabled, the own engine (NFXNative)
+			// reads the materials' values itself, and our GetSurfaceAndBuiltinData wrapper only forwards the raster
+			// signature.
+			int first = text.IndexOf("\n    SubShader", StringComparison.Ordinal);
+			int second = first < 0 ? -1 : text.IndexOf("\n    SubShader", first + 1, StringComparison.Ordinal);
+			int fallback = text.IndexOf("\n    FallBack", StringComparison.Ordinal);
+			if (first < 0 || second < 0 || fallback < second) {
+				throw new Exception("Could not find the Lit.shader SubShader blocks");
+			}
+			text = text.Remove(second, fallback - second);
+
+			int includes = CountOf(text, LitDataInclude);
+			if (includes == 0) {
+				throw new Exception("LitData.hlsl include not found in Lit.shader");
+			}
+			text = text.Replace(LitDataInclude, NfxLitDataInclude);
+
+			// Per-material NatureFX values (map material profiles) go into UnityPerMaterial so the
+			// SRP Batcher keeps batching: inline LitProperties.hlsl with them added before CBUFFER_END.
+			if (CountOf(text, LitPropertiesInclude) != 1) {
+				throw new Exception("LitProperties.hlsl include not found in Lit.shader");
+			}
+			string props = File.ReadAllText(Path.GetFullPath(LitPropertiesPath));
+			int cbufferEnd = props.IndexOf("CBUFFER_END", StringComparison.Ordinal);
+			if (cbufferEnd < 0 || props.IndexOf("CBUFFER_END", cbufferEnd + 1, StringComparison.Ordinal) >= 0) {
+				throw new Exception("Expected exactly one CBUFFER_END in LitProperties.hlsl");
+			}
+			props = props.Insert(cbufferEnd, NfxMaterialCBuffer);
+			text = text.Replace(LitPropertiesInclude, "// LitProperties.hlsl inlined by NatureFX\n" + props);
+
+			const string propertiesBlock = "    Properties\n    {\n";
+			text = text.Replace("\r\n", "\n");
+			int propsAt = text.IndexOf(propertiesBlock, StringComparison.Ordinal);
+			if (propsAt < 0) {
+				throw new Exception("Properties block not found in Lit.shader");
+			}
+			text = text.Insert(propsAt + propertiesBlock.Length, NfxMaterialProperties);
+
+			const string hlslInclude = "HLSLINCLUDE";
+			int at = text.IndexOf(hlslInclude, StringComparison.Ordinal);
+			if (at < 0) {
+				throw new Exception("HLSLINCLUDE block not found in Lit.shader");
+			}
+			at += hlslInclude.Length;
+			string defineBlock = "\n\n    // NatureFX\n";
+			foreach (string d in defines) {
+				defineBlock += $"    #define {d}\n";
+			}
+			text = text.Insert(at, defineBlock);
+
+			return "// Generated by Assets/NatureFX/Editor/GenerateNatureFXShaders.cs from HDRP/Lit. Do not edit.\n" + text;
+		}
+
+		private static int CountOf(string text, string value) {
+			int count = 0;
+			for (int i = text.IndexOf(value, StringComparison.Ordinal); i >= 0; i = text.IndexOf(value, i + value.Length, StringComparison.Ordinal)) {
+				++count;
+			}
+			return count;
+		}
+	}
+}

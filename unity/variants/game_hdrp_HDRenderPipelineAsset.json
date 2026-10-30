@@ -1,0 +1,541 @@
+{
+    "supportShadowMask": true,
+    "supportSSR": true,
+    "supportSSRTransparent": true,
+    "supportSSAO": true,
+    "supportSSGI": true,
+    "supportSubsurfaceScattering": false,
+    "sssSampleBudget": {
+        "m_Values": [
+            20,
+            40,
+            80
+        ],
+        "m_SchemaId": {
+            "m_Id": "With3Levels"
+        }
+    },
+    "sssDownsampleSteps": {
+        "m_Values": [
+            0,
+            0,
+            0
+        ],
+        "m_SchemaId": {
+            "m_Id": "With3Levels"
+        }
+    },
+    "supportVolumetrics": true,
+    "supportVolumetricClouds": true,
+    "supportLightLayers": true,
+    "renderingLayerMaskBuffer": false,
+    "supportWater": false,
+    "waterSimulationResolution": 128,
+    "supportWaterExclusion": true,
+    "supportWaterDeformation": true,
+    "deformationAtlasSize": 512,
+    "maximumDeformerCount": 64,
+    "supportWaterFoam": true,
+    "foamAtlasSize": 512,
+    "waterScriptInteractionsMode": 0,
+    "waterFullCPUSimulation": false,
+    "supportComputeThickness": false,
+    "computeThicknessResolution": 1,
+    "computeThicknessLayerMask": {
+        "serializedVersion": "2",
+        "m_Bits": 0
+    },
+    "supportDistortion": false,
+    "supportTransparentBackface": false,
+    "supportTransparentDepthPrepass": true,
+    "supportTransparentDepthPostpass": false,
+    "colorBufferFormat": 74,
+    "supportCustomPass": true,
+    "customBufferFormat": 12,
+    "supportedLitShaderMode": 3,
+    "planarReflectionResolution": {
+        "m_Values": [
+            64,
+            64,
+            64
+        ],
+        "m_SchemaId": {
+            "m_Id": "With3Levels"
+        }
+    },
+    "cubeReflectionResolution": {
+        "m_Values": [
+            256,
+            512,
+            1024
+        ],
+        "m_SchemaId": {
+            "m_Id": "With3Levels"
+        }
+    },
+    "supportDecals": false,
+    "supportDecalLayers": false,
+    "supportSurfaceGradient": false,
+    "decalNormalBufferHP": false,
+    "supportHighQualityLineRendering": false,
+    "highQualityLineRenderingMemoryBudget": 128,
+    "msaaSampleCount": 1,
+    "supportMotionVectors": true,
+    "supportScreenSpaceLensFlare": true,
+    "supportDataDrivenLensFlare": true,
+    "supportDitheringCrossFade": true,
+    "supportRuntimeAOVAPI": false,
+    "supportTerrainHole": false,
+    "lightProbeSystem": 0,
+    "oldLightProbeSystem": 0,
+    "probeVolumeMemoryBudget": 1024,
+    "supportProbeVolumeGPUStreaming": false,
+    "supportProbeVolumeDiskStreaming": false,
+    "probeVolumeSHBands": 1,
+    "supportProbeVolumeScenarios": false,
+    "supportProbeVolumeScenarioBlending": true,
+    "probeVolumeBlendingMemoryBudget": 128,
+    "supportRayTracing": false,
+    "supportVFXRayTracing": false,
+    "supportedRayTracingMode": 3,
+    "lightLoopSettings": {
+        "cookieAtlasSize": 512,
+        "cookieFormat": 74,
+        "cookieAtlasLastValidMip": 0,
+        "cookieTexArraySize": 1,
+        "planarReflectionAtlasSize": 64,
+        "reflectionProbeCacheSize": 1,
+        "reflectionCubemapSize": 256,
+        "maxEnvLightsOnScreen": 64,
+        "reflectionCacheCompressed": false,
+        "reflectionProbeFormat": 74,
+        "reflectionProbeTexCacheSize": 134218752,
+        "reflectionProbeTexLastValidCubeMip": 3,
+        "reflectionProbeTexLastValidPlanarMip": 0,
+        "reflectionProbeDecreaseResToFit": true,
+        "skyReflectionSize": 512,
+        "skyLightingOverrideLayerMask": {
+            "serializedVersion": "2",
+            "m_Bits": 0
+        },
+        "supportFabricConvolution": false,
+        "maxDirectionalLightsOnScreen": 16,
+        "maxPunctualLightsOnScreen": 512,
+        "maxAreaLightsOnScreen": 64,
+        "maxCubeReflectionOnScreen": 64,
+        "maxPlanarReflectionOnScreen": 16,
+        "maxDecalsOnScreen": 512,
+        "maxLightsPerClusterCell": 8,
+        "maxLocalVolumetricFogSize": 0,
+        "maxLocalVolumetricFogOnScreen": 256
+    },
+    "hdShadowInitParams": {
+        "maxShadowRequests": 128,
+        "directionalShadowsDepthBits": 32,
+        "punctualShadowFilteringQuality": 0,
+        "directionalShadowFilteringQuality": 0,
+        "areaShadowFilteringQuality": 0,
+        "punctualLightShadowAtlas": {
+            "shadowAtlasResolution": 2048,
+            "shadowAtlasDepthBits": 16,
+            "useDynamicViewportRescale": true
+        },
+        "areaLightShadowAtlas": {
+            "shadowAtlasResolution": 128,
+            "shadowAtlasDepthBits": 16,
+            "useDynamicViewportRescale": true
+        },
+        "cachedPunctualLightShadowAtlas": 2048,
+        "cachedAreaLightShadowAtlas": 1024,
+        "allowDirectionalMixedCachedShadows": false,
+        "shadowResolutionDirectional": {
+            "m_Values": [
+                256,
+                512,
+                1024,
+                2048
+            ],
+            "m_SchemaId": {
+                "m_Id": "With4Levels"
+            }
+        },
+        "shadowResolutionPunctual": {
+            "m_Values": [
+                256,
+                512,
+                1024,
+                2048
+            ],
+            "m_SchemaId": {
+                "m_Id": "With4Levels"
+            }
+        },
+        "shadowResolutionArea": {
+            "m_Values": [
+                256,
+                512,
+                1024,
+                2048
+            ],
+            "m_SchemaId": {
+                "m_Id": "With4Levels"
+            }
+        },
+        "maxDirectionalShadowMapResolution": 2048,
+        "maxPunctualShadowMapResolution": 2048,
+        "maxAreaShadowMapResolution": 2048,
+        "supportScreenSpaceShadows": false,
+        "maxScreenSpaceShadowSlots": 4,
+        "screenSpaceShadowBufferFormat": 48
+    },
+    "decalSettings": {
+        "drawDistance": 1000,
+        "atlasWidth": 256,
+        "atlasHeight": 256,
+        "transparentTextureResolution": {
+            "m_Values": [
+                256,
+                512,
+                1024
+            ],
+            "m_SchemaId": {
+                "m_Id": "With3Levels"
+            }
+        },
+        "perChannelMask": false
+    },
+    "postProcessSettings": {
+        "m_LutSize": 32,
+        "lutFormat": 48,
+        "bufferFormat": 74
+    },
+    "dynamicResolutionSettings": {
+        "enabled": false,
+        "useMipBias": false,
+        "enableDLSS": false,
+        "DLSSPerfQualitySetting": 0,
+        "DLSSInjectionPoint": 0,
+        "DLSSUseOptimalSettings": true,
+        "DLSSSharpness": 0.5,
+        "fsrOverrideSharpness": false,
+        "fsrSharpness": 0.9200000166893005,
+        "maxPercentage": 100.0,
+        "minPercentage": 75.0,
+        "dynResType": 0,
+        "upsampleFilter": 1,
+        "forceResolution": false,
+        "forcedPercentage": 50.0,
+        "lowResTransparencyMinimumThreshold": 0.0,
+        "rayTracingHalfResThreshold": 50.0,
+        "lowResSSGIMinimumThreshold": 0.0
+    },
+    "lowresTransparentSettings": {
+        "enabled": true,
+        "checkerboardDepthBuffer": true,
+        "upsampleType": 1
+    },
+    "xrSettings": {
+        "singlePass": true,
+        "occlusionMesh": true,
+        "cameraJitter": false,
+        "allowMotionBlur": false
+    },
+    "postProcessQualitySettings": {
+        "NearBlurSampleCount": [
+            3,
+            5,
+            8
+        ],
+        "NearBlurMaxRadius": [
+            2.0,
+            4.0,
+            7.0
+        ],
+        "FarBlurSampleCount": [
+            4,
+            7,
+            14
+        ],
+        "FarBlurMaxRadius": [
+            5.0,
+            8.0,
+            13.0
+        ],
+        "DoFResolution": [
+            4,
+            2,
+            1
+        ],
+        "DoFHighQualityFiltering": [
+            false,
+            true,
+            true
+        ],
+        "DoFPhysicallyBased": [
+            false,
+            false,
+            false
+        ],
+        "LimitManualRangeNearBlur": [
+            false,
+            false,
+            false
+        ],
+        "MotionBlurSampleCount": [
+            4,
+            8,
+            12
+        ],
+        "BloomRes": [
+            4,
+            2,
+            2
+        ],
+        "BloomHighQualityFiltering": [
+            false,
+            true,
+            true
+        ],
+        "BloomHighQualityPrefiltering": [
+            false,
+            false,
+            true
+        ],
+        "ChromaticAberrationMaxSamples": [
+            3,
+            6,
+            12
+        ]
+    },
+    "lightSettings": {
+        "useContactShadow": {
+            "m_Values": [
+                false,
+                false,
+                false
+            ],
+            "m_SchemaId": {
+                "m_Id": ""
+            }
+        }
+    },
+    "maximumLODLevel": {
+        "m_Values": [
+            0,
+            0,
+            0
+        ],
+        "m_SchemaId": {
+            "m_Id": "With3Levels"
+        }
+    },
+    "lodBias": {
+        "m_Values": [
+            2.0,
+            4.0,
+            6.0
+        ],
+        "m_SchemaId": {
+            "m_Id": "With3Levels"
+        }
+    },
+    "lightingQualitySettings": {
+        "AOStepCount": [
+            4,
+            6,
+            16
+        ],
+        "AOFullRes": [
+            false,
+            false,
+            true
+        ],
+        "AOMaximumRadiusPixels": [
+            32,
+            40,
+            80
+        ],
+        "AOBilateralUpsample": [
+            false,
+            true,
+            true
+        ],
+        "AODirectionCount": [
+            1,
+            2,
+            4
+        ],
+        "ContactShadowSampleCount": [
+            6,
+            10,
+            16
+        ],
+        "SSRMaxRaySteps": [
+            16,
+            32,
+            64
+        ],
+        "SSGIRaySteps": [
+            32,
+            64,
+            128
+        ],
+        "SSGIDenoise": [
+            true,
+            true,
+            true
+        ],
+        "SSGIHalfResDenoise": [
+            true,
+            false,
+            false
+        ],
+        "SSGIDenoiserRadius": [
+            0.75,
+            0.5,
+            0.5
+        ],
+        "SSGISecondDenoise": [
+            true,
+            true,
+            true
+        ],
+        "RTAORayLength": [
+            0.5,
+            3.0,
+            20.0
+        ],
+        "RTAOSampleCount": [
+            1,
+            2,
+            8
+        ],
+        "RTAODenoise": [
+            true,
+            true,
+            true
+        ],
+        "RTAODenoiserRadius": [
+            0.25,
+            0.5,
+            0.6499999761581421
+        ],
+        "RTGIRayLength": [
+            50.0,
+            50.0,
+            50.0
+        ],
+        "RTGIFullResolution": [
+            false,
+            false,
+            true
+        ],
+        "RTGIClampValue": [
+            0.5,
+            0.800000011920929,
+            1.5
+        ],
+        "RTGIRaySteps": [
+            32,
+            48,
+            64
+        ],
+        "RTGIDenoise": [
+            true,
+            true,
+            true
+        ],
+        "RTGIHalfResDenoise": [
+            true,
+            false,
+            false
+        ],
+        "RTGIDenoiserRadius": [
+            0.75,
+            0.5,
+            0.25
+        ],
+        "RTGISecondDenoise": [
+            true,
+            true,
+            true
+        ],
+        "RTRMinSmoothness": [
+            0.6000000238418579,
+            0.4000000059604645,
+            0.0
+        ],
+        "RTRSmoothnessFadeStart": [
+            0.699999988079071,
+            0.5,
+            0.0
+        ],
+        "RTRRayLength": [
+            50.0,
+            50.0,
+            50.0
+        ],
+        "RTRClampValue": [
+            0.800000011920929,
+            1.0,
+            1.2000000476837159
+        ],
+        "RTRFullResolution": [
+            false,
+            false,
+            true
+        ],
+        "RTRRayMaxIterations": [
+            32,
+            48,
+            64
+        ],
+        "RTRDenoise": [
+            true,
+            true,
+            true
+        ],
+        "RTRDenoiserRadiusDimmer": [
+            0.75,
+            0.75,
+            1.0
+        ],
+        "RTRDenoiserAntiFlicker": [
+            1.0,
+            1.0,
+            1.0
+        ],
+        "Fog_ControlMode": [
+            0,
+            0,
+            0
+        ],
+        "Fog_Budget": [
+            0.16599999368190766,
+            0.33000001311302187,
+            0.6660000085830689
+        ],
+        "Fog_DepthRatio": [
+            0.6660000085830689,
+            0.6660000085830689,
+            0.5
+        ]
+    },
+    "m_ObsoleteLightLayerName0": "",
+    "m_ObsoleteLightLayerName1": "",
+    "m_ObsoleteLightLayerName2": "",
+    "m_ObsoleteLightLayerName3": "",
+    "m_ObsoleteLightLayerName4": "",
+    "m_ObsoleteLightLayerName5": "",
+    "m_ObsoleteLightLayerName6": "",
+    "m_ObsoleteLightLayerName7": "",
+    "m_ObsoleteDecalLayerName0": "",
+    "m_ObsoleteDecalLayerName1": "",
+    "m_ObsoleteDecalLayerName2": "",
+    "m_ObsoleteDecalLayerName3": "",
+    "m_ObsoleteDecalLayerName4": "",
+    "m_ObsoleteDecalLayerName5": "",
+    "m_ObsoleteDecalLayerName6": "",
+    "m_ObsoleteDecalLayerName7": "",
+    "m_ObsoleteSupportRuntimeDebugDisplay": false
+}

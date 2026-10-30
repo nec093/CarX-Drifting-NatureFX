@@ -1,0 +1,2 @@
+# quality level | name | HDRP asset | active
+0 | Default | HDRenderPipelineAsset | active

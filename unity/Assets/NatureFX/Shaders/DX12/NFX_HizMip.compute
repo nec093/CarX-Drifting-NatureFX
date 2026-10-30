@@ -1,0 +1,36 @@
+// NatureFX replacement for CarX's HiZ mip builder (GpuCullingConfig.mipGeneratorShader), kernel "BuildMip":
+// each texel of mip n keeps the farthest device depth (reversed Z: the minimum) of its 2x2 source texels in mip n-1,
+// so a box behind it is safely hidden. Both mips are bound as UAVs by HizMapGenerator.
+#pragma kernel BuildMip
+
+RWTexture2D<float> _Src;
+RWTexture2D<float> _Dst;
+
+[numthreads(8, 8, 1)]
+void BuildMip(uint3 id : SV_DispatchThreadID)
+{
+    uint dw, dh, sw, sh;
+    _Dst.GetDimensions(dw, dh);
+    _Src.GetDimensions(sw, sh);
+    if (id.x >= dw || id.y >= dh)
+        return;
+
+    uint2 s = id.xy * 2u;
+    uint2 maxS = uint2(sw, sh) - 1u;
+    float d = _Src[min(s, maxS)];
+    d = min(d, _Src[min(s + uint2(1, 0), maxS)]);
+    d = min(d, _Src[min(s + uint2(0, 1), maxS)]);
+    d = min(d, _Src[min(s + uint2(1, 1), maxS)]);
+    // odd sizes: fold in the extra row / column
+    if ((sw & 1u) && id.x == dw - 1u)
+    {
+        d = min(d, _Src[min(s + uint2(2, 0), maxS)]);
+        d = min(d, _Src[min(s + uint2(2, 1), maxS)]);
+    }
+    if ((sh & 1u) && id.y == dh - 1u)
+    {
+        d = min(d, _Src[min(s + uint2(0, 2), maxS)]);
+        d = min(d, _Src[min(s + uint2(1, 2), maxS)]);
+    }
+    _Dst[id.xy] = d;
+}

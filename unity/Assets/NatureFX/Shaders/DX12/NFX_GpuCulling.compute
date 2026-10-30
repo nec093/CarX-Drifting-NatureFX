@@ -1,0 +1,152 @@
+// NatureFX replacement for CarX's GPU culling compute shader (GpuCullingConfig.cullingProcessShader), which the
+// game ships without DX12 kernels. Written from the C# side of GpuCulling.GpuCullingService: same kernel names,
+// same bindings and buffer layouts. When in doubt an entity is reported visible.
+#pragma kernel ClearCullResult
+#pragma kernel CalculateCullResult
+
+float _MinDistance;
+float _MaxDistance;
+float4 _ScreenSize;                 // xy: pixels (HiZ mip 0 size)
+Texture2D<float> _HiZTexture;       // device depth, farthest value per texel at each mip (NFX_HizMip)
+int _MaxMipLevel;
+float4 _CameraPosition;
+float4x4 _CameraViewProjectionMatrix; // camera.projectionMatrix * worldToCamera (OpenGL convention, z in -1..1)
+float4 _FrustumPlanes[6];           // normalised, pointing inwards
+
+StructuredBuffer<int> _ActiveHandles;
+int _ActiveHandlesCount;
+StructuredBuffer<float3> _Positions;
+StructuredBuffer<float3> _Offsets;
+StructuredBuffer<float3> _Extents;
+StructuredBuffer<float4> _Rotations;   // quaternion xyzw; all zero for entities that were never rotated
+StructuredBuffer<float> _SphereRadius;
+ByteAddressBuffer _EntityType;         // 1 bit per handle: 1 = sound, 0 = object
+RWByteAddressBuffer _CullResult;       // 1 bit per handle: 1 = visible
+int _CullResultCount;                  // number of handles (bits)
+
+[numthreads(64, 1, 1)]
+void ClearCullResult(uint3 id : SV_DispatchThreadID)
+{
+    uint words = ((uint)_CullResultCount + 31u) / 32u;
+    if (id.x < words)
+        _CullResult.Store(id.x * 4u, 0u);
+}
+
+float3 Rotate(float4 q, float3 v)
+{
+    // zero quaternion = never set = identity
+    if (dot(q, q) < 1e-8)
+        return v;
+    q = normalize(q);
+    float3 t = 2.0 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
+}
+
+bool IsSound(uint handle)
+{
+    uint word = _EntityType.Load((handle >> 5) * 4u);
+    return (word & (1u << (handle & 31u))) != 0u;
+}
+
+// Conservative screen space occlusion against the HiZ map. Reversed device depth (near = 1, far = 0).
+bool IsOccluded(float3 center, float3 axisX, float3 axisY, float3 axisZ)
+{
+    float2 minUV = 1.0;
+    float2 maxUV = 0.0;
+    float nearest = 0.0; // largest device depth of the box
+
+    [unroll]
+    for (int i = 0; i < 8; ++i)
+    {
+        float3 corner = center
+            + axisX * ((i & 1) ? 1.0 : -1.0)
+            + axisY * ((i & 2) ? 1.0 : -1.0)
+            + axisZ * ((i & 4) ? 1.0 : -1.0);
+        float4 clip = mul(_CameraViewProjectionMatrix, float4(corner, 1.0));
+        if (clip.w <= 1e-4)
+            return false; // crosses the camera plane
+        float3 ndc = clip.xyz / clip.w;
+        // GL ndc -> texture uv (row 0 at the top of the screen) and reversed device depth
+        float2 uv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+        minUV = min(minUV, uv);
+        maxUV = max(maxUV, uv);
+        nearest = max(nearest, (1.0 - ndc.z) * 0.5);
+    }
+
+    minUV = saturate(minUV);
+    maxUV = saturate(maxUV);
+    float2 sizePx = (maxUV - minUV) * _ScreenSize.xy;
+    if (sizePx.x <= 0.0 || sizePx.y <= 0.0)
+        return false;
+
+    // mip where the rectangle covers at most ~2x2 texels
+    int mip = (int)ceil(log2(max(max(sizePx.x, sizePx.y) * 0.5, 1.0)));
+    mip = clamp(mip, 0, max(_MaxMipLevel, 0));
+
+    uint w, h, levels;
+    _HiZTexture.GetDimensions(mip, w, h, levels);
+    int2 p0 = (int2)(minUV * float2(w, h));
+    int2 p1 = min((int2)(maxUV * float2(w, h)), int2(w, h) - 1);
+
+    float farthest = 1.0;
+    farthest = min(farthest, _HiZTexture.Load(int3(p0.x, p0.y, mip)));
+    farthest = min(farthest, _HiZTexture.Load(int3(p1.x, p0.y, mip)));
+    farthest = min(farthest, _HiZTexture.Load(int3(p0.x, p1.y, mip)));
+    farthest = min(farthest, _HiZTexture.Load(int3(p1.x, p1.y, mip)));
+
+    // occluded when the nearest point of the box is behind everything drawn over that area
+    return nearest < farthest - 1e-6;
+}
+
+[numthreads(64, 1, 1)]
+void CalculateCullResult(uint3 id : SV_DispatchThreadID)
+{
+    if ((int)id.x >= _ActiveHandlesCount)
+        return;
+
+    uint handle = (uint)_ActiveHandles[id.x];
+    if ((int)handle >= _CullResultCount)
+        return;
+
+    float4 rotation = _Rotations[handle];
+    float3 center = _Positions[handle] + Rotate(rotation, _Offsets[handle]);
+    float distanceToCamera = distance(center, _CameraPosition.xyz);
+    bool visible;
+
+    if (IsSound(handle))
+    {
+        // sounds are active while the listener is inside their radius
+        visible = distanceToCamera <= _SphereRadius[handle];
+    }
+    else if (distanceToCamera <= _MinDistance)
+    {
+        visible = true;
+    }
+    else if (distanceToCamera > _MaxDistance)
+    {
+        visible = false;
+    }
+    else
+    {
+        float3 e = _Extents[handle];
+        float3 ax = Rotate(rotation, float3(e.x, 0, 0));
+        float3 ay = Rotate(rotation, float3(0, e.y, 0));
+        float3 az = Rotate(rotation, float3(0, 0, e.z));
+
+        visible = true;
+        [unroll]
+        for (int i = 0; i < 6; ++i)
+        {
+            float3 n = _FrustumPlanes[i].xyz;
+            float r = abs(dot(n, ax)) + abs(dot(n, ay)) + abs(dot(n, az));
+            if (dot(n, center) + _FrustumPlanes[i].w < -r)
+                visible = false;
+        }
+
+        if (visible && IsOccluded(center, ax, ay, az))
+            visible = false;
+    }
+
+    if (visible)
+        _CullResult.InterlockedOr((handle >> 5) * 4u, 1u << (handle & 31u));
+}

@@ -1,0 +1,73 @@
+// NatureFX track map: a world aligned texture around the camera recording where tyres touched the ground.
+//   R: rubber (accumulates while sliding)   G: dry line (wipes wetness, fades back in the rain)
+//   B: compression (pushes snow and fallen leaves aside)
+// Texel (x, y) covers world xz = origin + (x, y + 0.5) / size * worldSize, sampled with the same mapping.
+#pragma kernel Stamp
+#pragma kernel Decay
+#pragma kernel Clear
+
+struct StampData
+{
+    float2 a;       // segment start (world xz)
+    float2 b;       // segment end
+    float width;    // tyre width (m)
+    float rubber;   // 0..1 rubber deposited per stamp
+    float press;    // 0..1 compression
+    float dry;      // 0..1 dry line strength
+};
+
+RWTexture2D<float4> _NFX_Map;
+StructuredBuffer<StampData> _NFX_Stamps;
+int _NFX_StampCount;
+float4 _NFX_MapParams;   // xy: world origin (xz of texel 0), z: world size (m), w: texture size (texels)
+int2 _NFX_Region;        // first texel of the region dispatched for Stamp
+float _NFX_DecayAmount;
+
+[numthreads(8, 8, 1)]
+void Stamp(uint3 id : SV_DispatchThreadID)
+{
+    int2 texel = _NFX_Region + (int2)id.xy;
+    int size = (int)_NFX_MapParams.w;
+    if (any(texel < 0) || any(texel >= size))
+        return;
+
+    float2 world = _NFX_MapParams.xy + (texel + 0.5) / _NFX_MapParams.w * _NFX_MapParams.z;
+    float4 value = _NFX_Map[texel];
+
+    for (int i = 0; i < _NFX_StampCount; ++i)
+    {
+        StampData s = _NFX_Stamps[i];
+        float2 ab = s.b - s.a;
+        float t = saturate(dot(world - s.a, ab) / max(dot(ab, ab), 1e-6));
+        float d = length(world - (s.a + ab * t));
+        float halfWidth = s.width * 0.5;
+        if (d > halfWidth)
+            continue;
+        // tread profile: solid core, soft shoulders, slight grooves along the tyre
+        float profile = smoothstep(halfWidth, halfWidth * 0.6, d) * (0.85 + 0.15 * cos(d / halfWidth * 18.0));
+        value.r = saturate(value.r + s.rubber * profile * 0.12);
+        value.g = max(value.g, s.dry * profile);
+        value.b = max(value.b, s.press * profile);
+    }
+
+    _NFX_Map[texel] = value;
+}
+
+// Rain slowly re-wets the dry line
+[numthreads(8, 8, 1)]
+void Decay(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id.xy >= (uint)_NFX_MapParams.w))
+        return;
+    float4 v = _NFX_Map[id.xy];
+    v.g = max(v.g - _NFX_DecayAmount, 0.0);
+    _NFX_Map[id.xy] = v;
+}
+
+[numthreads(8, 8, 1)]
+void Clear(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id.xy >= (uint)_NFX_MapParams.w))
+        return;
+    _NFX_Map[id.xy] = 0;
+}

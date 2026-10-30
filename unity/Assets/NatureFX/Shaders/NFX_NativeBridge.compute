@@ -1,0 +1,355 @@
+// NatureFX: hands traces to the own ray tracing engine (NFXNative, NativeEngine.cs) and back. Each trace is a
+// Prepare dispatch (what the engine reads, per trace pixel, into a buffer; also resets the result buffer, which
+// leaves both in the state the engine uses them in), the engine's work on Unity's queue (a render event), and an
+// Unpack dispatch (the result into the shadow pass's texture).
+// Prepare: sun shadows (SunShadow.hlsl). PrepareAmbient: ambient light and local light shadows
+// (GetTraceSurface). PrepareShafts: light shafts (Shafts.hlsl). Clear4: resets a result buffer. Unpack, Unpack4:
+// the results into textures.
+#pragma kernel Prepare
+#pragma kernel PrepareAmbient
+#pragma kernel PrepareShafts
+#pragma kernel Clear4
+#pragma kernel Unpack
+#pragma kernel Unpack4
+#pragma kernel PrepareSurface
+#pragma kernel UnpackSurface
+#pragma kernel PrepareScreen
+#pragma kernel PrepareReflection
+#pragma kernel UnpackReflection
+#pragma kernel PrepareGlass
+
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
+#include "Packages/com.unity.render-pipelines.high-definition/Runtime/ShaderLibrary/ShaderVariables.hlsl"
+#include "Packages/com.unity.render-pipelines.high-definition/Runtime/Material/NormalBuffer.hlsl"
+
+TEXTURE2D_X(_NFX_SurfaceNormal);              // RTSurfaceTrace: exact normal, w distance (< 0 thin, 0 unknown)
+RWStructuredBuffer<float4> _NFX_NativeSurface; // what the engine reads per pixel (2 or 3 float4)
+RWStructuredBuffer<float2> _NFX_NativeSun;     // sun result per pixel
+RWStructuredBuffer<float4> _NFX_NativeResult;  // ambient / local light / shaft result per pixel
+RW_TEXTURE2D_X(float2, _NFX_SunOutput);
+RW_TEXTURE2D_X(float4, _NFX_NativeTarget);
+
+float4 _NFX_TargetSize;    // trace resolution: xy size, zw 1 / size
+float2 _NFX_TraceJitter;   // PrepareAmbient: this frame's offset inside a trace pixel (-0.5 .. 0.5; 0 at half resolution)
+float4 _NFX_RTSunDir;      // xyz towards the sun, w 1 when it is up
+float4 _NFX_NativeDefault; // what a result pixel holds before the engine writes it
+float4 _NFX_ShaftParams;   // x scattering (1/m), y anisotropy, z max distance (m)
+float4 _NFX_NativeFrame;   // x frame index
+
+float IGN(float2 p)
+{
+    return frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
+}
+
+float2 Hash22(uint2 p, uint frame, uint i)
+{
+    float2 offset = float2(0.7548776662, 0.5698402910) * (frame * 4u + i) * 37.0;
+    return float2(IGN(p + offset), IGN(p.yx + offset * 1.7 + 11.3));
+}
+
+uint2 TracePixel(uint2 id)
+{
+    float2 uv = (id + 0.5) * _NFX_TargetSize.zw;
+    return min((uint2)(uv * _ScreenSize.xy), (uint2)_ScreenSize.xy - 1);
+}
+
+// The full resolution pixel a trace pixel looks at this frame (quarter resolution moves it around its block)
+uint2 JitteredTracePixel(uint2 id)
+{
+    float2 uv = (id + 0.5 + _NFX_TraceJitter) * _NFX_TargetSize.zw;
+    return min((uint2)(saturate(uv) * _ScreenSize.xy), (uint2)_ScreenSize.xy - 1);
+}
+
+// The ray origin just above the exact surface the camera ray found
+bool TraceSurface(uint2 pixel, out float3 origin, out float3 n, out float3 geomN, out float viewDepth, out bool thin, out float offset)
+{
+    origin = 0;
+    n = 0;
+    geomN = 0;
+    viewDepth = 0;
+    thin = false;
+    offset = 0;
+    float depth = LOAD_TEXTURE2D_X(_CameraDepthTexture, pixel).r;
+    if (depth == UNITY_RAW_FAR_CLIP_VALUE)
+        return false;
+    NormalData nd;
+    DecodeFromNormalBuffer(pixel, nd);
+    n = nd.normalWS;
+    PositionInputs pos = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
+    float3 pixelAWS = GetAbsolutePositionWS(pos.positionWS);
+    float4 s = LOAD_TEXTURE2D_X(_NFX_SurfaceNormal, pixel);
+    bool exact = s.w != 0.0;
+    float3 cameraAWS = GetAbsolutePositionWS(float3(0, 0, 0));
+    float3 surfaceAWS = exact ? cameraAWS + normalize(pixelAWS - cameraAWS) * abs(s.w) : pixelAWS;
+    geomN = exact ? s.xyz : n;
+    viewDepth = LinearEyeDepth(depth, _ZBufferParams);
+    offset = 0.01 + viewDepth * 0.0005;
+    origin = surfaceAWS + geomN * offset;
+    thin = s.w < 0.0;
+    return true;
+}
+
+[numthreads(8, 8, 1)]
+void Prepare(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    uint index = id.y * (uint)_NFX_TargetSize.x + id.x;
+    uint2 pixel = TracePixel(id.xy);
+    float4 origin = 0;
+    float3 n, geomN, o;
+    float viewDepth, offset;
+    bool thin;
+    if (_NFX_RTSunDir.w > 0.0 && TraceSurface(pixel, o, n, geomN, viewDepth, thin, offset))
+    {
+        // for SunShadow.hlsl: surfaces facing away from the sun got none from HDRP; leaves lit from behind are traced
+        // from their sunny side
+        float3 L = _NFX_RTSunDir.xyz;
+        bool backLit = thin && dot(n, L) <= 0.0;
+        origin.xyz = backLit ? o - geomN * 2.0 * offset : o;
+        origin.w = dot(n, L) > 0.0 || backLit ? 1.0 : 0.0;
+    }
+    _NFX_NativeSurface[index * 2] = origin;
+    _NFX_NativeSurface[index * 2 + 1] = float4(n, asfloat(pixel.x | (pixel.y << 16)));
+    _NFX_NativeSun[index] = float2(1.0, 0.0);
+}
+
+[numthreads(8, 8, 1)]
+void PrepareAmbient(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    uint index = id.y * (uint)_NFX_TargetSize.x + id.x;
+    uint2 pixel = JitteredTracePixel(id.xy);
+    float3 origin, n, geomN;
+    float viewDepth, offset;
+    bool thin;
+    bool valid = TraceSurface(pixel, origin, n, geomN, viewDepth, thin, offset);
+    _NFX_NativeSurface[index * 3] = float4(origin, valid ? 1.0 : 0.0);
+    _NFX_NativeSurface[index * 3 + 1] = float4(n, asfloat(pixel.x | (pixel.y << 16)));
+    _NFX_NativeSurface[index * 3 + 2] = float4(geomN, viewDepth);
+    _NFX_NativeResult[index] = _NFX_NativeDefault;
+}
+
+[numthreads(8, 8, 1)]
+void PrepareShafts(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    uint index = id.y * (uint)_NFX_TargetSize.x + id.x;
+    uint2 pixel = TracePixel(id.xy);
+    float4 sample = 0;
+    float coarse = 0.0;
+    if (_NFX_RTSunDir.w > 0.0)
+    {
+        // for Shafts.hlsl: one random point along the view ray, up to the surface or the max distance
+        float maxDistance = _NFX_ShaftParams.z;
+        float3 viewDir = normalize(GetPositionInput(pixel, _ScreenSize.zw, 0.5, UNITY_MATRIX_I_VP, UNITY_MATRIX_V).positionWS);
+        float depth = LOAD_TEXTURE2D_X(_CameraDepthTexture, pixel).r;
+        float segment = maxDistance;
+        if (depth != UNITY_RAW_FAR_CLIP_VALUE)
+            segment = min(length(GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V).positionWS), maxDistance);
+        float t = Hash22(pixel, (uint)_NFX_NativeFrame.x, 9).x * segment;
+        float sigma = _NFX_ShaftParams.x;
+        float g = _NFX_ShaftParams.y;
+        float cosTheta = dot(viewDir, _NFX_RTSunDir.xyz);
+        float phase = (1.0 - g * g) / (4.0 * PI * pow(max(1.0 + g * g - 2.0 * g * cosTheta, 1e-4), 1.5));
+        sample.xyz = GetAbsolutePositionWS(viewDir * t);
+        sample.w = sigma * phase * exp(-sigma * t) * segment * GetCurrentExposureMultiplier();
+        coarse = t > 50.0 ? 1.0 : 0.0;
+    }
+    _NFX_NativeSurface[index * 2] = sample;
+    _NFX_NativeSurface[index * 2 + 1] = float4(asfloat(pixel.x | (pixel.y << 16)), coarse, 0.0, 0.0);
+    _NFX_NativeResult[index] = 0.0;
+}
+
+[numthreads(8, 8, 1)]
+void Clear4(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    _NFX_NativeResult[id.y * (uint)_NFX_TargetSize.x + id.x] = _NFX_NativeDefault;
+}
+
+[numthreads(8, 8, 1)]
+void Unpack(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    _NFX_SunOutput[COORD_TEXTURE2D_X(id.xy)] = _NFX_NativeSun[id.y * (uint)_NFX_TargetSize.x + id.x];
+}
+
+[numthreads(8, 8, 1)]
+void Unpack4(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    _NFX_NativeTarget[COORD_TEXTURE2D_X(id.xy)] = _NFX_NativeResult[id.y * (uint)_NFX_TargetSize.x + id.x];
+}
+
+// ------------------------------------------------------------------ surface trace (full resolution)
+RW_TEXTURE2D_X(float4, _NFX_NativeTarget2);
+
+// The point each pixel shows (absolute world space), for the engine's camera rays
+[numthreads(8, 8, 1)]
+void PrepareSurface(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    uint index = id.y * (uint)_NFX_TargetSize.x + id.x;
+    uint2 pixel = min(id.xy, (uint2)_ScreenSize.xy - 1);
+    float depth = LOAD_TEXTURE2D_X(_CameraDepthTexture, pixel).r;
+    float4 p = 0;
+    if (depth != UNITY_RAW_FAR_CLIP_VALUE)
+    {
+        PositionInputs pos = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
+        p = float4(GetAbsolutePositionWS(pos.positionWS), 1.0);
+    }
+    _NFX_NativeSurface[index] = p;
+    _NFX_NativeResult[index * 2] = 0.0;
+    _NFX_NativeResult[index * 2 + 1] = 0.0;
+}
+
+// The engine's surfaces into RTSurfaceTrace's albedo (target) and normal (target 2) textures
+[numthreads(8, 8, 1)]
+void UnpackSurface(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    uint index = id.y * (uint)_NFX_TargetSize.x + id.x;
+    _NFX_NativeTarget[COORD_TEXTURE2D_X(id.xy)] = _NFX_NativeResult[index * 2];
+    _NFX_NativeTarget2[COORD_TEXTURE2D_X(id.xy)] = _NFX_NativeResult[index * 2 + 1];
+}
+
+// ------------------------------------------------------------------ reflections
+TEXTURE2D_X(_NFX_ColorTex);                    // camera colour before the reflection composite
+TEXTURE2D_X(_NFX_SurfaceAlbedo);               // RTSurfaceTrace: rgb albedo, a metallic and clear coat
+RWStructuredBuffer<uint3> _NFX_NativeScreen;   // per full resolution pixel: colour (4 halves), linear depth
+float4 _NFX_ReflPrepare;                       // x roughness cutoff
+
+// The camera colour and linear depth of every pixel, for the reflections' on screen hits
+[numthreads(8, 8, 1)]
+void PrepareScreen(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_ScreenSize.xy))
+        return;
+    float3 c = LOAD_TEXTURE2D_X(_NFX_ColorTex, id.xy).rgb;
+    float depth = LOAD_TEXTURE2D_X(_CameraDepthTexture, id.xy).r;
+    float linear01 = depth == UNITY_RAW_FAR_CLIP_VALUE ? 1e9 : LinearEyeDepth(depth, _ZBufferParams);
+    uint2 packed = uint2(f32tof16(c.r) | (f32tof16(c.g) << 16), f32tof16(c.b));
+    _NFX_NativeScreen[id.y * (uint)_ScreenSize.x + id.x] = uint3(packed, asuint(linear01));
+}
+
+float3 EnvBRDF(float3 f0, float perceptualRoughness, float nv)
+{
+    const float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);
+    const float4 c1 = float4(1.0, 0.0425, 1.04, -0.04);
+    float4 r = perceptualRoughness * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28 * nv)) * r.x + r.y;
+    float2 ab = float2(-1.04, 1.04) * a004 + r.zw;
+    return f0 * ab.x + ab.y;
+}
+
+// For Reflection.hlsl: what of each trace pixel's reflection does not need the scene. The origin above
+// the exact surface, the normal (exact where the G-buffer's only differs by its quantisation), the GGX alpha (a
+// clear coat mirrors through its varnish) and the reflected share; a < 0: nothing to trace (sky, too rough).
+[numthreads(8, 8, 1)]
+void PrepareReflection(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    uint index = id.y * (uint)_NFX_TargetSize.x + id.x;
+    uint2 pixel = TracePixel(id.xy);
+    float4 a = float4(0, 0, 0, -1);
+    float4 b = float4(0, 0, 0, asfloat(pixel.x | (pixel.y << 16)));
+    float4 c = float4(0, 0, 0, GetCurrentExposureMultiplier());
+    float depth = LOAD_TEXTURE2D_X(_CameraDepthTexture, pixel).r;
+    if (depth != UNITY_RAW_FAR_CLIP_VALUE)
+    {
+        NormalData nd;
+        DecodeFromNormalBuffer(pixel, nd);
+        float4 surface = LOAD_TEXTURE2D_X(_NFX_SurfaceAlbedo, pixel);
+        float4 s = LOAD_TEXTURE2D_X(_NFX_SurfaceNormal, pixel);
+        bool exact = s.w != 0.0;
+        bool coated = exact && surface.a > 0.495;
+        float roughness = coated ? min(nd.perceptualRoughness, 0.04) : nd.perceptualRoughness;
+        if (roughness <= _NFX_ReflPrepare.x)
+        {
+            PositionInputs pos = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
+            float3 n = nd.normalWS;
+            float3 V = GetWorldSpaceNormalizeViewDir(pos.positionWS);
+            float3 pixelAWS = GetAbsolutePositionWS(pos.positionWS);
+            float3 cameraAWS = GetAbsolutePositionWS(float3(0, 0, 0));
+            float3 albedo = exact ? surface.rgb : 0.3;
+            float metallic = exact ? saturate((surface.a - (surface.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0;
+            float3 f0 = lerp(0.04, albedo, metallic);
+            // the varnish of a clear coat is smooth whatever the paint's normal map does (orange peel, dents): it
+            // mirrors along the mesh's own normal
+            if (exact && (coated || dot(s.xyz, n) > 0.9995))
+                n = s.xyz;
+            float3 surfaceAWS = exact ? cameraAWS + normalize(pixelAWS - cameraAWS) * abs(s.w) : pixelAWS;
+            float viewDepth = LinearEyeDepth(depth, _ZBufferParams);
+            a = float4(surfaceAWS + n * (0.02 + viewDepth * 0.001), max(roughness * roughness, 0.002));
+            b.xyz = n;
+            float nv = saturate(dot(n, V));
+            float3 fresnel = EnvBRDF(f0, nd.perceptualRoughness, nv);
+            if (coated)
+            {
+                // Car paint is two layers: a smooth varnish (4 % head on, rising towards grazing angles) over a
+                // rough, coloured base (metal flakes in tinted paint). The traced mirror is the varnish alone; the
+                // base's blurred, coloured reflection stays HDRP's, under the varnish. Mirroring the base layer's
+                // colour sharply as well made the paint look like tinted chrome.
+                fresnel = EnvBRDF(0.04, 0.0, nv).x;
+            }
+            c.rgb = fresnel;
+        }
+    }
+    _NFX_NativeSurface[index * 3] = a;
+    _NFX_NativeSurface[index * 3 + 1] = b;
+    _NFX_NativeSurface[index * 3 + 2] = c;
+    _NFX_NativeResult[index * 2] = 0.0;
+    _NFX_NativeResult[index * 2 + 1] = 0.0;
+}
+
+// Glass reflections (Glass.hlsl): per full resolution pixel the camera ray's direction and how far the opaque
+// surface is (the glass must be in front of it; the sky: far), the pixel and the exposure
+[numthreads(8, 8, 1)]
+void PrepareGlass(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    uint index = id.y * (uint)_NFX_TargetSize.x + id.x;
+    uint2 pixel = TracePixel(id.xy);
+    float depth = LOAD_TEXTURE2D_X(_CameraDepthTexture, pixel).r;
+    // the view ray through the pixel centre, in world space (camera relative and absolute differ by a translation)
+    PositionInputs pos = GetPositionInput(pixel, _ScreenSize.zw, depth == UNITY_RAW_FAR_CLIP_VALUE ? 0.5 : depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
+    float3 toPixel = pos.positionWS - GetPrimaryCameraPosition();
+    float3 dir = normalize(toPixel);
+    // a little past the opaque surface: glass lying on it (a lamp lens on the body) is still found
+    float maxDistance = depth == UNITY_RAW_FAR_CLIP_VALUE ? 5000.0 : length(toPixel) * 1.002 + 0.02;
+    _NFX_NativeSurface[index * 2] = float4(dir, maxDistance);
+    _NFX_NativeSurface[index * 2 + 1] = float4(asfloat(pixel.x | (pixel.y << 16)), GetCurrentExposureMultiplier(), 0.0, 0.0);
+    _NFX_NativeResult[index] = 0.0;
+}
+
+// The engine's reflection into the reflection pass's trace (target) and distance (target 2, its r) textures
+[numthreads(8, 8, 1)]
+void UnpackReflection(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    uint index = id.y * (uint)_NFX_TargetSize.x + id.x;
+    _NFX_NativeTarget[COORD_TEXTURE2D_X(id.xy)] = _NFX_NativeResult[index * 2];
+    _NFX_NativeTarget2[COORD_TEXTURE2D_X(id.xy)] = _NFX_NativeResult[index * 2 + 1];
+}

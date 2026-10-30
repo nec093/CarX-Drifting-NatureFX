@@ -1,0 +1,987 @@
+using System;
+using NatureFX.Map;
+using NatureFX.Rendering;
+using NatureFX.Tools;
+using NatureFX.Ui;
+using NatureFX.Nature;
+using UnityEngine;
+
+namespace NatureFX {
+	// In-game settings window (F8): header with the master switch, tab sidebar, card based content.
+	internal class NatureFXWindow {
+		private const int WindowId = 0x4E4658; // "NFX"
+		private const float DefaultWidth = 820;
+		private const float DefaultHeight = 560;
+		private const float MinWidth = 600;
+		private const float MinHeight = 360;
+		private const float DefaultOpacity = 0.9f;
+		private const float SidebarWidth = 150;
+		private const float DefaultScale = 0.85f;
+
+		private static readonly string[] Tabs = { "Overview", "Sun", "Weather", "Road & cars", "Nature", "Settings", "Reflections", "RT shadows", "RT ambient light", "Exposure & tone", "Shader rebuild" };
+		private static readonly string[] TonemapNames = { "ACES", "Neutral", "Filmic (GT)", "None" };
+		private static readonly string[] ReflectionQualityNames = { "Performance", "Balanced", "Quality" };
+		private static readonly string[] BackendNames = { "DXR 1.0", "DXR 1.1" };
+
+		private readonly NatureFXMod mod_;
+		private Vector2 position_ = new(60, 60);
+		private Vector2 scroll_;
+		private int tab_;
+		private bool visible_;
+		private bool prevCursorVisible_;
+		private CursorLockMode prevLockState_;
+		private string lastDump_;
+		private bool resizing_;
+		private float uiScaleDraft_;
+		private float fps_;
+		private string mapMessage_;
+		private bool pendingRestart_;
+		private string presetName_ = "";
+		private string presetStatus_;
+		private string pendingDelete_;
+		private string[] presetList_;
+		private readonly InputLock lock_ = new();
+
+		public bool Visible => visible_;
+
+		public void Destroy() {
+			lock_.Release();
+		}
+
+		public NatureFXWindow(NatureFXMod mod) {
+			mod_ = mod;
+		}
+
+		private static ISettings S => Settings.Data;
+
+		public void Toggle() {
+			visible_ = !visible_;
+			if (visible_) {
+				prevCursorVisible_ = Cursor.visible;
+				prevLockState_ = Cursor.lockState;
+			} else {
+				Cursor.visible = prevCursorVisible_;
+				Cursor.lockState = prevLockState_;
+				lock_.Release();
+				Settings.Save();
+			}
+		}
+
+		// The game re-hides the cursor while driving; keep it usable while the window is open, and keep the game
+		// behind it locked (the keyboard too while one of our text fields has focus).
+		public void Update() {
+			if (visible_) {
+				Cursor.visible = true;
+				Cursor.lockState = CursorLockMode.None;
+				lock_.Hold(GUIUtility.keyboardControl != 0);
+			}
+		}
+
+		public void OnGUI() {
+			if (!visible_ || S == null) {
+				return;
+			}
+			// The game hides the system cursor and draws its own from Rewired's mouse, which InputLock turns off,
+			// and it re-hides the system cursor after our Update: OnGUI runs last in the frame, so show it here too.
+			Cursor.visible = true;
+			Cursor.lockState = CursorLockMode.None;
+
+			Theme.Opacity = S.UiOpacity > 0.0f ? S.UiOpacity : DefaultOpacity;
+			Theme.LargeText = S.UiLargeText;
+			Theme.Ensure();
+
+			// keep the window the same physical size on 1080p .. 4K
+			float scale = UiScale();
+			var oldMatrix = GUI.matrix;
+			GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1.0f));
+
+			var size = WindowSize(scale);
+			var rect = new Rect(position_.x, position_.y, size.x, size.y);
+			rect = GUI.Window(WindowId, rect, Draw, GUIContent.none, Theme.Window);
+			position_ = new Vector2(
+				Mathf.Clamp(rect.x, 0, Screen.width / scale - 120),
+				Mathf.Clamp(rect.y, 0, Screen.height / scale - 60));
+
+			GUI.matrix = oldMatrix;
+		}
+
+		// Same physical size on 1080p .. 4K, times the user's UI scale (default a bit smaller than 1:1).
+		private static float UiScale() {
+			float user = S.UiScale > 0.0f ? S.UiScale : DefaultScale;
+			return Mathf.Clamp(Screen.height / 1080.0f, 0.75f, 2.0f) * Mathf.Clamp(user, 0.5f, 1.5f);
+		}
+
+		private Vector2 WindowSize(float scale) {
+			float w = S.UiWidth > 0.0f ? S.UiWidth : DefaultWidth;
+			float h = S.UiHeight > 0.0f ? S.UiHeight : DefaultHeight;
+			return new Vector2(Mathf.Clamp(w, MinWidth, Screen.width / scale), Mathf.Clamp(h, MinHeight, Screen.height / scale));
+		}
+
+		private void Draw(int id) {
+			if (Event.current.type == EventType.Layout) {
+				Widgets.BeginFrame();
+				UpdateFps();
+			}
+			// the tooltip of a control from another tab (or a closed section) must not linger
+			if (Event.current.type == EventType.Repaint) {
+				GUI.tooltip = "";
+			}
+			var size = WindowSize(UiScale());
+			HandleResize(size);
+
+			DrawHeader();
+			GUILayout.Box(GUIContent.none, new GUIStyle { normal = { background = Theme.LineTex } }, GUILayout.Height(1), GUILayout.ExpandWidth(true));
+
+			GUILayout.BeginHorizontal();
+			DrawSidebar();
+			GUILayout.Box(GUIContent.none, new GUIStyle { normal = { background = Theme.LineTex } }, GUILayout.Width(1), GUILayout.ExpandHeight(true));
+
+			GUILayout.BeginVertical();
+			scroll_ = GUILayout.BeginScrollView(scroll_, GUIStyle.none, GUI.skin.verticalScrollbar);
+			GUILayout.Space(6);
+			if (string.IsNullOrEmpty(Widgets.Filter)) {
+				DrawTab(tab_);
+			} else {
+				// searching looks through every tab
+				foreach (var group in VisibleGroups) {
+					foreach (int i in group.Tabs) {
+						DrawTab(i);
+					}
+				}
+			}
+			GUILayout.Space(10);
+			GUILayout.EndScrollView();
+			GUILayout.EndVertical();
+			GUILayout.Space(6);
+			GUILayout.EndHorizontal();
+
+			DrawFooter();
+			HandleShortcuts();
+			Widgets.DrawTooltip(size);
+			GUI.DragWindow(new Rect(0, 0, size.x, 40));
+		}
+
+		private void DrawTab(int index) {
+			if (S.DevRayTracingOnly && index < 5) {
+				index = 6; // tabs hidden in ray tracing only mode
+			}
+			switch (index) {
+				case 0: DrawOverview(); break;
+				case 1: DrawSun(); break;
+				case 2: DrawWeather(); break;
+				case 3: DrawRoadAndCars(); break;
+				case 4: DrawNature(); break;
+				case 5: DrawSettings(); break;
+				case 6: DrawReflections(); break;
+				case 7: DrawRayTracedShadows(); break;
+				case 8: DrawRayTracedAO(); break;
+				case 9: DrawExposureAndTone(); break;
+				case 10: DrawShaderRebuild(); break;
+			}
+		}
+
+		private void DrawHeader() {
+			GUILayout.BeginHorizontal(Theme.Header, GUILayout.Height(40));
+			GUILayout.Label("NatureFX", Theme.Title, GUILayout.Height(24));
+			GUILayout.Space(10);
+			string api = SystemInfo.graphicsDeviceType.ToString().Replace("Direct3D", "DX");
+			string engine = BackendNames[Mathf.Clamp(S.RTBackend, 0, BackendNames.Length - 1)];
+			string mode = S.DevRayTracingOnly ? "  ·  <color=#F5B14C>ray tracing only</color>" : "";
+			GUILayout.Label($"{api}  ·  {engine}{mode}", Theme.Subtitle, GUILayout.Height(24));
+			GUILayout.FlexibleSpace();
+
+			GUILayout.Label("Search", Theme.Value, GUILayout.Width(48), GUILayout.Height(24)); // Ctrl+F
+			GUI.SetNextControlName("NFXSearch");
+			string filter = GUILayout.TextField(Widgets.Filter ?? "", 40, Theme.TextField, GUILayout.Width(180));
+			if (filter != Widgets.Filter) {
+				Widgets.Filter = filter;
+				scroll_ = Vector2.zero;
+			}
+			GUILayout.Space(12);
+			bool enabled = S.Enabled;
+			if (Widgets.Switch("", ref enabled)) {
+				S.Enabled = enabled;
+				mod_.MarkDirty();
+			}
+			GUILayout.Label("Enabled", Theme.Label, GUILayout.Width(56), GUILayout.Height(24));
+			var close = GUILayoutUtility.GetRect(24, 24, GUILayout.Width(24), GUILayout.Height(24));
+			bool closeHover = close.Contains(Event.current.mousePosition);
+			if (closeHover && Event.current.type == EventType.Repaint) {
+				Theme.Fill(close, Theme.FrameHoverColor);
+			}
+			Theme.DrawIcon(new Rect(close.x + 5, close.y + 5, 14, 14), Theme.CloseTex, closeHover ? Theme.Foreground : Theme.Muted);
+			if (GUI.Button(close, GUIContent.none, GUIStyle.none)) {
+				Toggle();
+			}
+			GUILayout.EndHorizontal();
+		}
+
+		// tab index groups shown in the sidebar
+		// ray tracing development: only the ray traced reflections and the settings
+		private static readonly (string Name, int[] Tabs)[] RayTracingGroups = {
+			("RAY TRACING", new[] { 6, 7, 8 }),
+			("CAMERA", new[] { 9 }),
+			("REBUILD", new[] { 10 }),
+			("OTHER", new[] { 5 })
+		};
+
+		private static (string Name, int[] Tabs)[] VisibleGroups => S.DevRayTracingOnly ? RayTracingGroups : Groups;
+
+		private static readonly (string Name, int[] Tabs)[] Groups = {
+			("GENERAL", new[] { 0 }),
+			("LIGHT", new[] { 1, 6, 7, 8 }),
+			("WORLD", new[] { 2, 4, 3 }),
+			("OTHER", new[] { 5 })
+		};
+
+		private void DrawSidebar() {
+			GUILayout.BeginVertical(Theme.Sidebar, GUILayout.Width(SidebarWidth));
+			foreach (var group in VisibleGroups) {
+				GUILayout.Label(group.Name, Theme.SidebarGroup);
+				foreach (int i in group.Tabs) {
+					bool active = i == tab_ && string.IsNullOrEmpty(Widgets.Filter);
+					var r = GUILayoutUtility.GetRect(new GUIContent(Tabs[i]), Theme.SidebarItem, GUILayout.ExpandWidth(true));
+					if (GUI.Button(r, Tabs[i], active ? Theme.SidebarItemActive : Theme.SidebarItem)) {
+						tab_ = i;
+						scroll_ = Vector2.zero;
+						Widgets.Filter = "";
+					}
+					if (active && Event.current.type == EventType.Repaint) {
+						GUI.DrawTexture(new Rect(r.x, r.y + 5, 2, r.height - 10), Theme.AccentBarTex);
+					}
+				}
+			}
+			GUILayout.FlexibleSpace();
+			GUILayout.EndVertical();
+		}
+
+		private void DrawFooter() {
+			GUILayout.Box(GUIContent.none, new GUIStyle { normal = { background = Theme.LineTex } }, GUILayout.Height(1), GUILayout.ExpandWidth(true));
+			GUILayout.BeginHorizontal(new GUIStyle { padding = new RectOffset(14, 22, 3, 5) }, GUILayout.Height(22));
+			GUILayout.Label($"{fps_:0} fps  ·  {1000.0f / Mathf.Max(fps_, 1.0f):0.0} ms", Theme.Status);
+			GUILayout.FlexibleSpace();
+			GUILayout.Label("Esc / F8 close  ·  Ctrl+F search  ·  right-click resets  ·  Ctrl+click types a value  ·  Left/Right nudge", Theme.Status);
+			GUILayout.EndHorizontal();
+		}
+
+		// Esc clears the search, then closes; Ctrl+F jumps to the search box. Controls that use these keys
+		// themselves (typing a slider value) consume the event first.
+		private void HandleShortcuts() {
+			var e = Event.current;
+			if (e.type != EventType.KeyDown) {
+				return;
+			}
+			if (e.keyCode == KeyCode.Escape) {
+				if (!string.IsNullOrEmpty(Widgets.Filter)) {
+					Widgets.Filter = "";
+				} else {
+					Toggle();
+				}
+				GUI.FocusControl(null);
+				e.Use();
+			} else if (e.keyCode == KeyCode.F && e.control) {
+				GUI.FocusControl("NFXSearch");
+				e.Use();
+			}
+		}
+
+		private void UpdateFps() {
+			float dt = Mathf.Max(Time.unscaledDeltaTime, 1e-4f);
+			fps_ = fps_ <= 0.0f ? 1.0f / dt : Mathf.Lerp(fps_, 1.0f / dt, 0.05f);
+		}
+
+		// bottom right corner drag resizes the window; the size is saved with the settings
+		private void HandleResize(Vector2 size) {
+			var grip = new Rect(size.x - 16, size.y - 16, 16, 16);
+			var e = Event.current;
+			if (e.type == EventType.Repaint) {
+				GUI.DrawTexture(new Rect(grip.xMax - 9, grip.yMax - 4, 6, 1), Theme.GripTex);
+				GUI.DrawTexture(new Rect(grip.xMax - 4, grip.yMax - 9, 1, 6), Theme.GripTex);
+			}
+			if (e.type == EventType.MouseDown && e.button == 0 && grip.Contains(e.mousePosition)) {
+				resizing_ = true;
+				e.Use();
+			} else if (resizing_ && e.type == EventType.MouseDrag) {
+				S.UiWidth = Mathf.Max(MinWidth, size.x + e.delta.x);
+				S.UiHeight = Mathf.Max(MinHeight, size.y + e.delta.y);
+				e.Use();
+			} else if (resizing_ && (e.type == EventType.MouseUp || e.rawType == EventType.MouseUp)) {
+				resizing_ = false;
+			}
+		}
+
+		// ---------------------------------------------------------------- tabs
+
+		private void DrawOverview() {
+			DrawUserPresets();
+		}
+
+		// A preset can change anything: re-apply shader replacement and the rest.
+		private void AfterPresetApplied() {
+			mod_.SetShaderReplacement(S.ReplaceShaders);
+			mod_.MarkDirty();
+			Settings.Save();
+		}
+
+		private void DrawUserPresets() {
+			Widgets.BeginCard("My presets", "Save every NatureFX setting under a name, or share it as a one-line code.");
+
+			GUILayout.BeginHorizontal();
+			presetName_ = Widgets.TextField(presetName_, 40);
+			if (Widgets.Button("Save", 80)) {
+				string name = UserPresets.SanitizeName(presetName_);
+				if (name.Length == 0) {
+					presetStatus_ = "Enter a name first.";
+				} else {
+					presetStatus_ = UserPresets.Save(S, name) ? $"Saved \"{name}\"." : "Could not save, see the KSL log.";
+					presetList_ = null;
+				}
+			}
+			GUILayout.EndHorizontal();
+
+			presetList_ ??= UserPresets.List();
+			if (presetList_.Length == 0) {
+				Widgets.Info("No presets yet.");
+			}
+			foreach (string name in presetList_) {
+				GUILayout.BeginHorizontal(Theme.Row);
+				GUILayout.Label(name, Theme.Label, GUILayout.Height(30));
+				GUILayout.FlexibleSpace();
+				if (Widgets.Button("Load", 70)) {
+					int n = UserPresets.Load(S, name);
+					presetStatus_ = n >= 0 ? $"Loaded \"{name}\" ({n} values)." : "Could not load, see the KSL log.";
+					AfterPresetApplied();
+				}
+				if (Widgets.Button("Export", 80)) {
+					string code = UserPresets.ExportFile(name);
+					if (code != null) {
+						GUIUtility.systemCopyBuffer = code;
+						presetStatus_ = $"Share code for \"{name}\" copied to the clipboard.";
+					} else {
+						presetStatus_ = "Could not read the preset, see the KSL log.";
+					}
+				}
+				bool confirm = pendingDelete_ == name;
+				if (Widgets.Button(confirm ? "Sure?" : "Delete", 70)) {
+					if (confirm) {
+						UserPresets.Delete(name);
+						presetStatus_ = $"Deleted \"{name}\".";
+						pendingDelete_ = null;
+						presetList_ = null;
+					} else {
+						pendingDelete_ = name;
+					}
+				}
+				GUILayout.EndHorizontal();
+			}
+
+			GUILayout.Space(4);
+			GUILayout.BeginHorizontal();
+			if (Widgets.Button("Copy current as code", 170)) {
+				string name = string.IsNullOrWhiteSpace(presetName_) ? "Shared" : presetName_;
+				GUIUtility.systemCopyBuffer = UserPresets.Export(S, name);
+				presetStatus_ = "Share code copied to the clipboard.";
+			}
+			if (Widgets.Button("Import from clipboard", 180)) {
+				int n = UserPresets.Import(S, GUIUtility.systemCopyBuffer, out string name);
+				if (n < 0) {
+					presetStatus_ = "The clipboard does not contain a NatureFX preset.";
+				} else {
+					presetStatus_ = $"Imported {(name != null ? $"\"{name}\" " : "")}({n} values). Save it to keep it.";
+					presetName_ = name ?? presetName_;
+					AfterPresetApplied();
+				}
+			}
+			if (Widgets.Button("Open folder", 110)) {
+				System.IO.Directory.CreateDirectory(UserPresets.Folder);
+				Application.OpenURL("file:///" + UserPresets.Folder.Replace('\\', '/'));
+			}
+			GUILayout.FlexibleSpace();
+			GUILayout.EndHorizontal();
+
+			if (!string.IsNullOrEmpty(presetStatus_)) {
+				Widgets.Info(presetStatus_);
+			}
+			Widgets.EndCard();
+		}
+
+		private void DrawGraphicsApi() {
+			bool dx12 = GraphicsApiSwitcher.IsD3D12;
+			Widgets.BeginCard("Graphics API", dx12
+				? "Running on DirectX 12: NatureFX ray tracing is available on RTX / RDNA2+ GPUs."
+				: "Running on DirectX 11. DirectX 12 enables NatureFX ray tracing.", true);
+			Widgets.Info($"Current: {GraphicsApiSwitcher.Current}");
+
+			bool target = !dx12;
+			string action = target ? "Restart in DirectX 12" : "Restart in DirectX 11";
+			if (pendingRestart_) {
+				Widgets.Info("<color=#F5B14C>The game will close and Steam will start it again (Steam may ask to confirm the launch option).</color>");
+				GUILayout.BeginHorizontal();
+				if (Widgets.Button("Confirm restart", 160)) {
+					Settings.Save();
+					pendingRestart_ = false;
+					GraphicsApiSwitcher.RestartWith(target);
+				}
+				if (Widgets.Button("Cancel", 100)) {
+					pendingRestart_ = false;
+				}
+				GUILayout.FlexibleSpace();
+				GUILayout.EndHorizontal();
+			} else if (Widgets.Button(action, 200)) {
+				pendingRestart_ = true;
+			}
+
+			Widgets.Info($"To always start in DX12: Steam > CarX Drift Racing Online > Properties > Launch options: {GraphicsApiSwitcher.LaunchOption(true)}");
+			Widgets.EndCard();
+		}
+
+		private void DrawSun() {
+			Widgets.BeginCard("Time of day", mod_.Sun.Sun != null ? $"Driving \"{mod_.Sun.Sun.name}\"" : "No directional light found in this scene");
+			Other(Widgets.Switch("Override sun", S.SunOverride, v => S.SunOverride = v));
+			Widgets.BeginDependent(S.SunOverride);
+			Other(Widgets.Slider("Time", S.TimeOfDay, 0, 24, v => S.TimeOfDay = v, "0.0", $" h  ({Clock(S.TimeOfDay)})"));
+			Other(Widgets.Slider("Heading offset", S.SunAzimuthOffset, -180, 180, v => S.SunAzimuthOffset = v, "0", "°"));
+			Other(Widgets.Slider("Max elevation", S.SunMaxElevation, 5, 90, v => S.SunMaxElevation = v, "0", "°"));
+			Other(Widgets.Slider("Intensity", S.SunIntensityScale, 0, 3, v => S.SunIntensityScale = v));
+			Other(Widgets.Slider("Colour temperature", S.SunTemperature, 3000, 9000, v => S.SunTemperature = v, "0", " K"));
+			Widgets.EndDependent();
+			Other(Widgets.Switch("Moonlight at night", S.Moonlight, v => S.Moonlight = v));
+			Other(Widgets.Slider("Headlight beams", S.HeadlightShafts, 0, 4, v => S.HeadlightShafts = v));
+			Widgets.EndCard();
+		}
+
+		private void DrawNature() {
+			Widgets.BeginCard("Wind");
+			Other(Widgets.Switch("Enable", S.Wind, v => S.Wind = v));
+			Widgets.BeginDependent(S.Wind);
+			Other(Widgets.Slider("Strength", S.WindStrength, 0, 2, v => S.WindStrength = v));
+			Other(Widgets.Slider("Gusts", S.WindGust, 0, 1, v => S.WindGust = v));
+			Other(Widgets.Slider("Direction", S.WindDirection, 0, 360, v => S.WindDirection = v, "0", "°"));
+			Other(Widgets.Slider("Leaf flutter", S.LeafFlutter, 0, 1, v => S.LeafFlutter = v));
+			Other(Widgets.Slider("Foliage sway", S.FoliageSway, 0.05f, 3, v => S.FoliageSway = v));
+			Other(Widgets.Switch("Cars push grass", S.InteractiveFoliage, v => S.InteractiveFoliage = v));
+			Widgets.EndDependent();
+			Widgets.EndCard();
+		}
+
+		private void DrawWeather() {
+			Widgets.BeginCard("Weather");
+			Other(Widgets.Switch("Enable", S.Accumulation, v => S.Accumulation = v));
+			Widgets.BeginDependent(S.Accumulation);
+			int preset = Mathf.Clamp(S.WeatherPreset, 0, WeatherController.Names.Length - 1);
+			if (Widgets.Chips(ref preset, WeatherController.Names)) {
+				S.WeatherPreset = preset;
+				Other(true);
+			}
+			Other(Widgets.Switch("Changing weather", S.WeatherCycle, v => S.WeatherCycle = v, "Moves between clear, cloudy, rain, fog... on its own."));
+			Widgets.BeginDependent(S.WeatherCycle);
+			Other(Widgets.Slider("Change every", S.WeatherCycleMinutes, 2, 60, v => S.WeatherCycleMinutes = v, "0", " min"));
+			Widgets.EndDependent();
+			Widgets.EndDependent();
+			var w = Weather.Current;
+			Widgets.Info($"Now: rain {w.Rain:P0} · wet {w.Wetness:P0} · snow {w.Snow:P0} · leaves {w.Leaves:P0} · clouds {w.Cloud:P0}");
+			Widgets.EndCard();
+
+			// only the Manual preset uses these values
+			if (S.WeatherPreset == 0) {
+				DrawManualWeather();
+			}
+			DrawRainAndAir();
+		}
+
+		private void DrawManualWeather() {
+			Widgets.BeginCard("Manual values", "Used when the preset is Manual.");
+			Other(Widgets.Slider("Rain", S.Rain, 0, 1, v => S.Rain = v));
+			Other(Widgets.Slider("Wetness", S.Wetness, 0, 1, v => S.Wetness = v));
+			Other(Widgets.Slider("Snow", S.Snow, 0, 1, v => S.Snow = v));
+			Other(Widgets.Slider("Fallen leaves", S.Leaves, 0, 1, v => S.Leaves = v));
+			Other(Widgets.Slider("Dust", S.Dust, 0, 1, v => S.Dust = v));
+			Widgets.EndCard();
+		}
+
+		private void DrawRainAndAir() {
+			Widgets.BeginCard("Rain & air");
+			Other(Widgets.Slider("Falling rain", S.RainStreaks, 0, 1, v => S.RainStreaks = v));
+			Other(Widgets.Slider("Drops on the lens", S.LensDrops, 0, 1, v => S.LensDrops = v));
+			Widgets.Info("Turn lens drops off for the cockpit camera.");
+			Other(Widgets.Slider("Heat haze", S.HeatHaze, 0, 1, v => S.HeatHaze = v));
+			Other(Widgets.Slider("Snow depth", S.SnowDepth, 0, 0.5f, v => S.SnowDepth = v, "0.00", " m"));
+			Widgets.EndCard();
+
+			Widgets.BeginCard("Build up over time");
+			Other(Widgets.Switch("Enable", S.AccumulateOverTime, v => S.AccumulateOverTime = v));
+			Widgets.BeginDependent(S.AccumulateOverTime);
+			Other(Widgets.Slider("Speed", S.AccumulationRate, 0.005f, 0.5f, v => S.AccumulationRate = v, "0.000", " /min"));
+			Widgets.EndDependent();
+			var c = mod_.Accumulation.Current;
+			Widgets.Info($"Now: snow {c.x:P0} · leaves {c.y:P0} · dust {c.z:P0} · wet {c.w:P0}");
+			if (Widgets.Button("Reset build up", 140)) {
+				mod_.Accumulation.ResetProgress();
+			}
+			Widgets.EndCard();
+		}
+
+		private void DrawRoadAndCars() {
+			Widgets.BeginCard("Road surface", "Marks are kept around the camera and cleared when you drive far away.");
+			Other(Widgets.Switch("Tyre marks, dry line, snow ruts", S.TireMarks, v => S.TireMarks = v));
+			Widgets.BeginDependent(S.TireMarks);
+			Other(Widgets.Slider("Rubber when sliding", S.RubberAmount, 0, 2, v => S.RubberAmount = v));
+			Widgets.EndDependent();
+			Other(Widgets.Slider("Surface detail", S.SurfaceDetail, 0, 1, v => S.SurfaceDetail = v));
+			if (Widgets.Button("Clear marks", 120)) {
+				mod_.Tracks.Clear();
+			}
+			Widgets.EndCard();
+
+			Widgets.BeginCard("Cars in the rain", "Beading drops, water running off and an oily sheen, drawn over the car paint.");
+			Other(Widgets.Switch("Enable", S.CarRain, v => S.CarRain = v));
+			Widgets.BeginDependent(S.CarRain);
+			Other(Widgets.Slider("Drops", S.CarRainDrops, 0, 1, v => S.CarRainDrops = v));
+			Other(Widgets.Slider("Oil film", S.OilFilm, 0, 1, v => S.OilFilm = v));
+			Widgets.EndDependent();
+			Widgets.EndCard();
+		}
+
+		private void DrawReflections() {
+			Widgets.BeginCard("Ray traced reflections", "Wet roads, puddles and car paint reflect the whole scene, including what is off screen. DX12 only.");
+			Other(Widgets.Switch("Enable", S.RTReflections, v => S.RTReflections = v));
+			Widgets.BeginDependent(S.RTReflections);
+			Other(Widgets.Slider("Strength", S.RTReflectionIntensity, 0, 2, v => S.RTReflectionIntensity = v));
+			Other(Widgets.Slider("Rough surfaces up to", S.RTReflectionRoughness, 0.05f, 1, v => S.RTReflectionRoughness = v));
+			Other(Widgets.Slider("Ray length", S.RTReflectionDistance, 10, 500, v => S.RTReflectionDistance = v, "0", " m"));
+			int quality = Mathf.Clamp(S.RTReflectionQuality, 0, ReflectionQualityNames.Length - 1);
+			if (Widgets.Chips(ref quality, ReflectionQualityNames)) {
+				S.RTReflectionQuality = quality;
+				Other(true);
+			}
+			Widgets.Info(quality == 0 ? "Half resolution." : quality == 1 ? "Half resolution, mirrors and chrome reflect each other." : "Full resolution, mirrors and chrome reflect each other (about 4x the cost of half resolution).");
+			Other(Widgets.Switch("Glass reflections", S.RTGlassReflections, v => S.RTGlassReflections = v,
+				"Car windows, lamp lenses and building windows mirror the scene."));
+			Widgets.BeginDependent(S.RTGlassReflections);
+			Other(Widgets.Slider("Glass refraction", S.RTGlassRefraction, 0, 1, v => S.RTGlassRefraction = v));
+			Widgets.Info("How much curved glass (lenses, screens) bends what is seen through it. 0: off.");
+			Widgets.EndDependent();
+			Other(Widgets.Switch("Wet road streaks", S.RTWetReflections, v => S.RTWetReflections = v,
+				"When the road is wet (Weather: wetness or rain), reflections of lamps and cars stretch along the view as on real wet asphalt."));
+			Widgets.EndDependent();
+			Widgets.Info($"Now: {mod_.RT.ReflectionStatus}");
+			Widgets.Info($"Glass: {mod_.RT.GlassStatus}");
+			Widgets.EndCard();
+
+			Widgets.BeginCard("Car finish", "Paint reflects like real car paint: a clear varnish mirror over the coloured base. DX12 ray tracing.");
+			Other(Widgets.Switch("Chrome rims", S.CarChromeRims, v => S.CarChromeRims = v,
+				"Metal rims, chrome paint included, polished to a mirror instead of brushed aluminium. Painted rims stay as they are."));
+			Widgets.Info($"Now: {mod_.Finish.Status}");
+			Widgets.EndCard();
+		}
+
+		private void DrawRayTracedShadows() {
+			Widgets.BeginCard("Ray traced sun shadows", "Shadows traced against the whole scene: sharp where objects touch, softer further away, " +
+			                                            "like the real sun. Replaces the game's sun shadows. DX12 only.");
+			Other(Widgets.Switch("Enable", S.RTShadows, v => S.RTShadows = v));
+			Widgets.BeginDependent(S.RTShadows);
+			Other(Widgets.Slider("Strength", S.RTShadowStrength, 0, 1, v => S.RTShadowStrength = v));
+			Other(Widgets.Switch("Full resolution", S.RTShadowFullRes, v => S.RTShadowFullRes = v,
+				"Sharp shadows where objects touch the ground and thin ones (poles, wires, leaves). Off: half resolution, about a quarter of the rays."));
+			Other(Widgets.Switch("Hide the game's painted shadows", S.RTHideFakeShadows, v => S.RTHideFakeShadows = v,
+				"CarX lays dark planes under cars, trees and bushes in place of real shadows; with the traced shadows they darken twice."));
+			Other(Widgets.Switch("Light through glass", S.RTGlassShadows, v => S.RTGlassShadows = v,
+				"The sun through windows is dimmed by the glass (tinted windows more) instead of passing untouched."));
+			Widgets.Info($"Painted shadows: {mod_.PaintedShadows.Status}");
+			if (Widgets.Button(mod_.Identify.Armed ? "Click the scene…" : "What is this? (click)", 200)) {
+				mod_.Identify.Arm();
+			}
+			if (mod_.Identify.Result.Length > 0) {
+				Widgets.Info(mod_.Identify.Result);
+			}
+			Other(Widgets.Switch("Swaying foliage", S.RTWind, v => S.RTWind = v,
+				"The traced shadows of the leaves sway with the wind as the leaves do (own engine; foliage from the shader rebuild). Off: they stay still."));
+			Other(Widgets.Switch("Exact sun light", S.RTExactSun, v => S.RTExactSun = v,
+				"Shadows take away exactly the sun light the game added (its materials drawn once more to read them). Off: an estimate, a little lighter on the CPU and GPU."));
+			Other(Widgets.Slider("Sun size (softness)", S.SunSize, 0.1f, 3, v => S.SunSize = v, "0.00", "°"));
+			Widgets.Info("0.53° is the real sun; larger values soften shadows like a hazy or low sun.");
+			Other(Widgets.Slider("Leaf translucency", S.RTLeafTranslucency, 0, 1, v => S.RTLeafTranslucency = v));
+			Widgets.Info("Leaves and grass lit from behind glow with the sunlight passing through them.");
+			if (Widgets.Button("Reset accumulated image", 200)) {
+				mod_.RT.ResetHistory();
+			}
+			Widgets.Switch("Show traced shadows only", mod_.RT.ShadowDebugView, v => {
+				mod_.RT.ShadowDebugView = v;
+				mod_.MarkDirty();
+			}, "Debug view: white is lit by the sun, black is the traced shadow, blue-grey faces away from the sun or is sky. Not saved.");
+			Widgets.Switch("Show exact sun light", mod_.RT.ExactSunDebugView, v => {
+				mod_.RT.ExactSunDebugView = v;
+				mod_.MarkDirty();
+			}, "Debug view: the sun light the shadows take away, before shadowing. Dark magenta where it is not known (an estimate is used there). Not saved.");
+			Widgets.EndDependent();
+			Widgets.Info($"Now: {mod_.RT.ShadowStatus}");
+			Widgets.EndCard();
+			DrawLightShafts();
+
+			Widgets.BeginCard("Lamps and headlights", "The 32 point and spot lights nearest to the camera light what reflections and bounce light " +
+			                                          "show, and cast soft ray traced shadows where the game gives them none. Mostly at night. DX12 only.");
+			Other(Widgets.Switch("Enable", S.RTLocalLights, v => S.RTLocalLights = v));
+			Widgets.BeginDependent(S.RTLocalLights);
+			Other(Widgets.Switch("Ray traced shadows for every lamp", S.RTLampShadows, v => S.RTLampShadows = v,
+				"Lamps that have the game's shadow maps cast soft ray traced shadows instead, sized by the lamp. Also saves HDRP a shadow map per lamp."));
+			Other(Widgets.Switch("Glowing surfaces light up", S.RTEmissiveLights, v => S.RTEmissiveLights = v,
+				"Bright neon, signs and lamp shades light what is around them, with soft shadows (they are not lights to the game)."));
+			Widgets.EndDependent();
+			Widgets.EndCard();
+		}
+
+		// Ray tracing only mode: exposure and tone without the rest of the camera tab (same settings)
+		private void DrawExposureAndTone() {
+			Widgets.BeginCard("Exposure", "The game's own exposure is fixed; eye adaptation brightens shade and tunnels and settles back in sunlight.");
+			int mode = Mathf.Clamp(S.ExposureMode, 0, 1);
+			if (Widgets.Chips(ref mode, new[] { "Game", "Eye adaptation" })) {
+				S.ExposureMode = mode;
+				Other(true);
+			}
+			Widgets.BeginDependent(mode == 1);
+			Other(Widgets.Slider("Darkest scene", S.AutoExposureMin, -2, 16, v => S.AutoExposureMin = v, "0.0", " EV"));
+			Other(Widgets.Slider("Brightest scene", S.AutoExposureMax, -2, 18, v => S.AutoExposureMax = v, "0.0", " EV"));
+			Other(Widgets.Slider("Adaptation speed", S.AdaptationSpeed, 0.1f, 5, v => S.AdaptationSpeed = v));
+			Widgets.EndDependent();
+			Other(Widgets.Slider("Exposure compensation", S.Exposure, -3, 3, v => S.Exposure = v, "0.00", " EV"));
+			var probe = mod_.Exposure;
+			Widgets.Info(probe.Valid
+				? FormattableString.Invariant($"Current exposure: {probe.EV100:0.00} EV100 (x{probe.Multiplier:0.#####})")
+				: "Current exposure: not available");
+			Widgets.EndCard();
+
+			Widgets.BeginCard("Tone");
+			Other(Widgets.Switch("Override tonemapping", S.AcesTonemapping, v => S.AcesTonemapping = v));
+			Widgets.BeginDependent(S.AcesTonemapping);
+			int tone = Mathf.Clamp(S.TonemapMode, 0, TonemapNames.Length - 1);
+			if (Widgets.Chips(ref tone, TonemapNames)) {
+				S.TonemapMode = tone;
+				Other(true);
+			}
+			Widgets.EndDependent();
+			Other(Widgets.Slider("Contrast", S.Contrast, -50, 50, v => S.Contrast = v, "0"));
+			Other(Widgets.Slider("Saturation", S.Saturation, -50, 50, v => S.Saturation = v, "0"));
+			Widgets.EndCard();
+		}
+
+		private void DrawRayTracedAO() {
+			Widgets.BeginCard("Ray traced ambient light", "Light that does not come straight from the sun: darkened where the surroundings block the sky " +
+			                                              "(under cars, roofs and trees, in corners and gaps) and tinted by what it bounces off. " +
+			                                              "The sun light is left to the shadows. DX12 only.");
+			Other(Widgets.Switch("Enable", S.RTAO, v => S.RTAO = v));
+			Widgets.BeginDependent(S.RTAO);
+			Other(Widgets.Switch("Bounce light", S.RTGIBounce, v => S.RTGIBounce = v,
+				"Surfaces pass on their colour and the sun they catch (a red wall tints the road, sunlit tarmac lights the underside of a car). " +
+				"Off: blocking only (ambient occlusion), lighter."));
+			Widgets.BeginDependent(S.RTGIBounce && S.RTBackend == 1);
+			Other(Widgets.Switch("Global illumination (every bounce)", S.RTGIMultiBounce, v => S.RTGIMultiBounce = v,
+				"Own engine only: light keeps bouncing (floor to wall to ceiling under a roof), lit signs and lamps light their " +
+				"surroundings. Builds up over a few seconds in a world space cache. Off: one bounce."));
+			Widgets.BeginDependent(S.RTGIMultiBounce);
+			Other(Widgets.Slider("GI distance", S.RTGIDistance, 2, 60, v => S.RTGIDistance = v, "0", " m"));
+			Other(Widgets.Slider("Bounce intensity", S.RTGIIntensity, 0, 3, v => S.RTGIIntensity = v, "0.00"));
+			Widgets.Info("How strongly the light bounced in (and its colour) is added; 1 is physically right.");
+			Widgets.EndDependent();
+			Widgets.EndDependent();
+			Widgets.Switch("Show ambient light / GI only", mod_.RT.GIDebugView, v => {
+				mod_.RT.GIDebugView = v;
+				mod_.MarkDirty();
+			}, "Debug view: mid grey where the ambient light is unchanged, darker where the sky is blocked, brighter and tinted " +
+			   "where light bounces in. Not saved.");
+			Other(Widgets.Slider("Strength", S.RTAOStrength, 0, 1, v => S.RTAOStrength = v));
+			Other(Widgets.Slider("Distance", S.RTAODistance, 0.5f, 20, v => S.RTAODistance = v, "0.0", " m"));
+			Widgets.Info("How far the light is traced: short for contact shadows in gaps, long for the shade under roofs and trees and bounce from further away.");
+			Other(Widgets.Slider("Sky occlusion", S.RTSkyOcclusion, 0, 100, v => S.RTSkyOcclusion = v, "0", " m"));
+			Widgets.Info("Roofs and overhangs further away than the distance still take the sky (the crowd under a stand's roof). 0: off.");
+			Other(Widgets.Slider("Contact shadows", S.RTContactShadows, 0, 1, v => S.RTContactShadows = v));
+			Widgets.Info("Darkens the creases where surfaces meet: barriers on the road, seat rows, wheel arches.");
+			if (!S.RTShadows) {
+				Widgets.Info("Works best with the ray traced shadows on: then only the light that is not sunlight is darkened.");
+			}
+			Widgets.EndDependent();
+			Widgets.Info($"Now: {mod_.RT.ShadowStatus}");
+			Widgets.EndCard();
+		}
+
+		private void DrawLightShafts() {
+			Widgets.BeginCard("Light shafts", "Sunlight scattered by the air, shadowed by the trees and buildings: shafts through the canopy " +
+			                                  "and gaps. Strongest looking towards the sun. DX12 only.");
+			Other(Widgets.Switch("Enable", S.RTShafts, v => S.RTShafts = v));
+			Widgets.BeginDependent(S.RTShafts);
+			// shown per 10 km of air: 1 is a clear day (visibility about 40 km), 10 a hazy one, 40+ mist
+			Other(Widgets.Slider("Haze", S.RTShaftDensity * 10000.0f, 0.2f, 60, v => S.RTShaftDensity = v / 10000.0f, "0.0"));
+			Other(Widgets.Slider("Forward scattering", S.RTShaftAnisotropy, 0, 0.95f, v => S.RTShaftAnisotropy = v));
+			Widgets.Info("Haze: how much the air scatters (clear day 1, hazy 10, mist 40+). Forward scattering: how much brighter " +
+			             "the shafts get looking towards the sun.");
+			Widgets.EndDependent();
+			Widgets.EndCard();
+		}
+
+		// Shader rebuild (docs/shader-rebuild-plan.md): replacement switches, what was left and why, inventory
+		private void DrawShaderRebuild() {
+			Widgets.BeginCard("Shader rebuild", "NatureFX's own shaders in place of the game's. Replaced materials also enter the ray tracing " +
+			                                    "with their real colour and smoothness.");
+			Widgets.Switch("Replace game shaders", S.ReplaceShaders, v => {
+				S.ReplaceShaders = v;
+				mod_.SetShaderReplacement(v);
+				mod_.MarkDirty();
+			});
+			Widgets.BeginDependent(S.ReplaceShaders);
+			Widgets.Switch("Every material (full replacement)", S.FullReplacement, v => {
+				S.FullReplacement = v;
+				mod_.SetShaderReplacement(false);
+				mod_.SetShaderReplacement(true);
+				mod_.MarkDirty();
+			}, "Off: only the materials the replacement rules name (foliage, roads).");
+			Widgets.Switch("Foliage too (wind, snow)", S.RebuildFoliage, v => {
+				S.RebuildFoliage = v;
+				mod_.SetShaderReplacement(false);
+				mod_.SetShaderReplacement(true);
+				mod_.MarkDirty();
+			}, "Off: trees, bushes and grass keep the game's shaders (no wind or snow on them).");
+			Other(Widgets.Slider("Road wear", S.RoadWear, 0, 1, v => S.RoadWear = v));
+			Widgets.Info("Rubber laid down on the driven ground in long streaks, worn smooth in places.");
+			Other(Widgets.Slider("Surface detail", S.SurfaceDetail, 0, 1, v => S.SurfaceDetail = v));
+			Other(Widgets.Switch("Tyre marks", S.TireMarks, v => S.TireMarks = v));
+			if (Widgets.Button("Clear marks", 120)) {
+				mod_.Tracks.Clear();
+			}
+			Widgets.EndDependent();
+			var replacer = mod_.Replacer;
+			Widgets.Info($"Replaced: {replacer.ReplacedCount} materials");
+			foreach (var kv in replacer.Deferred) {
+				Widgets.Info($"Left as they are: {kv.Value} - {kv.Key}");
+			}
+			if (Widgets.Button("Write material inventory", 200)) {
+				inventoryPath_ = NatureFX.Tools.MaterialInventory.Write(replacer) ?? "failed, see the log";
+			}
+			Widgets.Info(inventoryPath_ ?? $"Written on every map load to {NatureFX.Tools.MaterialInventory.Folder}");
+			Widgets.Info($"Shader variants the replaced materials need: {replacer.UsedVariants.Count}, added to NatureFX_variants.txt " +
+			             "on every map load (the next shader bundle build compiles them).");
+			Widgets.EndCard();
+		}
+
+		private string inventoryPath_;
+
+		private void DrawRayTracingOnly() {
+			Widgets.BeginCard("Ray tracing only", "Turns everything off except the ray traced reflections and shadows (NatureFX effects, NatureFX GI and the game's screen space reflections, GI, AO and contact shadows) to judge them alone. Your settings are kept.");
+			Widgets.Switch("Ray tracing only", S.DevRayTracingOnly, v => {
+				S.DevRayTracingOnly = v;
+				tab_ = v ? 6 : 0;
+				scroll_ = Vector2.zero;
+				mod_.MarkDirty();
+			});
+			Widgets.EndCard();
+
+			DrawShaderRebuild();
+
+			Widgets.BeginCard("Ray tracing history", "Shadows, ambient light and reflections build up over several frames. " +
+			                                         "Camera cuts reset them on their own; this clears anything left burnt in.");
+			if (Widgets.Button("Reset accumulated image", 200)) {
+				mod_.RT.ResetHistory();
+			}
+			Widgets.EndCard();
+
+			Widgets.BeginCard("Ray tracing cost", "Switches each ray tracing stage off for a few seconds and compares the frame time. " +
+			                                      "Keep the camera still; a frame rate cap or vsync hides the difference.");
+			var bench = mod_.RT.Benchmark;
+			if (Widgets.Button(bench.Running ? "Cancel" : "Measure", 120)) {
+				if (bench.Running) {
+					bench.Cancel();
+				} else {
+					bench.Start();
+				}
+			}
+			if (bench.Result.Length > 0) {
+				Widgets.Info(bench.Result);
+			}
+			string instances = mod_.RT.RayTracingInstances > 0 ? $"{mod_.RT.RayTracingInstances} instances in the scene" : "scene not built";
+			Widgets.Info(instances);
+			Widgets.EndCard();
+		}
+
+		// One choice for every ray traced effect: surfaces, shadows, ambient light, lamps, light shafts and reflections
+		private void DrawRayTracingBackend() {
+			Widgets.BeginCard("Ray tracing", "How NatureFX's own engine (NFXNative.dll) traces every ray traced effect (surfaces, shadows, ambient light, lamps, light shafts, reflections). DX12 only.");
+			int backend = Mathf.Clamp(S.RTBackend, 0, BackendNames.Length - 1);
+			if (Widgets.Chips(ref backend, BackendNames)) {
+				S.RTBackend = backend;
+				Other(true);
+			}
+			Widgets.Info(backend == 1
+				? "DXR 1.1: inline ray queries in compute shaders."
+				: "DXR 1.0: ray tracing pipelines (TraceRay with hit shaders). " + $"Now: {NativeEngine.ModeName}.");
+			if (!NativeEngine.Ready) {
+				Widgets.Info($"<color=#F5B14C>The own engine is not available: {NativeEngine.Info}. No ray traced effects.</color>");
+			}
+			Widgets.Info($"GPU memory in use: {NativeEngine.GpuMemory}");
+			int scale = Mathf.Clamp(S.RTTraceScale, 0, 1);
+			if (Widgets.Chips(ref scale, new[] { "Half resolution", "Quarter (upscaled)" })) {
+				S.RTTraceScale = scale;
+				Other(true);
+			}
+			Widgets.Info(scale == 0 ? "Ambient light, GI and lamp shadows at half resolution."
+				: "Ambient light, GI and lamp shadows at quarter resolution, a different pixel of each 2x2 block every frame, built up over frames and upscaled by depth: about a quarter of the rays.");
+			int denoiser = Mathf.Clamp(S.RTDenoiser, 0, 1);
+			if (Widgets.Chips(ref denoiser, new[] { "Simple blur", "Variance guided" })) {
+				S.RTDenoiser = denoiser;
+				Other(true);
+			}
+			Widgets.Info(denoiser == 0 ? "A fixed blur along surfaces." : "Blurs where the rays disagree and keeps detail where they agree (sharper contact shadows, less smear).");
+			Other(Widgets.Switch("Measurement overlay", S.RTOverlay, v => S.RTOverlay = v,
+				"GPU time of each ray traced stage, rays per frame, lamps, scene size and GPU memory, at the top left of the screen."));
+			if (backend == 1) {
+				Other(Widgets.Switch("Sun shadows on DXR 1.2 (test)", S.RTDxr12Sun, v => S.RTDxr12Sun = v,
+					"Stage 1 of the move to DXR 1.2: the sun shadows are traced on a Shader Model 6.9 device next to the game's. Same look; compare the frame rate."));
+				Widgets.Info($"DXR 1.2 sun shadows: {NativeEngine.Dxr12SunStatus}");
+			}
+			if (Widgets.Button("Test DXR 1.2", 200)) {
+				NativeEngine.RunDxr12Probe();
+			}
+			Widgets.Info($"DXR 1.2 (shader execution reordering, opacity micromaps; needs Agility SDK 1.619 next to the game's): {NativeEngine.Dxr12Result}");
+			Widgets.EndCard();
+		}
+
+		private void DrawSettings() {
+			Widgets.BeginCard("Interface");
+			Widgets.Slider("Background opacity", S.UiOpacity > 0.0f ? S.UiOpacity : DefaultOpacity, 0.4f, 1.0f, v => S.UiOpacity = v, "0%");
+			// applied when the slider is released, so the window does not resize under the mouse while dragging
+			Widgets.Slider("UI scale", uiScaleDraft_ > 0.0f ? uiScaleDraft_ : S.UiScale > 0.0f ? S.UiScale : DefaultScale, 0.6f, 1.3f, v => uiScaleDraft_ = v, "0%");
+			if (uiScaleDraft_ > 0.0f && GUIUtility.hotControl == 0) {
+				S.UiScale = uiScaleDraft_;
+				uiScaleDraft_ = 0.0f;
+			}
+			Widgets.Switch("Larger text", S.UiLargeText, v => S.UiLargeText = v);
+			if (Widgets.Button("Reset size and position", 200)) {
+				S.UiWidth = S.UiHeight = 0.0f;
+				position_ = new Vector2(60, 60);
+			}
+			Widgets.EndCard();
+
+			DrawRayTracingBackend();
+
+			if (S.DevRayTracingOnly) {
+				DrawRayTracingOnly();
+				return;
+			}
+
+			Widgets.Heading("ADVANCED");
+			DrawGraphicsApi();
+			Widgets.BeginCard("Shader replacement", "NatureFX swaps game materials to its own shaders for wind, snow, wetness and the rest.", true);
+			Widgets.Info($"Bundle shaders: {mod_.Bundle.Shaders.Count} · replaced materials: {mod_.Replacer.ReplacedCount}");
+			Other(Widgets.Switch("Replace game shaders", S.ReplaceShaders, v => {
+				S.ReplaceShaders = v;
+				mod_.SetShaderReplacement(v);
+			}));
+			Other(Widgets.Switch("Wet look on unreplaced HDRP/Lit", S.WetGameMaterials, v => S.WetGameMaterials = v));
+			Widgets.EndCard();
+			DrawMapProfile();
+
+			Widgets.Heading("DEVELOPER");
+			DrawRayTracingOnly();
+			Widgets.BeginCard("System", null, true);
+			Widgets.Info(Capabilities.Describe());
+			Widgets.Info($"Shader bundle: {mod_.Bundle.Shaders.Count} shaders · replaced materials: {mod_.Replacer.ReplacedCount}");
+			Widgets.Info($"Native engine: {NativeEngine.Info} · self test: {NativeEngine.TestResult}");
+			Widgets.Info($"Native engine scene: {NativeEngine.SceneStatus}");
+			Widgets.Info($"Native engine check: {NativeEngine.CheckStatus} · queue: {NativeEngine.QueueStatus}");
+			Widgets.Info($"Native engine sun shadows: {NativeEngine.SunCounters}");
+			Widgets.EndCard();
+
+			Widgets.BeginCard("Diagnostics", null, true);
+			if (Widgets.Button("Dump scene shaders", 180)) {
+				lastDump_ = SceneShaderDumper.Dump(mod_.Replacer);
+			}
+			if (lastDump_ != null) {
+				Widgets.Info($"Written: {lastDump_}");
+			}
+			Widgets.EndCard();
+
+			Widgets.BeginCard("Replacement rules", null, true);
+			Widgets.Info(mod_.Replacer.RulesPath);
+			if (Widgets.Button("Reload rules", 140)) {
+				mod_.ReloadRules();
+			}
+			Widgets.EndCard();
+
+			DrawVariantRecording();
+		}
+
+		private void DrawVariantRecording() {
+			Widgets.BeginCard("Shader variant recording", "For faster bundle builds: records which NatureFX shader variants the game uses. " +
+			                                              "Play maps in DX11 and DX12, day and night, rain and snow, then save.", true);
+			if (Widgets.Switch("Record", S.RecordShaderVariants, v => S.RecordShaderVariants = v)) {
+				ShaderVariantRecorder.Recording = S.RecordShaderVariants;
+			}
+			GUILayout.BeginHorizontal();
+			if (Widgets.Button("Save recorded variants", 210)) {
+				ShaderVariantRecorder.Save();
+			}
+			GUILayout.EndHorizontal();
+			Widgets.Info(ShaderVariantRecorder.LastMessage ?? ShaderVariantRecorder.FilePath);
+			Widgets.EndCard();
+		}
+
+		private void DrawMapProfile() {
+			var map = mod_.Map;
+			Widgets.BeginCard("Map profile", "Per-map materials, lights and markers from kino/config/NatureFX/maps/<scene>.nfx (docs/map-authoring.md).", true);
+			if (Widgets.Switch("Use map profiles", S.UseMapProfile, v => S.UseMapProfile = v)) {
+				mod_.ReloadMap();
+			}
+
+			var scenes = MapProfile.LoadedSceneNames();
+			if (map.Loaded) {
+				Widgets.Info($"'{map.Name}' from {map.Source}");
+				if (!map.FromMap && map.InMapText != null) {
+					Widgets.Info("The map has its own profile too; this file overrides it.");
+				}
+				Widgets.Info($"{map.Section("rules").Count} rules  ·  {mod_.MaterialLooks.MaterialCount} materials  ·  {mod_.MaterialLooks.EmissiveCount} emissive  ·  {mod_.Markers.Markers.Count} markers");
+			} else {
+				Widgets.Info($"No profile for the loaded scenes ({string.Join(", ", scenes)}). Name the file after one of them.");
+				Widgets.Info($"{mod_.Markers.Markers.Count} markers found in the map objects");
+			}
+
+			GUILayout.BeginHorizontal();
+			if (Widgets.Button("Reload map profile", 170)) {
+				mod_.ReloadMap();
+			}
+			if (Widgets.Button("Copy camera position", 190)) {
+				var cam = Camera.main;
+				if (cam != null) {
+					var p = cam.transform.position;
+					GUIUtility.systemCopyBuffer = FormattableString.Invariant($"{p.x:0.0}, {p.y:0.0}, {p.z:0.0}");
+					mapMessage_ = $"Copied {GUIUtility.systemCopyBuffer}";
+				}
+			}
+			if (map.FromMap && Widgets.Button("Export to file", 140)) {
+				// the outside file then overrides the map's profile and can be edited and reloaded
+				mapMessage_ = map.ExportInMapProfile();
+				mod_.ReloadMap();
+			}
+			if (!map.Loaded && scenes.Count > 0 && Widgets.Button("Create template", 160)) {
+				mapMessage_ = MapProfile.WriteTemplate(scenes[0]);
+				mod_.ReloadMap();
+			}
+			GUILayout.EndHorizontal();
+			if (mapMessage_ != null) {
+				Widgets.Info(mapMessage_);
+			}
+			Widgets.EndCard();
+		}
+
+		// ---------------------------------------------------------------- helpers
+
+		private static string Clock(float hours) {
+			int h = Mathf.FloorToInt(hours) % 24;
+			int m = Mathf.FloorToInt((hours - Mathf.Floor(hours)) * 60.0f);
+			return $"{h:00}:{m:00}";
+		}
+
+		// A non-preset value changed.
+		private void Other(bool changed) {
+			if (changed) {
+				mod_.MarkDirty();
+			}
+		}
+	}
+}
