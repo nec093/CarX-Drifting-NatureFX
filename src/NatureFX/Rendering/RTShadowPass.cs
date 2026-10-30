@@ -268,9 +268,10 @@ namespace NatureFX.Rendering {
 			shafts_.Ensure(0.25f);
 			local_.Ensure(lowScale);
 			// quarter resolution: each trace pixel looks at a different full resolution pixel of its 4 x 4 block every
-			// frame (an R2 sequence); the accumulation gathers them, the composite's depth weighted upsample spreads them
+			// frame (an R2 sequence); the accumulation gathers them, the composite's depth weighted upsample spreads them.
+			// Not under NRD: REBLUR follows each pixel through time and needs it to stay where it is.
 			var jitter = Vector2.zero;
-			if (QuarterResolution) {
+			if (QuarterResolution && !NativeEngine.NrdSigma) {
 				jitter = new Vector2((0.5f + frame_ * 0.7548776662f) % 1.0f - 0.5f, (0.5f + frame_ * 0.5698402910f) % 1.0f - 0.5f);
 			}
 			ctx.cmd.SetComputeVectorParam(Bridge, TraceJitter, jitter);
@@ -302,10 +303,9 @@ namespace NatureFX.Rendering {
 
 			// 1. trace: one point of the sun's disc per pixel, one ambient ray per half resolution pixel
 			RTTimings.ShadowTrace.Begin(cmd);
-			// NRD (NativeEngine.NrdSigma): REBLUR takes the ambient light too where its trace pixels hold still (half
-			// resolution; the quarter's jitter moves them every frame)
+			// NRD (NativeEngine.NrdSigma): REBLUR takes the ambient light too, at half or quarter resolution (unjittered)
 			NativeEngine.NrdReset = resetHistory;
-			NativeEngine.NrdAmbient = NativeEngine.NrdSigma && !QuarterResolution;
+			NativeEngine.NrdAmbient = NativeEngine.NrdSigma;
 			if (TraceShadows) {
 				RTTimings.Sun.Begin(cmd);
 				NativeEngine.TraceSun(cmd, Bridge, ctx, Surfaces.Normal, sun_.Raw, sunSize);
