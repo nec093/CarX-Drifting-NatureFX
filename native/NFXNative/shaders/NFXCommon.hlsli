@@ -430,6 +430,7 @@ struct HitSurface
     float smoothness;
     bool coat;       // clear coated (car paint)
     bool thin;       // alpha tested card (leaf, grass, fence)
+    bool moving;     // a car's part (instance flag bit 3)
     float3 emission; // light the surface gives off (radiance, before exposure)
 };
 
@@ -444,6 +445,7 @@ HitSurface SurfaceAt(Hit hit, float3 rayDir, float lod)
     s.smoothness = r.smoothness;
     s.coat = (r.flags & 1u) != 0;
     s.thin = (r.flags & 2u) != 0;
+    s.moving = (r.flags & 4u) != 0;
     s.emission = r.emission;
     s.normal = -rayDir;
     if (r.indices == NoDescriptor || r.positions == NoDescriptor)

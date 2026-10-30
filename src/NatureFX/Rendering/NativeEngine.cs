@@ -883,7 +883,7 @@ namespace NatureFX.Rendering {
 					transforms[o + 4] = m.m10; transforms[o + 5] = m.m11; transforms[o + 6] = m.m12; transforms[o + 7] = m.m13;
 					transforms[o + 8] = m.m20; transforms[o + 9] = m.m21; transforms[o + 10] = m.m22; transforms[o + 11] = m.m23;
 					ids[n] = id;
-					flags[n] = (instance.AlphaTest ? 1 : 0) | (instance.Glass ? 2 : 0) | (instance.Wind ? 4 : 0);
+					flags[n] = (instance.AlphaTest ? 1 : 0) | (instance.Glass ? 2 : 0) | (instance.Wind ? 4 : 0) | (instance.Follow != null ? 8 : 0);
 					materials[n] = MaterialId(instance.Material, instance.Color, instance.Finish);
 					uploaded_.Add(instance);
 					++n;

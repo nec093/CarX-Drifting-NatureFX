@@ -460,6 +460,7 @@ UINT64 g_scratchCapacity = 0;
 std::string g_sceneStats = "no scene";
 std::string g_sceneStatsWind;
 std::vector<int> g_instanceGeometry;  // per entry of g_instances
+std::vector<bool> g_instanceMoving;   // per entry of g_instances: flag bit 3 (a car's part)
 std::vector<int> g_instanceMaterial;
 // Per instance (InstanceID) 64 bytes the shadow shader reads for the alpha test: index and UV descriptors, texture
 // descriptor (~0: solid), cutoff, alpha scale, texture scale / offset
@@ -913,13 +914,14 @@ NFX_EXPORT int NFX_Native_AddGeometryData(const float* positions, int vertexCoun
 // Replaces the instances: transforms are 3x4 row major object to world matrices (12 floats each), geometry ids
 // from NFX_Native_AddGeometry, flags bit 0 = alpha tested (non opaque), bit 1 = glass: instance mask 2, seen only by
 // the glass trace (Glass.hlsl); everything else is mask 1, what the other traces see (NFX_SCENE_MASK). Bit 2: swayed by
-// the wind (NatureFX/Foliage, Wind.inl).
+// the wind (NatureFX/Foliage, Wind.inl). Bit 3: moves (a car's part): its record says so (NFX_RECORD_MOVING).
 NFX_EXPORT void NFX_Native_SetInstances(const float* transforms, const int* geometries, const int* flags, const int* materials, int count) {
 	g_instances.clear();
 	g_instances.reserve(count);
 	g_instanceGeometry.clear();
 	g_instanceMaterial.clear();
 	g_instanceSways.clear();
+	g_instanceMoving.clear();
 	for (int i = 0; i < count; ++i) {
 		int id = geometries[i];
 		if (id < 0 || id >= static_cast<int>(g_geometries.size()) || g_geometries[id].released) {
@@ -936,6 +938,7 @@ NFX_EXPORT void NFX_Native_SetInstances(const float* transforms, const int* geom
 		g_instanceGeometry.push_back(id);
 		g_instanceMaterial.push_back(materials[i]);
 		g_instanceSways.push_back((flags[i] & 4) != 0);
+		g_instanceMoving.push_back((flags[i] & 8) != 0);
 	}
 }
 
@@ -1266,7 +1269,8 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 		r[6] = g.normalDescriptor;
 		r[16] = m.maskDescriptor;
 		// thin: an alpha tested instance (leaf, grass, fence card)
-		r[17] = m.flags | ((g_instances[i].Flags & D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_OPAQUE) == 0 ? 2u : 0u);
+		r[17] = m.flags | ((g_instances[i].Flags & D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_OPAQUE) == 0 ? 2u : 0u) |
+		        (i < g_instanceMoving.size() && g_instanceMoving[i] ? 4u : 0u);
 		memcpy(&r[18], m.remap, 16);
 		r[22] = m.emissionDescriptor;
 		memcpy(&r[24], m.emission, 12);

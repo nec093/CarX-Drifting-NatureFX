@@ -61,31 +61,33 @@ NFX_ENTRY(id)
                 result = float4(fresnel * (radiance - skyGuess) * reach, fresnel * reach);
             }
         }
-        // refraction: what is behind bent glass (lenses, curved screens, thick panes) seen through it. The camera colour
-        // already shows what is straight behind; the change is what the bent ray finds there instead. A flat pane
-        // shifts the view too little to see, so the bend is scaled down (ReflParams.z) rather than leaving the glass.
+        // refraction: what is behind solid glass (a ball, a lens, a block) seen bent through it, where the ray leaves
+        // the same piece again. A car's windows, and glass made as single sheets, bend nothing: a real pane's two faces
+        // are parallel and give the view back unbent, while a sheet took the far window for the way out and bent the
+        // view wildly. ReflParams.z scales the bend.
         float strength = saturate(ReflParams.z);
-        if (strength > 0.0)
+        float3 bent = refract(viewDir, n, 1.0 / 1.5);
+        bool solid = false;
+        float3 origin = 0;
+        if (strength > 0.0 && !g.moving && dot(bent, bent) > 0.0)
         {
-            float3 bent = refract(viewDir, n, 1.0 / 1.5);
-            if (dot(bent, bent) > 0.0)
+            origin = Camera + viewDir * glass.t - n * 0.02;
+            Hit exitHit;
+            if (ClosestGlass(origin, bent, 10.0, exitHit) && exitHit.instance == glass.instance)
             {
-                float3 glassAWS = Camera + viewDir * glass.t;
-                float3 origin = glassAWS - n * 0.02;
-                // out of the far side: a solid piece (a ball, a lens, a thick pane) bends the ray again where it leaves,
-                // a ball turning the view upside down and a flat pane giving it back unbent. Glass modelled as one sheet
-                // has no far side: the one bend stays.
-                Hit exitHit;
-                if (ClosestGlass(origin, bent, 10.0, exitHit))
+                HitSurface e = SurfaceAt(exitHit, bent, 0.0); // its normal faces the ray: into the glass
+                float3 leaving = refract(bent, e.normal, 1.5);
+                if (dot(leaving, leaving) > 0.0) // else totally reflected inside: left as it is
                 {
-                    HitSurface e = SurfaceAt(exitHit, bent, 0.0); // its normal faces the ray: into the glass
-                    float3 leaving = refract(bent, e.normal, 1.5);
-                    if (dot(leaving, leaving) > 0.0) // else totally reflected inside: the first bend is kept
-                    {
-                        origin = origin + bent * exitHit.t - e.normal * 0.02;
-                        bent = normalize(leaving);
-                    }
+                    origin += bent * exitHit.t - e.normal * 0.02;
+                    bent = normalize(leaving);
+                    solid = true;
                 }
+            }
+        }
+        {
+            if (solid)
+            {
                 bent = normalize(lerp(viewDir, bent, strength));
                 // what the bent ray finds: the camera colour where it is on screen, else shaded here (inside a ball's
                 // outline the screen holds the ball, whose depth never matched: nothing was bent there), the sky if
