@@ -269,7 +269,7 @@ namespace NatureFX.Rendering {
 				                $"refraction {(glassOn ? glass_.Refraction.ToString("0.00") : "off (needs glass reflections)")}, " +
 				                $"wet streaks {On(reflection_ != null && reflection_.enabled && reflection_.WetStreaks)} (wetness {Mathf.Max(NatureFX.Nature.Weather.Current.Wetness, NatureFX.Nature.Weather.Current.Rain):0.00}), " +
 				                $"glowing surfaces {On(lights_.Emissive)}, lamp shadows {On(LampShadows)}, " +
-				                $"{(shadows_ != null && shadows_.QuarterResolution ? "quarter" : "half")} resolution, {(NativeEngine.NrdSigma ? "NRD SIGMA (sun) + variance" : shadows_ != null && shadows_.VarianceDenoiser ? "variance" : "simple")} denoiser");
+				                $"{(shadows_ != null && shadows_.QuarterResolution ? "quarter" : "half")} resolution, {(NativeEngine.NrdSigma ? (NativeEngine.NrdAmbient ? "NRD SIGMA + REBLUR, variance for lamps" : "NRD SIGMA, variance for the rest") : shadows_ != null && shadows_.VarianceDenoiser ? "variance" : "simple")} denoiser");
 				text.AppendLine($"shadows: {ShadowStatus}");
 				if (NativeEngine.NrdSigma) {
 					text.AppendLine($"NRD: {NativeEngine.NrdStatus}");

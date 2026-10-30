@@ -175,6 +175,7 @@ namespace NatureFX.Rendering {
 		// NVIDIA Real-Time Denoisers (NFXNative Nrd.inl): SIGMA denoises the sun shadows right after their trace (render
 		// event 5); the shadow pass then skips its own filter for them. Set per frame by RayTracingEffects.
 		public static bool NrdSigma;
+		public static bool NrdAmbient;     // REBLUR denoises the ambient light / GI too (half resolution only: set by the shadow pass)
 		public static bool NrdReset;       // the shadow pass dropped its history this frame
 		public static string NrdStatus {
 			get {
@@ -651,52 +652,60 @@ namespace NatureFX.Rendering {
 			cmd.DispatchCompute(bridge, prepare, (width + 7) / 8, (height + 7) / 8, TextureXR.slices);
 			Issue(cmd, TraceSun_, b.SurfacePtr, b.ResultPtr, width, height);
 			if (NrdSigma) {
-				IssueNrdSigma(cmd, bridge, ctx, b, width, height, size);
+				IssueNrd(cmd, bridge, ctx, nrdSunGuide_, b.SurfacePtr, b.ResultPtr, width, height, size, 5, 0);
 			}
 			cmd.SetComputeBufferParam(bridge, unpack, NativeSunId, b.Result);
 			cmd.SetComputeTextureParam(bridge, unpack, SunOutputId, sunOutput);
 			cmd.DispatchCompute(bridge, unpack, (width + 7) / 8, (height + 7) / 8, TextureXR.slices);
 		}
 
-		// SIGMA over the sun trace just issued: NRD's guides at the trace resolution (PrepareNrdGuide), then render event 5
-		// with the camera's matrices (NrdEventData in Nrd.inl, 320 bytes)
-		private static GraphicsBuffer nrdGuide_;
-		private static IntPtr nrdGuidePtr_;
-		private static int nrdGuidePixels_;
+		// NRD over a trace just issued (NFXNative Nrd.inl): its guides at the trace's resolution (PrepareNrdGuide), then
+		// render event 5 (SIGMA, the sun) or 6 (REBLUR, the ambient light or GI) with the camera's matrices (NrdEventData,
+		// 328 bytes)
+		private class NrdGuide {
+			public GraphicsBuffer Buffer;
+			public IntPtr Ptr;
+			public int Pixels;
+		}
+		private static readonly NrdGuide nrdSunGuide_ = new(), nrdAmbientGuide_ = new();
 		private static IntPtr nrdEvents_;
 		private static int nrdEvent_;
-		private const int NrdEventSize = 320;
-		private const int NrdEvents = 16;
+		private const int NrdEventSize = 328;
+		private const int NrdEvents = 32;
 		private static readonly float[] nrdFloats_ = new float[NrdEventSize / 4];
-		private static Matrix4x4 nrdViewPrev_, nrdProjPrev_;
-		private static int nrdPrevFrame_ = -10;
+		// this frame's camera and the one before (taken once a frame: both events of a frame see the same pair)
+		private static Matrix4x4 nrdView_, nrdProj_, nrdViewPrev_, nrdProjPrev_;
+		private static int nrdFrame_ = -10;
 		private static readonly int NrdGuideId = Shader.PropertyToID("_NFX_NrdGuide");
 		private static readonly int MotionVectorsId = Shader.PropertyToID("_NFX_MotionVectors");
 
-		private static void IssueNrdSigma(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, TraceBuffers sun, int width, int height, Vector4 size) {
+		private static void IssueNrd(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, NrdGuide guide, IntPtr surface, IntPtr result,
+		                             int width, int height, Vector4 size, int eventId, int mode) {
 			int pixels = width * height;
-			if (nrdGuide_ == null || nrdGuidePixels_ != pixels) {
-				if (nrdGuide_ != null) {
-					retired_.Add((nrdGuide_, Time.frameCount));
+			if (guide.Buffer == null || guide.Pixels != pixels) {
+				if (guide.Buffer != null) {
+					retired_.Add((guide.Buffer, Time.frameCount));
 				}
-				nrdGuidePixels_ = pixels;
-				nrdGuide_ = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, pixels * 2), 16) { name = "NFX_NrdGuide" };
-				nrdGuidePtr_ = nrdGuide_.GetNativeBufferPtr();
+				guide.Pixels = pixels;
+				guide.Buffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, pixels * 2), 16) { name = "NFX_NrdGuide" };
+				guide.Ptr = guide.Buffer.GetNativeBufferPtr();
 			}
 			int kernel = bridge.FindKernel("PrepareNrdGuide");
 			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
 			cmd.SetComputeTextureParam(bridge, kernel, CameraDepthId, ctx.cameraDepthBuffer);
 			cmd.SetComputeTextureParam(bridge, kernel, NormalBufferId, ctx.cameraNormalBuffer);
 			cmd.SetComputeTextureParam(bridge, kernel, MotionVectorsId, ctx.cameraMotionVectorsBuffer);
-			cmd.SetComputeBufferParam(bridge, kernel, NrdGuideId, nrdGuide_);
+			cmd.SetComputeBufferParam(bridge, kernel, NrdGuideId, guide.Buffer);
 			cmd.DispatchCompute(bridge, kernel, (width + 7) / 8, (height + 7) / 8, TextureXR.slices);
 
-			var cam = ctx.hdCamera.camera;
-			var view = cam.worldToCameraMatrix;
-			var proj = cam.nonJitteredProjectionMatrix;
-			if (nrdPrevFrame_ != Time.frameCount - 1 && nrdPrevFrame_ != Time.frameCount) {
-				nrdViewPrev_ = view;
-				nrdProjPrev_ = proj;
+			if (nrdFrame_ != Time.frameCount) {
+				var cam = ctx.hdCamera.camera;
+				bool continuous = nrdFrame_ == Time.frameCount - 1;
+				nrdViewPrev_ = continuous ? nrdView_ : cam.worldToCameraMatrix;
+				nrdProjPrev_ = continuous ? nrdProj_ : cam.nonJitteredProjectionMatrix;
+				nrdView_ = cam.worldToCameraMatrix;
+				nrdProj_ = cam.nonJitteredProjectionMatrix;
+				nrdFrame_ = Time.frameCount;
 			}
 			var f = nrdFloats_;
 			Array.Clear(f, 0, f.Length);
@@ -705,31 +714,27 @@ namespace NatureFX.Rendering {
 			f[o] = Mathf.Tan(sunRadius_);
 			f[o + 1] = sunDirection_.x; f[o + 2] = sunDirection_.y; f[o + 3] = sunDirection_.z;
 			for (int i = 0; i < 16; ++i) {
-				f[o + 4 + i] = proj[i];          // Matrix4x4[i]: column major, as NRD reads them
+				f[o + 4 + i] = nrdProj_[i];          // Matrix4x4[i]: column major, as NRD reads them
 				f[o + 20 + i] = nrdProjPrev_[i];
-				f[o + 36 + i] = view[i];
+				f[o + 36 + i] = nrdView_[i];
 				f[o + 52 + i] = nrdViewPrev_[i];
 			}
 			f[o + 68] = 5000.0f;                       // m: the sky (view depth 1e6 in the guides) is outside it
 			f[o + 69] = Time.unscaledDeltaTime * 1000.0f;
-			if (nrdPrevFrame_ != Time.frameCount) {
-				nrdPrevFrame_ = Time.frameCount;
-				nrdViewPrev_ = view;
-				nrdProjPrev_ = proj;
-			}
 			if (nrdEvents_ == IntPtr.Zero) {
 				nrdEvents_ = Marshal.AllocHGlobal(NrdEventSize * NrdEvents);
 			}
 			var slot = nrdEvents_ + NrdEventSize * (nrdEvent_++ % NrdEvents);
 			Marshal.Copy(f, 0, slot, f.Length);
-			Marshal.WriteIntPtr(slot, 0, nrdGuidePtr_);
-			Marshal.WriteIntPtr(slot, 8, sun.SurfacePtr);
-			Marshal.WriteIntPtr(slot, 16, sun.ResultPtr);
+			Marshal.WriteIntPtr(slot, 0, guide.Ptr);
+			Marshal.WriteIntPtr(slot, 8, surface);
+			Marshal.WriteIntPtr(slot, 16, result);
 			Marshal.WriteInt32(slot, 24, width);
 			Marshal.WriteInt32(slot, 28, height);
 			Marshal.WriteInt32(slot, 32, frame_);
 			Marshal.WriteInt32(slot, 36, NrdReset ? 1 : 0);
-			cmd.IssuePluginEventAndData(NFX_Native_RenderEventAndDataFunc(), 5, slot);
+			Marshal.WriteInt32(slot, 320, mode);
+			cmd.IssuePluginEventAndData(NFX_Native_RenderEventAndDataFunc(), eventId, slot);
 		}
 
 		// The surfaces the ambient light and the local light shadows trace from (they share the resolution); the
@@ -760,6 +765,9 @@ namespace NatureFX.Rendering {
 			Issue(cmd, TraceGI_, surface.SurfacePtr, surface.ResultPtr, width, height);
 			// this frame's samples into the cache (the buffers only fill the trace's slots: the resolve uses the cache)
 			Issue(cmd, TraceCacheResolve_, surface.SurfacePtr, surface.ResultPtr, CacheWidth, CacheHeight);
+			if (NrdAmbient) {
+				IssueNrd(cmd, bridge, ctx, nrdAmbientGuide_, surface.SurfacePtr, surface.ResultPtr, width, height, size, 6, 1);
+			}
 			Unpack4(cmd, bridge, surface, target, size);
 		}
 
@@ -767,6 +775,9 @@ namespace NatureFX.Rendering {
 			int width = (int)size.x, height = (int)size.y;
 			var surface = PrepareAmbient(cmd, bridge, ctx, surfaceNormal, size, Buffers(TraceAmbient_, width * height, 3, 16), Vector4.one);
 			Issue(cmd, TraceAmbient_, surface.SurfacePtr, surface.ResultPtr, width, height);
+			if (NrdAmbient) {
+				IssueNrd(cmd, bridge, ctx, nrdAmbientGuide_, surface.SurfacePtr, surface.ResultPtr, width, height, size, 6, 0);
+			}
 			Unpack4(cmd, bridge, surface, target, size);
 		}
 

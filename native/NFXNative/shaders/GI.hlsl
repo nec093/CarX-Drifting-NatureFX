@@ -9,7 +9,8 @@
 // only darkened by what blocks the sky, and the light bounced in is added as it is (a factor relative to the open
 // sky stayed small indoors, where HDRP's own ambient light is dark too, and the colour bleeding barely showed).
 // Surface (NFX_NativeBridge PrepareAmbient): 3 float4 per pixel, as Ambient.hlsl. Output: float4 per pixel (light
-// bounced in: the average radiance the hits send back, before exposure, rgb; share of the sky seen, a).
+// bounced in: the average radiance the hits send back, before exposure, rgb; share of the sky seen, a). The distance
+// the ray went goes into the surface's last float (view depth, read above) for NRD's REBLUR (NrdReblurPack.hlsl).
 // Compiled into GI.h.
 #include "NFXCommon.hlsli"
 
@@ -82,7 +83,9 @@ NFX_ENTRY(id)
         float limit = 2.0 * (Luminance(SunColor) * INV_PI + Luminance(SampleSH9(float3(0.0, 1.0, 0.0))));
 
         Hit hit;
-        if (!Closest(origin, dir, giDistance, coarse, hit))
+        bool hitSomething = Closest(origin, dir, giDistance, coarse, hit);
+        Surface.Store(index * 48 + 44, asuint(hitSomething ? hit.t : giDistance));
+        if (!hitSomething)
         {
             sky = FarSky(origin, dir, giDistance);
         }

@@ -302,9 +302,12 @@ namespace NatureFX.Rendering {
 
 			// 1. trace: one point of the sun's disc per pixel, one ambient ray per half resolution pixel
 			RTTimings.ShadowTrace.Begin(cmd);
+			// NRD (NativeEngine.NrdSigma): REBLUR takes the ambient light too where its trace pixels hold still (half
+			// resolution; the quarter's jitter moves them every frame)
+			NativeEngine.NrdReset = resetHistory;
+			NativeEngine.NrdAmbient = NativeEngine.NrdSigma && !QuarterResolution;
 			if (TraceShadows) {
 				RTTimings.Sun.Begin(cmd);
-				NativeEngine.NrdReset = resetHistory;
 				NativeEngine.TraceSun(cmd, Bridge, ctx, Surfaces.Normal, sun_.Raw, sunSize);
 				RTTimings.Sun.End(cmd);
 			}
@@ -355,10 +358,10 @@ namespace NatureFX.Rendering {
 			// instead, still pixels keeping a quarter of the blend (about 40 frames).
 			int wide = converged ? 1 : QuarterResolution ? 2 : 3;
 			float giBlend = resetHistory ? 1.0f : Mathf.Min(blend, 0.05f);
-			var ambientResult = TraceAO
-				? giUsed_ ? Filter(cmd, ambient_, ambientSize, giBlend, PassDenoise, sunRadius, fov, wide + 1, false, Mathf.Min(0.25f, StillShare(giBlend, 1.0f / 64.0f)))
-				          : Filter(cmd, ambient_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, Mathf.Min(0.25f, StillShare(slowBlend, 1.0f / 64.0f)))
-				: null;
+			var ambientResult = !TraceAO ? null
+				: NativeEngine.NrdAmbient ? Filter(cmd, ambient_, ambientSize, 1.0f, PassDenoise, sunRadius, fov, 0)
+				: giUsed_ ? Filter(cmd, ambient_, ambientSize, giBlend, PassDenoise, sunRadius, fov, wide + 1, false, Mathf.Min(0.25f, StillShare(giBlend, 1.0f / 64.0f)))
+				          : Filter(cmd, ambient_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, Mathf.Min(0.25f, StillShare(slowBlend, 1.0f / 64.0f)));
 			var localResult = localShadows
 				? Filter(cmd, local_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, Mathf.Min(0.25f, StillShare(slowBlend, 1.0f / 64.0f)))
 				: null;

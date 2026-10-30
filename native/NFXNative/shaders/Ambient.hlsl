@@ -5,7 +5,8 @@
 // second ray darkens creases (contact shadows).
 // Surface (NFX_NativeBridge PrepareAmbient): 3 float4 per pixel (origin xyz, 1 = valid; shading normal xyz, packed
 // full resolution pixel; geometric normal xyz, view depth). Output: float4 per pixel (ambient rgb relative to
-// HDRP's). Compiled into Ambient.h.
+// HDRP's). The distance the ray went (its hit, or its length) goes into the surface's last float (view depth, read
+// above) for NRD's REBLUR (NrdReblurPack.hlsl). Compiled into Ambient.h.
 #include "NFXCommon.hlsli"
 
 #define NFX_SKY_UNDERSIDE 0.3
@@ -38,10 +39,12 @@ NFX_ENTRY(id)
         float3 dir = CosineSampleHemisphere(n, Hash22(pixel, FrameIndex, 5));
         if (dot(dir, geomN) < 0.05)
             dir = normalize(dir + geomN * (0.05 - dot(dir, geomN)));
+        float travelled = ambientDistance;
         if (AmbientParams.y > 0.5)
         {
             Hit hit;
             bool hitSomething = Closest(origin, dir, ambientDistance, coarse, hit);
+            travelled = hitSomething ? hit.t : ambientDistance;
             float far = !hitSomething || hit.t > ambientDistance * 0.7 ? FarSky(origin, dir, ambientDistance) : 1.0;
             ambient = far;
             if (hitSomething)
@@ -64,6 +67,7 @@ NFX_ENTRY(id)
         else
         {
             ambient = Blocked(origin, dir, ambientDistance, coarse) ? 0.0 : FarSky(origin, dir, ambientDistance);
+            travelled = any(ambient > 0.0) ? ambientDistance : ambientDistance * 0.5;
         }
 
         float contact = AmbientParams.w;
@@ -75,6 +79,7 @@ NFX_ENTRY(id)
             if (Blocked(origin, dir2, min(0.4, ambientDistance), false))
                 ambient *= 1.0 - contact;
         }
+        Surface.Store(index * 48 + 44, asuint(travelled));
     }
     Output.Store4(index * 16, asuint(float4(ambient, 1.0)));
 }

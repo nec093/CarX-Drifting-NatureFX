@@ -55,6 +55,8 @@
 #include "SunShadow619.h"     // g_SunShadow619: shaders/SunShadow.hlsl for the DXR 1.2 device (SM 6.9, alpha masks)
 #include "NrdSigmaPack.h"     // g_NrdSigmaPack: shaders/NrdSigmaPack.hlsl (SIGMA's inputs, Nrd.inl)
 #include "NrdSigmaUnpack.h"   // g_NrdSigmaUnpack: shaders/NrdSigmaUnpack.hlsl (SIGMA's shadow back)
+#include "NrdReblurPack.h"    // g_NrdReblurPack: shaders/NrdReblurPack.hlsl (REBLUR's inputs, Nrd.inl)
+#include "NrdReblurUnpack.h"  // g_NrdReblurUnpack: shaders/NrdReblurUnpack.hlsl (REBLUR's ambient light back)
 
 using Microsoft::WRL::ComPtr;
 
@@ -1754,12 +1756,15 @@ void UNITY_INTERFACE_API OnRenderEvent(int eventId) {
 // NRD after a trace (Nrd.inl)
 struct NrdEventData;
 void NrdSigma(const NrdEventData* data);
+void NrdReblur(const NrdEventData* data);
 
 void UNITY_INTERFACE_API OnRenderEventAndData(int eventId, void* data) {
 	if (eventId == 3) {
 		Trace(static_cast<const TraceEventData*>(data));
 	} else if (eventId == 5) {
 		NrdSigma(static_cast<const NrdEventData*>(data));
+	} else if (eventId == 6) {
+		NrdReblur(static_cast<const NrdEventData*>(data));
 	}
 }
 
