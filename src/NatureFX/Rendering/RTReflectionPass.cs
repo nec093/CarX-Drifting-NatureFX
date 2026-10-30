@@ -132,8 +132,8 @@ namespace NatureFX.Rendering {
 			props_.SetTexture(RTSurfaceTrace.NormalTex, Surfaces.Normal);
 			props_.SetVector(TargetSize, low);
 			props_.SetVector(LowSize, low);
-			// still camera: progressive accumulation down to 1/128 (HistoryGuard.StillBlend)
-			props_.SetVector(ComposeParams, new Vector4(1.0f, 0.0f, resetHistory ? 1.0f : History.StillBlend(Mathf.Clamp01(TemporalBlend), 1.0f / 128.0f), frame_));
+			// still camera: progressive accumulation down to 1/64 (HistoryGuard.StillBlend)
+			props_.SetVector(ComposeParams, new Vector4(1.0f, 0.0f, resetHistory ? 1.0f : History.StillBlend(Mathf.Clamp01(TemporalBlend), 1.0f / 64.0f), frame_));
 			var history = flip_ ? historyA_ : historyB_;
 			var previous = flip_ ? historyB_ : historyA_;
 			props_.SetTexture(TraceTex, trace_);
