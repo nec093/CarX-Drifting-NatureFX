@@ -83,7 +83,20 @@ Shader "Hidden/NatureFX/RTShadow"
         return lerp(history, current, _NFX_ShadowCompose.z);
     }
 
-    // a-trous blur along surfaces (depth and normal weights): smooths the ambient light
+    // How far a neighbour lies off the centre's surface plane, against a tolerance growing with distance: 1 on the
+    // same surface, towards 0 off it. A plain depth difference rejected every neighbour above and below on a floor
+    // seen at a grazing angle (its depth changes fast down the screen) and blurred only sideways: streaks.
+    float PlaneWeight(float3 centerPos, float3 centerNormal, float centerDepth, uint2 sp)
+    {
+        float deviceDepth = LoadCameraDepth(sp);
+        if (deviceDepth == UNITY_RAW_FAR_CLIP_VALUE)
+            return 0.0;
+        float3 p = ComputeWorldSpacePosition((sp + 0.5) * _ScreenSize.zw, deviceDepth, UNITY_MATRIX_I_VP);
+        float off = abs(dot(centerNormal, p - centerPos));
+        return exp(-off / max(centerDepth * 0.01, 0.02));
+    }
+
+    // a-trous blur along surfaces (plane and normal weights): smooths the ambient light
     float4 Denoise(Varyings v) : SV_Target
     {
         UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(v);
@@ -95,6 +108,7 @@ Shader "Hidden/NatureFX/RTShadow"
         float centerDepth = LinearEyeDepth(depth, _ZBufferParams);
         NormalData nd;
         DecodeFromNormalBuffer(pixel, nd);
+        float3 centerPos = ComputeWorldSpacePosition((pixel + 0.5) * _ScreenSize.zw, depth, UNITY_MATRIX_I_VP);
 
         // the 3 x 3 taps first: their luminance spread says how noisy the signal is here (SVGF's edge stopping on
         // luminance, with the variance taken from the neighbourhood instead of a temporal moment buffer)
@@ -123,10 +137,9 @@ Shader "Hidden/NatureFX/RTShadow"
             int y = i / 3 - 1;
             float2 suv = uv + float2(x, y) * _NFX_DenoiseStep * _NFX_TargetSize.zw;
             uint2 sp = FullPixel(suv);
-            float sd = LinearEyeDepth(LoadCameraDepth(sp), _ZBufferParams);
             NormalData snd;
             DecodeFromNormalBuffer(sp, snd);
-            float w = exp(-abs(sd - centerDepth) / max(centerDepth * 0.01, 0.02))
+            float w = PlaneWeight(centerPos, nd.normalWS, centerDepth, sp)
                       * pow(saturate(dot(nd.normalWS, snd.normalWS)), 32.0)
                       * ((x == 0 && y == 0) ? 1.0 : !guided ? 0.6 : (x == 0 || y == 0) ? 0.5 : 0.25); // guided: B-spline like
             if (guided && _NFX_DenoiseStep < 2.5)
@@ -179,6 +192,7 @@ Shader "Hidden/NatureFX/RTShadow"
 
         NormalData nd;
         DecodeFromNormalBuffer(pixel, nd);
+        float3 centerPos = ComputeWorldSpacePosition((pixel + 0.5) * _ScreenSize.zw, depth, UNITY_MATRIX_I_VP);
         float4 sum = 0.0;
         float weights = 0.0;
         [unroll]
@@ -190,10 +204,9 @@ Shader "Hidden/NatureFX/RTShadow"
                 float2 offset = float2(x, y) * _NFX_DenoiseStep;
                 float2 suv = uv + offset * _NFX_TargetSize.zw;
                 uint2 sp = FullPixel(suv);
-                float sd = LinearEyeDepth(LoadCameraDepth(sp), _ZBufferParams);
                 NormalData snd;
                 DecodeFromNormalBuffer(sp, snd);
-                float w = exp(-abs(sd - centerDepth) / max(centerDepth * 0.01, 0.02))
+                float w = PlaneWeight(centerPos, nd.normalWS, centerDepth, sp)
                           * pow(saturate(dot(nd.normalWS, snd.normalWS)), 32.0)
                           * exp(-dot(offset, offset) / (2.0 * sigma * sigma));
                 sum += SampleRT(_NFX_SourceTex, suv) * w;

@@ -87,17 +87,33 @@ NFX_ENTRY(id)
                     }
                 }
                 bent = normalize(lerp(viewDir, bent, strength));
+                // what the bent ray finds: the camera colour where it is on screen, else shaded here (inside a ball's
+                // outline the screen holds the ball, whose depth never matched: nothing was bent there), the sky if
+                // nothing. It replaces what the pixel shows now.
+                float3 refracted;
                 Hit behind;
                 if (Closest(origin, bent, 100.0, false, behind))
                 {
-                    float3 refracted;
-                    float3 straight;
-                    float seen = ScreenVisibility(origin + bent * behind.t, refracted);
-                    seen = min(seen, ScreenVisibility(Camera + viewDir * a.w, straight));
-                    float through = 1.0 - result.w;
-                    result.rgb += (refracted - straight) * seen * through;
-                    result.w = max(result.w, 1e-3); // something to compose even where nothing is reflected
+                    float3 hitAWS = origin + bent * behind.t;
+                    float seen = ScreenVisibility(hitAWS, refracted);
+                    if (seen < 0.999)
+                    {
+                        float hitSky;
+                        float3 shaded = max(ShadeReflectedHit(SurfaceAt(behind, bent, -1.0), hitAWS, bent, Hash22(pixel, FrameIndex, 9), hitSky), 0.0);
+                        if (any(!isfinite(shaded)))
+                            shaded = 0.0;
+                        refracted = lerp(shaded * exposure, refracted, seen);
+                    }
                 }
+                else
+                {
+                    refracted = SampleSH9(bent) * exposure;
+                }
+                uint3 own = Screen.Load3((pixel.y * (uint)ScreenSize.x + pixel.x) * 12);
+                float3 straight = float3(f16tof32(own.x & 0xFFFFu), f16tof32(own.x >> 16), f16tof32(own.y & 0xFFFFu));
+                float through = 1.0 - result.w;
+                result.rgb += (refracted - straight) * through;
+                result.w = max(result.w, 1e-3); // something to compose even where nothing is reflected
             }
         }
     }

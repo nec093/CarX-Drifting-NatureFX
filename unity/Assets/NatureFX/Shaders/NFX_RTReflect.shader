@@ -129,6 +129,7 @@ Shader "Hidden/NatureFX/RTReflect"
             return center;
 
         float centerDepth = LinearEyeDepth(depth, _ZBufferParams);
+        float3 centerPos = ComputeWorldSpacePosition((pixel + 0.5) * _ScreenSize.zw, depth, UNITY_MATRIX_I_VP);
         float4 sum = center;
         float weights = 1.0;
         [unroll]
@@ -141,10 +142,13 @@ Shader "Hidden/NatureFX/RTReflect"
                     continue;
                 float2 suv = uv + float2(x, y) * _NFX_DenoiseStep * spread * _NFX_TargetSize.zw;
                 uint2 sp = min((uint2)(saturate(suv) * _ScreenSize.xy), (uint2)_ScreenSize.xy - 1);
-                float sd = LinearEyeDepth(LoadCameraDepth(sp), _ZBufferParams);
+                // off the centre's surface plane (a depth difference blurred grazing floors only sideways: streaks)
+                float sDepth = LoadCameraDepth(sp);
+                float3 sPos = ComputeWorldSpacePosition((sp + 0.5) * _ScreenSize.zw, sDepth, UNITY_MATRIX_I_VP);
+                float off = sDepth == UNITY_RAW_FAR_CLIP_VALUE ? 1e4 : abs(dot(nd.normalWS, sPos - centerPos));
                 NormalData snd;
                 DecodeFromNormalBuffer(sp, snd);
-                float w = exp(-abs(sd - centerDepth) / max(centerDepth * 0.02, 0.05))
+                float w = exp(-off / max(centerDepth * 0.02, 0.05))
                           * pow(saturate(dot(nd.normalWS, snd.normalWS)), 16.0)
                           * exp(-abs(ReflRoughness(sp, snd.perceptualRoughness) - roughness) * 8.0)
                           * 0.6 * saturate(spread);
