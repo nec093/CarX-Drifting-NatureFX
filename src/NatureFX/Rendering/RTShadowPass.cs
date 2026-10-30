@@ -342,13 +342,15 @@ namespace NatureFX.Rendering {
 			// ambient light: a longer history (about 20 frames) and a fifth, wider blur step. Ambient light and lamp
 			// shadows (two lights a pixel) get blur steps of 1, 2, 4 and 8 pixels: two left them grainy.
 			float slowBlend = resetHistory ? 1.0f : Mathf.Min(blend, 0.1f);
-			// at quarter resolution a trace pixel already spans twice as much: one step fewer for the same reach
-			int wide = QuarterResolution ? 3 : 4;
+			// at quarter resolution a trace pixel already spans twice as much: one step fewer for the same reach.
+			// Wider blurs only smeared the noise into blotches and softened the contact shadows: the noise goes in time
+			// instead, still pixels keeping a quarter of the blend (about 40 frames).
+			int wide = QuarterResolution ? 2 : 3;
 			var ambientResult = TraceAO
-				? giUsed_ ? Filter(cmd, ambient_, ambientSize, resetHistory ? 1.0f : Mathf.Min(blend, 0.05f), PassDenoise, sunRadius, fov, wide + 1)
-				          : Filter(cmd, ambient_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide)
+				? giUsed_ ? Filter(cmd, ambient_, ambientSize, resetHistory ? 1.0f : Mathf.Min(blend, 0.05f), PassDenoise, sunRadius, fov, wide + 1, false, 0.25f)
+				          : Filter(cmd, ambient_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, 0.25f)
 				: null;
-			var localResult = localShadows ? Filter(cmd, local_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide) : null;
+			var localResult = localShadows ? Filter(cmd, local_, ambientSize, slowBlend, PassDenoise, sunRadius, fov, wide, false, 0.25f) : null;
 			// one sample per pixel along a whole view ray: lean on the history longer than the surfaces do
 			var shaftResult = Shafts ? Filter(cmd, shafts_, shaftSize, resetHistory ? 1.0f : blend * 0.5f, PassDenoise, sunRadius, fov, 3) : null;
 
@@ -387,10 +389,10 @@ namespace NatureFX.Rendering {
 
 		// Temporal accumulation and two a-trous steps; returns the filtered buffer
 		private RTHandle Filter(CommandBuffer cmd, Accumulation a, Vector4 size, float blend, int denoisePass, float sunRadius, float fov, int steps = 2,
-		                        bool oneFrameLate = false) {
+		                        bool oneFrameLate = false, float stillShare = 1.0f) {
 			props_.Clear();
 			props_.SetVector(TargetSize, size);
-			props_.SetVector(ShadowCompose, new Vector4(oneFrameLate ? 1.0f : 0.0f, 0.0f, blend, 0.0f));
+			props_.SetVector(ShadowCompose, new Vector4(oneFrameLate ? 1.0f : 0.0f, 0.0f, blend, stillShare));
 			// penumbra width in trace pixels: blocker distance * 2 tan(sun radius) over the size of a pixel there
 			float pixelAngle = 2.0f * Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad) / Mathf.Max(1.0f, size.y);
 			props_.SetVector(SunFilter, new Vector4(2.0f * Mathf.Tan(sunRadius), pixelAngle, 0.0f, 0.0f));

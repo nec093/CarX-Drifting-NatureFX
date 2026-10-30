@@ -80,7 +80,12 @@ Shader "Hidden/NatureFX/RTShadow"
             }
         }
         float4 history = clamp(SampleRT(_NFX_HistoryTex, prevUV), lo, hi);
-        return lerp(history, current, _NFX_ShadowCompose.z);
+        // where nothing moves on screen the history is as good as new: it builds up over more frames there
+        // (_NFX_ShadowCompose.w the share of the blend kept when still; 1 for the sun, whose shadows move with cars
+        // over still ground)
+        float moved = length(motion * _ScreenSize.xy);
+        float blend = _NFX_ShadowCompose.z * lerp(_NFX_ShadowCompose.w, 1.0, saturate(moved * 0.5));
+        return lerp(history, current, blend);
     }
 
     // How far a neighbour lies off the centre's surface plane, against a tolerance growing with distance: 1 on the
