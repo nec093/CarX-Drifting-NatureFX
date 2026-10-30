@@ -467,13 +467,13 @@ namespace NatureFX.Editor {
 			// Windows lets the bundle be overwritten while the game has it loaded, and the game then reads a mix of
 			// both ("archive ... is corrupted"): copy it only while the game is closed
 			if (System.Diagnostics.Process.GetProcessesByName("Drift Racing Online").Length > 0) {
-				// a copy under a new name in reload/, which the running game loads on Settings > Reload shaders
+				// a copy under a new name in reload/, which the running game loads on Developer > Reload shaders
 				// (ShaderBundle.Reload); naturefx.bundle itself waits for the game to close
 				string reload = Path.Combine(target, "reload");
 				Directory.CreateDirectory(reload);
 				string copy = Path.Combine(reload, $"naturefx-{System.DateTime.Now:yyyyMMdd-HHmmss}.bundle");
 				File.Copy(built, copy, true);
-				Debug.Log($"[NatureFX] The game is running: copied to {copy} (Settings > Reload shaders loads it; " +
+				Debug.Log($"[NatureFX] The game is running: copied to {copy} (Developer > Reload shaders loads it; " +
 				          $"copy {built} to {target} once the game is closed)");
 				return true;
 			}

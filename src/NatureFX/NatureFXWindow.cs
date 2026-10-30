@@ -18,7 +18,7 @@ namespace NatureFX {
 		private const float SidebarWidth = 150;
 		private const float DefaultScale = 0.85f;
 
-		private static readonly string[] Tabs = { "Overview", "Sun", "Weather", "Road & cars", "Nature", "Settings", "Reflections", "RT shadows", "RT ambient light", "Exposure & tone", "Shader rebuild" };
+		private static readonly string[] Tabs = { "Overview", "Sun", "Weather", "Road & cars", "Nature", "Settings", "Reflections", "RT shadows", "RT ambient light", "Exposure & tone", "Shader rebuild", "Developer" };
 		private static readonly string[] TonemapNames = { "ACES", "Neutral", "Filmic (GT)", "None" };
 		private static readonly string[] ReflectionQualityNames = { "Performance", "Balanced", "Quality" };
 		private static readonly string[] BackendNames = { "DXR 1.0", "DXR 1.1" };
@@ -177,6 +177,7 @@ namespace NatureFX {
 				case 8: DrawRayTracedAO(); break;
 				case 9: DrawExposureAndTone(); break;
 				case 10: DrawShaderRebuild(); break;
+				case 11: DrawDeveloper(); break;
 			}
 		}
 
@@ -222,7 +223,7 @@ namespace NatureFX {
 			("RAY TRACING", new[] { 6, 7, 8 }),
 			("CAMERA", new[] { 9 }),
 			("REBUILD", new[] { 10 }),
-			("OTHER", new[] { 5 })
+			("OTHER", new[] { 5, 11 })
 		};
 
 		private static (string Name, int[] Tabs)[] VisibleGroups => S.DevRayTracingOnly ? RayTracingGroups : Groups;
@@ -231,7 +232,7 @@ namespace NatureFX {
 			("GENERAL", new[] { 0 }),
 			("LIGHT", new[] { 1, 6, 7, 8 }),
 			("WORLD", new[] { 2, 4, 3 }),
-			("OTHER", new[] { 5 })
+			("OTHER", new[] { 5, 11 })
 		};
 
 		private void DrawSidebar() {
@@ -886,8 +887,10 @@ namespace NatureFX {
 			Other(Widgets.Switch("Wet look on unreplaced HDRP/Lit", S.WetGameMaterials, v => S.WetGameMaterials = v));
 			Widgets.EndCard();
 			DrawMapProfile();
+		}
 
-			Widgets.Heading("DEVELOPER");
+		// tools for working on NatureFX itself: reload, status, diagnostics, variant recording
+		private void DrawDeveloper() {
 			DrawRayTracingOnly();
 			Widgets.BeginCard("Reload shaders", "Without a restart: the newest shader bundle in kino/mods/NatureFX/reload/ (the bundle build " +
 				"puts one there while the game runs) and the engine's shaders in NativeShaders/ (tools/build_native.ps1 -ShadersOnly). " +

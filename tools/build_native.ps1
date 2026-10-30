@@ -69,7 +69,7 @@ $shaderDest = Join-Path $dest 'NativeShaders'
 New-Item -ItemType Directory -Force $shaderDest | Out-Null
 Copy-Item -Force (Join-Path $out '*.cso') $shaderDest
 if ($ShadersOnly) {
-	Write-Host "[NFXNative] Shaders copied to $shaderDest (Settings > Reload shaders in the game)"
+	Write-Host "[NFXNative] Shaders copied to $shaderDest (Developer > Reload shaders in the game)"
 	return
 }
 $nrdLibs = "`"$(Join-Path $nrd '_Bin\NRD.lib')`" `"$(Join-Path $nrd '_Build\_deps\shadermake-build\ShaderMakeBlob.lib')`""

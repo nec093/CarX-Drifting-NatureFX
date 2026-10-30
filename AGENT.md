@@ -19,7 +19,7 @@
 
 - バンドルのビルドは長い。`NFX_Accumulation.hlsl` など全マテリアル共通の hlsl を変えると 1248 バリアントを全部コンパイルし直すので **40〜50 分**かかる。RT の合成シェーダーだけなら数分。必ずバックグラウンドで実行する。
 - ビルドスクリプトは開始時にソースを Unity プロジェクトへコピーするので、ビルド中にリポジトリを編集してよい。
-- **再起動なしのシェーダー再読み込み**: ゲーム起動中にバンドルをビルドすると `kino/mods/NatureFX/reload/naturefx-<日時>.bundle` に別名で置かれる。独自エンジンのシェーダーは `powershell -File tools/build_native.ps1 -ShadersOnly` で `NativeShaders/*.cso` に置かれる（DLL は作らない）。ゲームの Settings > DEVELOPER > Reload shaders で両方を読み直す（バンドルは同名シェーダーのマテリアルを差し替え、エンジンは描画イベント 8 でトレースのパイプラインと NRD の受け渡しカーネルを作り直す）。C#・C++・構造体の配置を変えたときは再起動が必要。再起動後は DLL に埋め込まれたシェーダーに戻るので、変更を残すには通常のビルドもする。
+- **再起動なしのシェーダー再読み込み**: ゲーム起動中にバンドルをビルドすると `kino/mods/NatureFX/reload/naturefx-<日時>.bundle` に別名で置かれる。独自エンジンのシェーダーは `powershell -File tools/build_native.ps1 -ShadersOnly` で `NativeShaders/*.cso` に置かれる（DLL は作らない）。ゲームの Developer > Reload shaders で両方を読み直す（バンドルは同名シェーダーのマテリアルを差し替え、エンジンは描画イベント 8 でトレースのパイプラインと NRD の受け渡しカーネルを作り直す）。C#・C++・構造体の配置を変えたときは再起動が必要。再起動後は DLL に埋め込まれたシェーダーに戻るので、変更を残すには通常のビルドもする。
 - ゲーム起動中は `NFXNative.dll` がロックされてコピーに失敗する。`naturefx.bundle` は**ロックされず上書きできてしまい、ゲームが壊れたバンドルを読む**（"archive ... is corrupted"）。バンドルのビルドはゲーム起動中ならコピーしないようにしてある。どちらもゲームを閉じてからコピーする。MOD（.ksm）と DLL の API が変わったときは、両方そろうまで起動しない。
 - ネイティブのビルドには VS（vcvars64）、Windows SDK の dxc.exe（SM 6.6 以降）、Unity エディタの `Editor/Data/PluginAPI` ヘッダーを使う。Unity のヘッダーはリポジトリにコピーしない。
 
