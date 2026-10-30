@@ -91,5 +91,7 @@ NFX_ENTRY(id)
             }
         }
     }
-    Output.Store4(index * 16, asuint(float4(blocked, 1.0)));
+    // half float targets: a headlight blocked right in front of it puts far more lux than they hold (an infinity,
+    // then NaN in the composite, spreading through the history as dots)
+    Output.Store4(index * 16, asuint(float4(clamp(blocked, -60000.0, 60000.0), 1.0)));
 }

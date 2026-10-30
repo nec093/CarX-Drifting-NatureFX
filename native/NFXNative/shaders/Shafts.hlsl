@@ -19,5 +19,5 @@ NFX_ENTRY(id)
         if (!Blocked(a.xyz, dir, 2000.0, b.y > 0.5))
             inscatter = SunColor * a.w;
     }
-    Output.Store4(index * 16, asuint(float4(inscatter, 1.0)));
+    Output.Store4(index * 16, asuint(float4(min(inscatter, 60000.0), 1.0))); // half float targets
 }

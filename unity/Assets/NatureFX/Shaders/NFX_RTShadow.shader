@@ -301,6 +301,8 @@ Shader "Hidden/NatureFX/RTShadow"
             // never more than 95 % of the pixel's brightness, scaled as a whole: clamping each channel took the warm
             // lamp light's red and green away and left blue speckles where a noisy sample overshot
             float3 removed = Upsample(3, _NFX_LocalSize, uv, linearDepth).rgb * localDiffuse * GetCurrentExposureMultiplier();
+            if (any(!isfinite(removed)))
+                removed = 0.0;
             float removedLum = Luminance(removed);
             if (removedLum > 0.0)
                 removed *= min(1.0, 0.95 * Luminance(color) / removedLum);
