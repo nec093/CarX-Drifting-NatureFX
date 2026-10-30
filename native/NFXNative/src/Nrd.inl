@@ -606,7 +606,12 @@ void NrdReblur(const NrdEventData* data) {
 	bool two = data->mode == 1 || data->mode == 2;
 	UINT constants[4] = { data->width, data->height, data->mode, 0 };
 	NrdPack(list, c, data, 2, constants);
+	// one ray a pixel (GI, ambient light) or two lights (lamps): the fast history (6 frames by default), which the
+	// long one is clamped to, followed the noise and the image flickered on a moving car. A longer fast history and
+	// a looser clamp; the long history and the anti-lag stay REBLUR's.
 	nrd::ReblurSettings reblur = {};
+	reblur.maxFastAccumulatedFrameNum = 10;
+	reblur.fastHistoryClampingSigmaScale = 2.5f;
 	nrd::Identifier ids[2] = { 0, 1 };
 	const void* settings[] = { &reblur, &reblur };
 	uint32_t dispatched = 0;
