@@ -304,6 +304,7 @@ namespace NatureFX.Rendering {
 			RTTimings.ShadowTrace.Begin(cmd);
 			if (TraceShadows) {
 				RTTimings.Sun.Begin(cmd);
+				NativeEngine.NrdReset = resetHistory;
 				NativeEngine.TraceSun(cmd, Bridge, ctx, Surfaces.Normal, sun_.Raw, sunSize);
 				RTTimings.Sun.End(cmd);
 			}
@@ -341,9 +342,10 @@ namespace NatureFX.Rendering {
 			float StillShare(float moving, float floor) => moving >= 1.0f ? 1.0f : History.StillBlend(moving, floor) / Mathf.Max(moving, 1e-4f);
 			bool converged = History.StillFrames > 30;
 			// the DXR 1.2 device's sun shadows arrive one frame late (RtDevice.inl): the filter reads them reprojected
-			var sunResult = TraceShadows
-				? Filter(cmd, sun_, sunSize, blend, PassDenoiseSun, sunRadius, fov, 2, NativeEngine.Dxr12SunActive, StillShare(blend, 1.0f / 16.0f))
-				: null;
+			// NRD's SIGMA (NativeEngine.NrdSigma) already denoised them, history included: passed through as they are
+			var sunResult = !TraceShadows ? null
+				: NativeEngine.NrdSigma ? Filter(cmd, sun_, sunSize, 1.0f, PassDenoiseSun, sunRadius, fov, 0)
+				: Filter(cmd, sun_, sunSize, blend, PassDenoiseSun, sunRadius, fov, 2, NativeEngine.Dxr12SunActive, StillShare(blend, 1.0f / 16.0f));
 			// GI: one ray per half resolution pixel with every bounce behind it varies far more than the one bounce
 			// ambient light: a longer history (about 20 frames) and a fifth, wider blur step. Ambient light and lamp
 			// shadows (two lights a pixel) get blur steps of 1, 2, 4 and 8 pixels: two left them grainy.

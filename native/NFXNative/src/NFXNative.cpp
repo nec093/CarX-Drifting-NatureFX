@@ -53,6 +53,8 @@
 #include "PackSunUnpackOut.h" // g_PackSunUnpackOut: shaders/PackSun.hlsl (its result back for Unpack)
 #include "BakeOmm.h"          // g_BakeOmm: shaders/BakeOmm.hlsl (opacity micromaps from the alpha masks)
 #include "SunShadow619.h"     // g_SunShadow619: shaders/SunShadow.hlsl for the DXR 1.2 device (SM 6.9, alpha masks)
+#include "NrdSigmaPack.h"     // g_NrdSigmaPack: shaders/NrdSigmaPack.hlsl (SIGMA's inputs, Nrd.inl)
+#include "NrdSigmaUnpack.h"   // g_NrdSigmaUnpack: shaders/NrdSigmaUnpack.hlsl (SIGMA's shadow back)
 
 using Microsoft::WRL::ComPtr;
 
@@ -1749,9 +1751,15 @@ void UNITY_INTERFACE_API OnRenderEvent(int eventId) {
 	}
 }
 
+// NRD after a trace (Nrd.inl)
+struct NrdEventData;
+void NrdSigma(const NrdEventData* data);
+
 void UNITY_INTERFACE_API OnRenderEventAndData(int eventId, void* data) {
 	if (eventId == 3) {
 		Trace(static_cast<const TraceEventData*>(data));
+	} else if (eventId == 5) {
+		NrdSigma(static_cast<const NrdEventData*>(data));
 	}
 }
 
@@ -2018,6 +2026,7 @@ NFX_EXPORT int NFX_Native_Dxr12Probe(const char* sdkPath, char* buffer, int size
 }
 
 #include "RtDevice.inl"
+#include "Nrd.inl"
 
 // The game's video memory use as the OS counts it for this process (MB), and the budget it may use; 0 when unknown.
 // Lets the mod show what the settings cost and find memory that is not given back.

@@ -126,3 +126,9 @@ KN マップ側から揺れ方・雪の積もり方・区域ごとの天候を�
 - パストレーシングはカメラが動くとリセットされるため、走行中ではなくスクリーンショット用です
 - ゲームのアップデートでシェーダー名が変わると差し替えルールの更新が必要です
 - HLSL ファイルは Unity 上でまだコンパイルしていません。Shader Graph 作成時にエラーが出たら知らせてください
+
+## 使用しているサードパーティ SDK
+
+- **NVIDIA Real-Time Denoisers (NRD)**: レイトレースの影のノイズ除去（「NRD SIGMA (sun)」）に NVIDIA の NRD を使用しています。
+  NVIDIA, the NVIDIA logo and NRD are trademarks and/or registered trademarks of NVIDIA Corporation.
+  NRD は NVIDIA RTX SDKs License に従って配布されます（NatureFX の独自エンジン `NFXNative.dll` にオブジェクトコードとして組み込み）。

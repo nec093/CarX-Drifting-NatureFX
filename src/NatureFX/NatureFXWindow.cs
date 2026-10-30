@@ -828,11 +828,14 @@ namespace NatureFX {
 			Widgets.Info(scale == 0 ? "Ambient light, GI and lamp shadows at half resolution."
 				: "Ambient light, GI and lamp shadows at quarter resolution, a different pixel of each 2x2 block every frame, built up over frames and upscaled by depth: about a quarter of the rays.");
 			int denoiser = Mathf.Clamp(S.RTDenoiser, 0, 1);
-			if (Widgets.Chips(ref denoiser, new[] { "Simple blur", "Variance guided" })) {
+			if (Widgets.Chips(ref denoiser, new[] { "Simple blur", "Variance guided", "NRD SIGMA (sun)" })) {
 				S.RTDenoiser = denoiser;
 				Other(true);
 			}
-			Widgets.Info(denoiser == 0 ? "A fixed blur along surfaces." : "Blurs where the rays disagree and keeps detail where they agree (sharper contact shadows, less smear).");
+			Widgets.Info(denoiser == 0 ? "A fixed blur along surfaces."
+				: denoiser == 1 ? "Blurs where the rays disagree and keeps detail where they agree (sharper contact shadows, less smear)."
+				: "The sun shadows go through NVIDIA's SIGMA denoiser (NVIDIA Real-Time Denoisers); the rest as Variance guided. " +
+				  $"Now: {NativeEngine.NrdStatus}");
 			Other(Widgets.Switch("Measurement overlay", S.RTOverlay, v => S.RTOverlay = v,
 				"GPU time of each ray traced stage, rays per frame, lamps, scene size and GPU memory, at the top left of the screen."));
 			if (backend == 1) {

@@ -269,8 +269,11 @@ namespace NatureFX.Rendering {
 				                $"refraction {(glassOn ? glass_.Refraction.ToString("0.00") : "off (needs glass reflections)")}, " +
 				                $"wet streaks {On(reflection_ != null && reflection_.enabled && reflection_.WetStreaks)} (wetness {Mathf.Max(NatureFX.Nature.Weather.Current.Wetness, NatureFX.Nature.Weather.Current.Rain):0.00}), " +
 				                $"glowing surfaces {On(lights_.Emissive)}, lamp shadows {On(LampShadows)}, " +
-				                $"{(shadows_ != null && shadows_.QuarterResolution ? "quarter" : "half")} resolution, {(shadows_ != null && shadows_.VarianceDenoiser ? "variance" : "simple")} denoiser");
+				                $"{(shadows_ != null && shadows_.QuarterResolution ? "quarter" : "half")} resolution, {(NativeEngine.NrdSigma ? "NRD SIGMA (sun) + variance" : shadows_ != null && shadows_.VarianceDenoiser ? "variance" : "simple")} denoiser");
 				text.AppendLine($"shadows: {ShadowStatus}");
+				if (NativeEngine.NrdSigma) {
+					text.AppendLine($"NRD: {NativeEngine.NrdStatus}");
+				}
 				text.AppendLine($"reflections: {ReflectionStatus}");
 				text.Append($"glass: {GlassStatus}");
 				overlay_ = text.ToString();
@@ -409,7 +412,8 @@ namespace NatureFX.Rendering {
 				lights_.Emissive = s.RTEmissiveLights;
 				NativeEngine.GlassShadows = s.RTGlassShadows;
 				shadows_.QuarterResolution = s.RTTraceScale == 1;
-				shadows_.VarianceDenoiser = s.RTDenoiser == 1;
+				shadows_.VarianceDenoiser = s.RTDenoiser >= 1;
+				NativeEngine.NrdSigma = s.RTDenoiser == 2 && s.Enabled;
 				shadows_.ShaftDensity = s.RTShaftDensity;
 				shadows_.ShaftAnisotropy = s.RTShaftAnisotropy;
 				shadows_.SunAngularDiameter = Mathf.Clamp(s.SunSize, 0.05f, 5.0f);

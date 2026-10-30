@@ -17,6 +17,7 @@
 #pragma kernel PrepareReflection
 #pragma kernel UnpackReflection
 #pragma kernel PrepareGlass
+#pragma kernel PrepareNrdGuide
 
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
 #include "Packages/com.unity.render-pipelines.high-definition/Runtime/ShaderLibrary/ShaderVariables.hlsl"
@@ -352,4 +353,27 @@ void UnpackReflection(uint3 id : SV_DispatchThreadID)
     uint index = id.y * (uint)_NFX_TargetSize.x + id.x;
     _NFX_NativeTarget[COORD_TEXTURE2D_X(id.xy)] = _NFX_NativeResult[index * 2];
     _NFX_NativeTarget2[COORD_TEXTURE2D_X(id.xy)] = _NFX_NativeResult[index * 2 + 1];
+}
+
+// NRD's guides per sun trace pixel (NFXNative Nrd.inl: SIGMA denoises the sun shadows): world normal and linear
+// (perceptual) roughness, then linear view depth (1e6 for the sky, outside the denoising range) and the motion to the
+// previous frame in uv (NRD wants previous - current; HDRP's motion vector is current - previous)
+RWStructuredBuffer<float4> _NFX_NrdGuide;
+TEXTURE2D_X(_NFX_MotionVectors);
+
+[numthreads(8, 8, 1)]
+void PrepareNrdGuide(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    uint index = id.y * (uint)_NFX_TargetSize.x + id.x;
+    uint2 pixel = TracePixel(id.xy);
+    float depth = LOAD_TEXTURE2D_X(_CameraDepthTexture, pixel).r;
+    NormalData nd;
+    DecodeFromNormalBuffer(pixel, nd);
+    float2 motion = LOAD_TEXTURE2D_X(_NFX_MotionVectors, pixel).xy;
+    float viewZ = depth == UNITY_RAW_FAR_CLIP_VALUE ? 1e6 : LinearEyeDepth(depth, _ZBufferParams);
+    _NFX_NrdGuide[index * 2] = float4(nd.normalWS, nd.perceptualRoughness);
+    _NFX_NrdGuide[index * 2 + 1] = float4(viewZ, -motion, 0.0);
 }

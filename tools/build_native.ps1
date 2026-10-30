@@ -50,7 +50,17 @@ foreach ($entry in @('PackIn', 'UnpackOut')) {
 }
 $agilityInclude = Join-Path $agility 'build\native\include'
 
-$cl = "cl /nologo /O2 /EHsc /std:c++17 /utf-8 /W3 /LD /I`"$agilityInclude`" /I`"$pluginApi`" /I`"$out`" /I`"$probe`" `"$src\src\NFXNative.cpp`" /Fo`"$out\\`" /link d3d12.lib dxgi.lib /OUT:`"$out\NFXNative.dll`" /IMPLIB:`"$out\NFXNative.lib`""
+# NVIDIA Real-Time Denoisers (Nrd.inl): the static library built from %USERPROFILE%\NatureFX-Deps\NRD (cmake, NMake,
+# NRD_STATIC_LIBRARY=ON, DXIL only, /MT) and NRD.hlsli for the pack / unpack shaders
+$nrd = if ($env:NFX_NRD) { $env:NFX_NRD } else { Join-Path $env:USERPROFILE 'NatureFX-Deps\NRD' }
+foreach ($name in @('NrdSigmaPack', 'NrdSigmaUnpack')) {
+	& $dxc -nologo -T cs_6_6 -E main -O3 -I (Join-Path $nrd 'Shaders') -Vn "g_$name" -Fh (Join-Path $out "$name.h") (Join-Path $src "shaders\$name.hlsl")
+	if ($LASTEXITCODE -ne 0) { throw "dxc failed on $name" }
+}
+$nrdInclude = Join-Path $nrd 'Include'
+$nrdLibs = "`"$(Join-Path $nrd '_Bin\NRD.lib')`" `"$(Join-Path $nrd '_Build\_deps\shadermake-build\ShaderMakeBlob.lib')`""
+
+$cl = "cl /nologo /O2 /EHsc /std:c++17 /utf-8 /W3 /LD /I`"$agilityInclude`" /I`"$pluginApi`" /I`"$out`" /I`"$probe`" /I`"$nrdInclude`" `"$src\src\NFXNative.cpp`" /Fo`"$out\\`" /link d3d12.lib dxgi.lib $nrdLibs /OUT:`"$out\NFXNative.dll`" /IMPLIB:`"$out\NFXNative.lib`""
 cmd /c "`"$vcvars`" >nul && $cl"
 if ($LASTEXITCODE -ne 0) { throw 'cl failed' }
 

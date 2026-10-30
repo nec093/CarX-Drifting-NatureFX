@@ -51,6 +51,7 @@ namespace NatureFX.Rendering {
 		private static float nextMemoryLog_;
 		[DllImport(DllName)] private static extern void NFX_Native_SetWind(float[] frame, int active);
 		[DllImport(DllName)] private static extern int NFX_Native_RtStatus(byte[] buffer, int size);
+		[DllImport(DllName)] private static extern int NFX_Native_NrdStatus(byte[] buffer, int size);
 		[DllImport(DllName)] private static extern void NFX_Native_ClearScene();
 		[DllImport(DllName)] private static extern int NFX_Native_AddGeometry(IntPtr vertexBuffer, ulong vertexAddressOffset, uint vertexStride, uint vertexCount, int positionFormat,
 		                                                                      IntPtr indexBuffer, ulong indexAddressOffset, uint indexCount, int indexFormat, int opaque,
@@ -170,6 +171,25 @@ namespace NatureFX.Rendering {
 		public static bool OmmPaused { get; set; }      // benchmark: the DXR 1.2 device without its opacity micromaps
 		private static bool ommOff_;
 		public static bool Dxr12SunActive => rtActive_;  // the sun traces go to the DXR 1.2 device (one frame late)
+
+		// NVIDIA Real-Time Denoisers (NFXNative Nrd.inl): SIGMA denoises the sun shadows right after their trace (render
+		// event 5); the shadow pass then skips its own filter for them. Set per frame by RayTracingEffects.
+		public static bool NrdSigma;
+		public static bool NrdReset;       // the shadow pass dropped its history this frame
+		public static string NrdStatus {
+			get {
+				if (!NrdSigma) {
+					return "off";
+				}
+				try {
+					var buffer = new byte[256];
+					int length = NFX_Native_NrdStatus(buffer, buffer.Length);
+					return Encoding.UTF8.GetString(buffer, 0, Math.Max(0, length));
+				} catch (Exception e) {
+					return $"unavailable ({e.GetType().Name}: the engine's DLL is older than the mod)";
+				}
+			}
+		}
 		private static bool rtStarted_, rtFailed_, rtActive_;
 		private static float nextRtReport_;
 
@@ -630,9 +650,86 @@ namespace NatureFX.Rendering {
 			cmd.SetComputeBufferParam(bridge, prepare, NativeSunId, b.Result);
 			cmd.DispatchCompute(bridge, prepare, (width + 7) / 8, (height + 7) / 8, TextureXR.slices);
 			Issue(cmd, TraceSun_, b.SurfacePtr, b.ResultPtr, width, height);
+			if (NrdSigma) {
+				IssueNrdSigma(cmd, bridge, ctx, b, width, height, size);
+			}
 			cmd.SetComputeBufferParam(bridge, unpack, NativeSunId, b.Result);
 			cmd.SetComputeTextureParam(bridge, unpack, SunOutputId, sunOutput);
 			cmd.DispatchCompute(bridge, unpack, (width + 7) / 8, (height + 7) / 8, TextureXR.slices);
+		}
+
+		// SIGMA over the sun trace just issued: NRD's guides at the trace resolution (PrepareNrdGuide), then render event 5
+		// with the camera's matrices (NrdEventData in Nrd.inl, 320 bytes)
+		private static GraphicsBuffer nrdGuide_;
+		private static IntPtr nrdGuidePtr_;
+		private static int nrdGuidePixels_;
+		private static IntPtr nrdEvents_;
+		private static int nrdEvent_;
+		private const int NrdEventSize = 320;
+		private const int NrdEvents = 16;
+		private static readonly float[] nrdFloats_ = new float[NrdEventSize / 4];
+		private static Matrix4x4 nrdViewPrev_, nrdProjPrev_;
+		private static int nrdPrevFrame_ = -10;
+		private static readonly int NrdGuideId = Shader.PropertyToID("_NFX_NrdGuide");
+		private static readonly int MotionVectorsId = Shader.PropertyToID("_NFX_MotionVectors");
+
+		private static void IssueNrdSigma(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, TraceBuffers sun, int width, int height, Vector4 size) {
+			int pixels = width * height;
+			if (nrdGuide_ == null || nrdGuidePixels_ != pixels) {
+				if (nrdGuide_ != null) {
+					retired_.Add((nrdGuide_, Time.frameCount));
+				}
+				nrdGuidePixels_ = pixels;
+				nrdGuide_ = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, pixels * 2), 16) { name = "NFX_NrdGuide" };
+				nrdGuidePtr_ = nrdGuide_.GetNativeBufferPtr();
+			}
+			int kernel = bridge.FindKernel("PrepareNrdGuide");
+			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
+			cmd.SetComputeTextureParam(bridge, kernel, CameraDepthId, ctx.cameraDepthBuffer);
+			cmd.SetComputeTextureParam(bridge, kernel, NormalBufferId, ctx.cameraNormalBuffer);
+			cmd.SetComputeTextureParam(bridge, kernel, MotionVectorsId, ctx.cameraMotionVectorsBuffer);
+			cmd.SetComputeBufferParam(bridge, kernel, NrdGuideId, nrdGuide_);
+			cmd.DispatchCompute(bridge, kernel, (width + 7) / 8, (height + 7) / 8, TextureXR.slices);
+
+			var cam = ctx.hdCamera.camera;
+			var view = cam.worldToCameraMatrix;
+			var proj = cam.nonJitteredProjectionMatrix;
+			if (nrdPrevFrame_ != Time.frameCount - 1 && nrdPrevFrame_ != Time.frameCount) {
+				nrdViewPrev_ = view;
+				nrdProjPrev_ = proj;
+			}
+			var f = nrdFloats_;
+			Array.Clear(f, 0, f.Length);
+			// floats from byte 40 (after 3 pointers and 4 uints): tan radius, sun direction, 4 matrices, range, time
+			int o = 10;
+			f[o] = Mathf.Tan(sunRadius_);
+			f[o + 1] = sunDirection_.x; f[o + 2] = sunDirection_.y; f[o + 3] = sunDirection_.z;
+			for (int i = 0; i < 16; ++i) {
+				f[o + 4 + i] = proj[i];          // Matrix4x4[i]: column major, as NRD reads them
+				f[o + 20 + i] = nrdProjPrev_[i];
+				f[o + 36 + i] = view[i];
+				f[o + 52 + i] = nrdViewPrev_[i];
+			}
+			f[o + 68] = 5000.0f;                       // m: the sky (view depth 1e6 in the guides) is outside it
+			f[o + 69] = Time.unscaledDeltaTime * 1000.0f;
+			if (nrdPrevFrame_ != Time.frameCount) {
+				nrdPrevFrame_ = Time.frameCount;
+				nrdViewPrev_ = view;
+				nrdProjPrev_ = proj;
+			}
+			if (nrdEvents_ == IntPtr.Zero) {
+				nrdEvents_ = Marshal.AllocHGlobal(NrdEventSize * NrdEvents);
+			}
+			var slot = nrdEvents_ + NrdEventSize * (nrdEvent_++ % NrdEvents);
+			Marshal.Copy(f, 0, slot, f.Length);
+			Marshal.WriteIntPtr(slot, 0, nrdGuidePtr_);
+			Marshal.WriteIntPtr(slot, 8, sun.SurfacePtr);
+			Marshal.WriteIntPtr(slot, 16, sun.ResultPtr);
+			Marshal.WriteInt32(slot, 24, width);
+			Marshal.WriteInt32(slot, 28, height);
+			Marshal.WriteInt32(slot, 32, frame_);
+			Marshal.WriteInt32(slot, 36, NrdReset ? 1 : 0);
+			cmd.IssuePluginEventAndData(NFX_Native_RenderEventAndDataFunc(), 5, slot);
 		}
 
 		// The surfaces the ambient light and the local light shadows trace from (they share the resolution); the
