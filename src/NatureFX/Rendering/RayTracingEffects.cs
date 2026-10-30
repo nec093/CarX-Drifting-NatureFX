@@ -86,7 +86,7 @@ namespace NatureFX.Rendering {
 			}
 			dxrScene_ = new RayTracingScene(proxy);
 			NativeEngine.Bridge = bundle.GetCompute(NativeEngine.BridgeShaderName);
-			// Settings > Reload shaders: the passes' materials are switched by the bundle, the compute shader is held here
+			// Developer > Reload shaders: the passes' materials are switched by the bundle, the compute shader is held here
 			bundle.Reloaded += () => {
 				NativeEngine.Bridge = bundle.GetCompute(NativeEngine.BridgeShaderName);
 				if (shadows_ != null) {
