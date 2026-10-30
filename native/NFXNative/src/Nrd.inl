@@ -156,7 +156,19 @@ bool NrdPso(ID3D12RootSignature* root, const void* dxil, size_t size, ComPtr<ID3
 	return SUCCEEDED(g_device->CreateComputePipelineState(&d, IID_PPV_ARGS(&pso)));
 }
 
-bool NrdPackKernel(NrdKernel& k, UINT uavs, const void* dxil, size_t size) {
+// a shader file the reload took in, else the embedded one
+struct NrdCodeRef {
+	const void* dxil;
+	size_t size;
+};
+NrdCodeRef NrdCode(const char* name, const void* embedded, size_t size) {
+	D3D12_SHADER_BYTECODE code = ShaderCode(name, embedded, size);
+	return { code.pShaderBytecode, code.BytecodeLength };
+}
+
+bool NrdPackKernel(NrdKernel& k, UINT uavs, NrdCodeRef code) {
+	const void* dxil = code.dxil;
+	size_t size = code.size;
 	D3D12_DESCRIPTOR_RANGE range = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, uavs, 0, 0, 0 };
 	D3D12_ROOT_PARAMETER p[5] = {};
 	for (int i = 0; i < 3; ++i) {
@@ -171,7 +183,9 @@ bool NrdPackKernel(NrdKernel& k, UINT uavs, const void* dxil, size_t size) {
 	return NrdSerialize(d, k.root) && NrdPso(k.root.Get(), dxil, size, k.pso);
 }
 
-bool NrdUnpackKernel(NrdKernel& k, UINT srvs, const void* dxil, size_t size) {
+bool NrdUnpackKernel(NrdKernel& k, UINT srvs, NrdCodeRef code) {
+	const void* dxil = code.dxil;
+	size_t size = code.size;
 	D3D12_DESCRIPTOR_RANGE range = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, srvs, 0, 0, 0 };
 	D3D12_ROOT_PARAMETER p[4] = {};
 	p[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -549,7 +563,7 @@ void NrdSigma(const NrdEventData* data) {
 	static const nrd::Denoiser kSigma[] = { nrd::Denoiser::SIGMA_SHADOW };
 	auto& c = g_nrdSun;
 	if (!c.pack.pso && !c.failed &&
-	    (!NrdPackKernel(c.pack, 4, g_NrdSigmaPack, sizeof(g_NrdSigmaPack)) || !NrdUnpackKernel(c.unpack, 1, g_NrdSigmaUnpack, sizeof(g_NrdSigmaUnpack)))) {
+	    (!NrdPackKernel(c.pack, 4, NrdCode("NrdSigmaPack", g_NrdSigmaPack, sizeof(g_NrdSigmaPack))) || !NrdUnpackKernel(c.unpack, 1, NrdCode("NrdSigmaUnpack", g_NrdSigmaUnpack, sizeof(g_NrdSigmaUnpack))))) {
 		c.failed = true;
 		c.status = "SIGMA pack / unpack pipelines could not be made";
 	}
@@ -588,7 +602,7 @@ void NrdReblur(const NrdEventData* data) {
 	static const nrd::Denoiser kReblur[] = { nrd::Denoiser::REBLUR_DIFFUSE, nrd::Denoiser::REBLUR_DIFFUSE };
 	auto& c = data != nullptr && data->mode == 2 ? g_nrdLocal : g_nrdAmbient;
 	if (!c.pack.pso && !c.failed &&
-	    (!NrdPackKernel(c.pack, 5, g_NrdReblurPack, sizeof(g_NrdReblurPack)) || !NrdUnpackKernel(c.unpack, 2, g_NrdReblurUnpack, sizeof(g_NrdReblurUnpack)))) {
+	    (!NrdPackKernel(c.pack, 5, NrdCode("NrdReblurPack", g_NrdReblurPack, sizeof(g_NrdReblurPack))) || !NrdUnpackKernel(c.unpack, 2, NrdCode("NrdReblurUnpack", g_NrdReblurUnpack, sizeof(g_NrdReblurUnpack))))) {
 		c.failed = true;
 		c.status = "REBLUR pack / unpack pipelines could not be made";
 	}
@@ -634,7 +648,7 @@ void NrdReflection(const NrdEventData* data) {
 	static const nrd::Denoiser kSpecular[] = { nrd::Denoiser::REBLUR_SPECULAR };
 	auto& c = g_nrdReflection;
 	if (!c.pack.pso && !c.failed &&
-	    (!NrdPackKernel(c.pack, 4, g_NrdSpecPack, sizeof(g_NrdSpecPack)) || !NrdUnpackKernel(c.unpack, 1, g_NrdSpecUnpack, sizeof(g_NrdSpecUnpack)))) {
+	    (!NrdPackKernel(c.pack, 4, NrdCode("NrdSpecPack", g_NrdSpecPack, sizeof(g_NrdSpecPack))) || !NrdUnpackKernel(c.unpack, 1, NrdCode("NrdSpecUnpack", g_NrdSpecUnpack, sizeof(g_NrdSpecUnpack))))) {
 		c.failed = true;
 		c.status = "REBLUR specular pack / unpack pipelines could not be made";
 	}
@@ -671,6 +685,19 @@ void NrdReflection(const NrdEventData* data) {
 	NrdUnpack(list, c, data, 1, constants);
 	g_render.Submit(g_unityQueue.load());
 	NrdStatusLine(c, "REBLUR on the reflections", data, dispatched);
+}
+
+// The pack / unpack kernels and the contexts' failures dropped (render thread, shader reload): made again from the
+// shader files on next use. NRD's own pipelines are NRD's (embedded in its library) and stay.
+void NrdDropKernels() {
+	for (NrdContext* c : { &g_nrdSun, &g_nrdAmbient, &g_nrdLocal, &g_nrdReflection }) {
+		c->pack = NrdKernel();
+		c->unpack = NrdKernel();
+		if (c->failed && c->instance == nullptr) {
+			c->failed = false;
+			c->status = "not started";
+		}
+	}
 }
 
 }  // namespace

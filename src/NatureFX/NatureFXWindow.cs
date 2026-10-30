@@ -850,6 +850,8 @@ namespace NatureFX {
 			Widgets.EndCard();
 		}
 
+		private string reloadStatus_;
+
 		private void DrawSettings() {
 			Widgets.BeginCard("Interface");
 			Widgets.Slider("Background opacity", S.UiOpacity > 0.0f ? S.UiOpacity : DefaultOpacity, 0.4f, 1.0f, v => S.UiOpacity = v, "0%");
@@ -887,6 +889,17 @@ namespace NatureFX {
 
 			Widgets.Heading("DEVELOPER");
 			DrawRayTracingOnly();
+			Widgets.BeginCard("Reload shaders", "Without a restart: the newest shader bundle in kino/mods/NatureFX/reload/ (the bundle build " +
+				"puts one there while the game runs) and the engine's shaders in NativeShaders/ (tools/build_native.ps1 -ShadersOnly). " +
+				"C# and the engine's C++ still need a restart.");
+			if (Widgets.Button("Reload shaders", 160)) {
+				reloadStatus_ = $"Bundle: {mod_.Bundle.Reload()}. Engine: {NativeEngine.ReloadShaders()}";
+			}
+			if (!string.IsNullOrEmpty(reloadStatus_)) {
+				Widgets.Info(reloadStatus_);
+			}
+			Widgets.Info($"Engine shaders now: {NativeEngine.ShaderStatus}");
+			Widgets.EndCard();
 			Widgets.BeginCard("System", null, true);
 			Widgets.Info(Capabilities.Describe());
 			Widgets.Info($"Shader bundle: {mod_.Bundle.Shaders.Count} shaders · replaced materials: {mod_.Replacer.ReplacedCount}");

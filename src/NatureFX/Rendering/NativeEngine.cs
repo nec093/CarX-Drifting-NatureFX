@@ -72,6 +72,42 @@ namespace NatureFX.Rendering {
 		[DllImport(DllName)] private static extern int NFX_Native_CaptureQueue();
 		[DllImport(DllName)] private static extern int NFX_Native_QueueStatus(int giveUp);
 		[DllImport(DllName)] private static extern IntPtr NFX_Native_RenderEventFunc();
+		[DllImport(DllName)] private static extern int NFX_Native_LoadShaders(string folder);
+		[DllImport(DllName)] private static extern int NFX_Native_ShaderStatus(byte[] buffer, int size);
+
+		// The engine's shaders from kino/mods/NatureFX/NativeShaders (tools/build_native.ps1 -ShadersOnly): read here,
+		// taken in by render event 8 on the render thread, which makes the trace pipelines again
+		public static string ReloadShaders() {
+			if (!Ready) {
+				return "the engine is not running";
+			}
+			try {
+				string folder = Path.Combine(Kino.Paths.Mods, "NatureFX", "NativeShaders");
+				if (!Directory.Exists(folder)) {
+					return $"no {folder}";
+				}
+				int count = NFX_Native_LoadShaders(folder);
+				var cmd = new CommandBuffer { name = "NatureFX shader reload" };
+				cmd.IssuePluginEvent(NFX_Native_RenderEventFunc(), 8);
+				Graphics.ExecuteCommandBuffer(cmd);
+				cmd.Release();
+				return $"{count} shader files read";
+			} catch (Exception e) {
+				return $"unavailable ({e.GetType().Name}: the engine's DLL is older than the mod)";
+			}
+		}
+
+		public static string ShaderStatus {
+			get {
+				try {
+					var buffer = new byte[256];
+					int length = NFX_Native_ShaderStatus(buffer, buffer.Length);
+					return Encoding.UTF8.GetString(buffer, 0, Math.Max(0, length));
+				} catch (Exception e) {
+					return $"unavailable ({e.GetType().Name})";
+				}
+			}
+		}
 		[DllImport(DllName)] private static extern int NFX_Native_QueueTestResult();
 		[DllImport(DllName)] private static extern IntPtr NFX_Native_RenderEventAndDataFunc();
 		[DllImport(DllName)] private static extern void NFX_Native_UpdateTransforms(int[] indices, float[] transforms, int count);

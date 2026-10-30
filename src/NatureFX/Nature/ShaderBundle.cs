@@ -40,7 +40,15 @@ namespace NatureFX.Nature {
 				Kino.Log.Error("[NatureFX] Failed to load shader bundle (was it built with Unity 2023.2.22f1 / HDRP?)");
 				return false;
 			}
+			Fill();
+			return true;
+		}
 
+		// The loaded bundle's shaders, compute shaders, variant list and HDRP compute map into the lookups
+		private void Fill() {
+			shaders_.Clear();
+			computeShaders_.Clear();
+			hdrpComputeMap_.Clear();
 			foreach (var shader in bundle_.LoadAllAssets<Shader>()) {
 				// the ray tracing proxy has only a DXR pass, which isSupported does not count
 				if (!shader.isSupported && shader.name != "Hidden/NatureFX/RTProxy") {
@@ -67,7 +75,62 @@ namespace NatureFX.Nature {
 					}
 				}
 			}
-			return true;
+		}
+
+		// Shader reload without a restart: the newest copy in reload/ (the bundle build writes one there while the game
+		// runs) replaces the loaded bundle. Every material on one of the old shaders gets the new one of the same name
+		// (its queue kept), and Reloaded tells whoever holds a compute shader. The old shaders stay alive
+		// (Unload(false)) for anything not switched (HDRP's replaced compute shaders keep theirs).
+		public event System.Action Reloaded;
+		public string ReloadFolder => Path.Combine(Kino.Paths.Mods, FolderName, "reload");
+		private string loadedReload_;
+
+		public string Reload() {
+			string folder = ReloadFolder;
+			string newest = null;
+			if (Directory.Exists(folder)) {
+				foreach (string f in Directory.GetFiles(folder, "naturefx-*.bundle")) {
+					newest = newest == null || string.CompareOrdinal(f, newest) > 0 ? f : newest;
+				}
+			}
+			if (newest == null) {
+				return "nothing to reload: no bundle in reload/ (build the shader bundle while the game runs)";
+			}
+			if (newest == loadedReload_) {
+				return $"{Path.GetFileName(newest)} is already loaded";
+			}
+			var old = new Dictionary<string, Shader>(shaders_);
+			bundle_?.Unload(false);
+			bundle_ = AssetBundle.LoadFromFile(newest);
+			if (bundle_ == null) {
+				// back to what ran before
+				bundle_ = loadedReload_ != null ? AssetBundle.LoadFromFile(loadedReload_) : AssetBundle.LoadFromFile(BundlePath);
+				if (bundle_ != null) {
+					Fill();
+				}
+				return $"{Path.GetFileName(newest)} could not be loaded; kept the shaders before";
+			}
+			Fill();
+			var replacement = new Dictionary<Shader, Shader>();
+			foreach (var kv in old) {
+				if (shaders_.TryGetValue(kv.Key, out var shader) && shader != kv.Value) {
+					replacement[kv.Value] = shader;
+				}
+			}
+			int switched = 0;
+			foreach (var m in Resources.FindObjectsOfTypeAll<Material>()) {
+				if (m != null && m.shader != null && replacement.TryGetValue(m.shader, out var shader)) {
+					int queue = m.renderQueue;
+					m.shader = shader;
+					m.renderQueue = queue;
+					++switched;
+				}
+			}
+			loadedReload_ = newest;
+			Reloaded?.Invoke();
+			string result = $"{Path.GetFileName(newest)}: {shaders_.Count} shaders and {computeShaders_.Count} compute shaders, {switched} materials switched";
+			Kino.Log.Info($"[NatureFX] Shaders reloaded from {result}");
+			return result;
 		}
 
 		public Shader Get(string name) {

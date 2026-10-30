@@ -17,6 +17,7 @@
 #include <string>
 #include <mutex>
 #include <vector>
+#include <map>
 
 #include "IUnityInterface.h"
 #include "IUnityGraphics.h"
@@ -246,6 +247,22 @@ ComputePipeline g_sceneRays;
 ComputePipeline g_sanitize;
 ComputePipeline g_extractUvs;
 
+// Shader reload without a restart: compiled shaders (<name>.cso) the build drops in kino/mods/NatureFX/NativeShaders
+// override the embedded ones of the same name. NFX_Native_LoadShaders reads a folder on the main thread; render event
+// 8 takes them in on the render thread (between traces) and makes the pipelines again.
+std::map<std::string, std::vector<char>> g_shaderFiles, g_shaderFilesPending;
+std::mutex g_shaderFilesMutex;
+std::atomic<bool> g_shaderFilesReady{ false };
+std::string g_shaderStatus = "embedded shaders";
+
+D3D12_SHADER_BYTECODE ShaderCode(const char* name, const void* embedded, size_t size) {
+	auto it = g_shaderFiles.find(name);
+	if (it != g_shaderFiles.end() && !it->second.empty()) {
+		return { it->second.data(), it->second.size() };
+	}
+	return { embedded, size };
+}
+
 // The trace pipelines (NFXCommon.hlsli): t0 scene, u0 result, b0 frame constants, u1 surface, t2 instance records,
 // t3 ambient probe, t4 screen (colour and depth), a linear wrap sampler, and the descriptor heap indexed directly by
 // the shaders (shader model 6.6)
@@ -273,11 +290,11 @@ bool CreateTraceStateObjects() {
 		return true;
 	}
 	const D3D12_SHADER_BYTECODE libraries[kTraceKinds] = {
-		{ g_SunShadowLib, sizeof(g_SunShadowLib) }, { g_AmbientLib, sizeof(g_AmbientLib) },
-		{ g_LocalShadowsLib, sizeof(g_LocalShadowsLib) }, { g_ShaftsLib, sizeof(g_ShaftsLib) },
-		{ g_SurfaceLib, sizeof(g_SurfaceLib) }, { g_ReflectionLib, sizeof(g_ReflectionLib) },
-		{ g_GILib, sizeof(g_GILib) }, { g_GICacheResolveLib, sizeof(g_GICacheResolveLib) },
-		{ g_GlassLib, sizeof(g_GlassLib) }
+		ShaderCode("SunShadowLib", g_SunShadowLib, sizeof(g_SunShadowLib)), ShaderCode("AmbientLib", g_AmbientLib, sizeof(g_AmbientLib)),
+		ShaderCode("LocalShadowsLib", g_LocalShadowsLib, sizeof(g_LocalShadowsLib)), ShaderCode("ShaftsLib", g_ShaftsLib, sizeof(g_ShaftsLib)),
+		ShaderCode("SurfaceLib", g_SurfaceLib, sizeof(g_SurfaceLib)), ShaderCode("ReflectionLib", g_ReflectionLib, sizeof(g_ReflectionLib)),
+		ShaderCode("GILib", g_GILib, sizeof(g_GILib)), ShaderCode("GICacheResolveLib", g_GICacheResolveLib, sizeof(g_GICacheResolveLib)),
+		ShaderCode("GlassLib", g_GlassLib, sizeof(g_GlassLib))
 	};
 	// every kind: 3 records (ray generation, miss, hit group), one table row
 	if (!g_traceTables) {
@@ -367,11 +384,11 @@ bool CreateTracePipelines() {
 		}
 	}
 	const D3D12_SHADER_BYTECODE code[kTraceKinds] = {
-		{ g_SunShadow, sizeof(g_SunShadow) }, { g_Ambient, sizeof(g_Ambient) },
-		{ g_LocalShadows, sizeof(g_LocalShadows) }, { g_Shafts, sizeof(g_Shafts) },
-		{ g_Surface, sizeof(g_Surface) }, { g_Reflection, sizeof(g_Reflection) },
-		{ g_GI, sizeof(g_GI) }, { g_GICacheResolve, sizeof(g_GICacheResolve) },
-		{ g_Glass, sizeof(g_Glass) }
+		ShaderCode("SunShadow", g_SunShadow, sizeof(g_SunShadow)), ShaderCode("Ambient", g_Ambient, sizeof(g_Ambient)),
+		ShaderCode("LocalShadows", g_LocalShadows, sizeof(g_LocalShadows)), ShaderCode("Shafts", g_Shafts, sizeof(g_Shafts)),
+		ShaderCode("Surface", g_Surface, sizeof(g_Surface)), ShaderCode("Reflection", g_Reflection, sizeof(g_Reflection)),
+		ShaderCode("GI", g_GI, sizeof(g_GI)), ShaderCode("GICacheResolve", g_GICacheResolve, sizeof(g_GICacheResolve)),
+		ShaderCode("Glass", g_Glass, sizeof(g_Glass))
 	};
 	for (int k = 0; k < kTraceKinds; ++k) {
 		if (g_tracePso[k]) {
@@ -1749,9 +1766,13 @@ void Trace(const TraceEventData* data) {
 	++g_traceFrames;
 }
 
+void ReloadShaders();  // render event 8 (end of this file)
+
 void UNITY_INTERFACE_API OnRenderEvent(int eventId) {
 	if (eventId == 1) {
 		QueueTest();
+	} else if (eventId == 8) {
+		ReloadShaders();
 	}
 }
 
@@ -2037,6 +2058,72 @@ NFX_EXPORT int NFX_Native_Dxr12Probe(const char* sdkPath, char* buffer, int size
 
 #include "RtDevice.inl"
 #include "Nrd.inl"
+
+namespace {
+// Render event 8: the shader files NFX_Native_LoadShaders read take the embedded ones' place, and every trace pipeline
+// and NRD pack / unpack kernel is made again from them (on the render thread, so no trace is recorded meanwhile; the
+// GPU is waited for, so no list still uses the old ones)
+void ReloadShaders() {
+	if (!g_shaderFilesReady.exchange(false)) {
+		return;
+	}
+	WaitRenderIdle();
+	std::lock_guard<std::mutex> scene(g_sceneMutex);
+	{
+		std::lock_guard<std::mutex> lock(g_shaderFilesMutex);
+		g_shaderFiles.swap(g_shaderFilesPending);
+		g_shaderFilesPending.clear();
+	}
+	for (int k = 0; k < kTraceKinds; ++k) {
+		g_tracePso[k].Reset();
+		g_traceState[k].Reset();
+	}
+	bool ok = CreateTracePipelines();
+	NrdDropKernels();
+	char line[192];
+	snprintf(line, sizeof(line), "%zu shader files in use; trace pipelines %s", g_shaderFiles.size(),
+	         ok ? "made again" : "failed (a shader file is broken: traces stop until the next reload)");
+	g_shaderStatus = line;
+}
+}  // namespace
+
+// Reads every <name>.cso of the folder (main thread); render event 8 then takes them in. Returns how many.
+NFX_EXPORT int NFX_Native_LoadShaders(const char* folder) {
+	std::map<std::string, std::vector<char>> files;
+	WIN32_FIND_DATAA found = {};
+	std::string base = std::string(folder) + "\\";
+	HANDLE find = FindFirstFileA((base + "*.cso").c_str(), &found);
+	if (find != INVALID_HANDLE_VALUE) {
+		do {
+			std::string name = found.cFileName;
+			FILE* f = nullptr;
+			if (fopen_s(&f, (base + name).c_str(), "rb") != 0 || f == nullptr) {
+				continue;
+			}
+			fseek(f, 0, SEEK_END);
+			long length = ftell(f);
+			fseek(f, 0, SEEK_SET);
+			std::vector<char> bytes(length > 0 ? static_cast<size_t>(length) : 0);
+			size_t read = bytes.empty() ? 0 : fread(bytes.data(), 1, bytes.size(), f);
+			fclose(f);
+			if (read == bytes.size() && !bytes.empty()) {
+				files[name.substr(0, name.size() - 4)] = std::move(bytes);
+			}
+		} while (FindNextFileA(find, &found));
+		FindClose(find);
+	}
+	int count = static_cast<int>(files.size());
+	{
+		std::lock_guard<std::mutex> lock(g_shaderFilesMutex);
+		g_shaderFilesPending = std::move(files);
+	}
+	g_shaderFilesReady = true;
+	return count;
+}
+
+NFX_EXPORT int NFX_Native_ShaderStatus(char* buffer, int size) {
+	return CopyOut(g_shaderStatus, buffer, size);
+}
 
 // The game's video memory use as the OS counts it for this process (MB), and the budget it may use; 0 when unknown.
 // Lets the mod show what the settings cost and find memory that is not given back.
