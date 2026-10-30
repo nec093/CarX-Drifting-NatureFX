@@ -53,7 +53,8 @@ namespace NatureFX.Tools {
 			text.AppendLine($"Under the click ({hits.Count} renderers on the ray, nearest first):");
 			for (int i = 0; i < hits.Count && i < MaxListed; ++i) {
 				var r = hits[i].Renderer;
-				text.Append($"{hits[i].Distance:0.0} m  {Path(r.transform)}  [{r.GetType().Name}, shadows {r.shadowCastingMode}]");
+				// motion vectors: whether HDRP knows how this renderer moved (NRD follows a pixel through time by them)
+				text.Append($"{hits[i].Distance:0.0} m  {Path(r.transform)}  [{r.GetType().Name}, shadows {r.shadowCastingMode}, motion vectors {r.motionVectorGenerationMode}]");
 				foreach (var m in r.sharedMaterials) {
 					if (m != null) {
 						text.Append($"  '{m.name}' ({(m.shader != null ? m.shader.name : "-")}, queue {m.renderQueue}{(m.IsKeywordEnabled("_ALPHATEST_ON") ? ", alpha test" : "")})");
@@ -67,7 +68,8 @@ namespace NatureFX.Tools {
 					}
 					var original = OriginalOf?.Invoke(m);
 					bool clips = NatureFX.Rebuild.AlphaClip.Detect(m, out float cutoff, out string reason);
-					text.AppendLine($"      '{m.name}' alpha clip {clips} ({reason}, cutoff {cutoff:0.##}){(original != null ? $", swapped from {original.Shader?.name}" : "")}");
+					text.AppendLine($"      '{m.name}' alpha clip {clips} ({reason}, cutoff {cutoff:0.##}){(original != null ? $", swapped from {original.Shader?.name}" : "")}, " +
+					                $"motion vector pass {m.GetShaderPassEnabled("MotionVectors")}");
 				}
 				// alpha tested or foliage: how it is drawn (the state a card's clip depends on) and what it was
 				foreach (var m in r.sharedMaterials) {
