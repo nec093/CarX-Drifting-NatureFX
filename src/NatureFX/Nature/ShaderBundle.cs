@@ -162,8 +162,50 @@ namespace NatureFX.Nature {
 					best = set;
 				}
 			}
+			// An alpha tested material must keep its alpha test, or its cards draw as squares (a map's leaves whose
+			// exact keyword set was not bundled lost _ALPHATEST_ON): then a set with it is taken even with keywords
+			// the material did not ask for, as long as those change nothing that matters (no mask map: its white
+			// default would make the surface metal)
+			if (want.Contains(AlphaTest) && (best == null || !best.Contains(AlphaTest))) {
+				HashSet<string> alpha = null;
+				int alphaShared = -1;
+				foreach (var set in sets) {
+					if (!set.Contains(AlphaTest)) {
+						continue;
+					}
+					bool harmless = true;
+					foreach (string k in set) {
+						if (!want.Contains(k) && !HarmlessExtras.Contains(k)) {
+							harmless = false;
+							break;
+						}
+					}
+					int shared = 0;
+					foreach (string k in set) {
+						shared += want.Contains(k) ? 1 : 0;
+					}
+					if (harmless && shared > alphaShared) {
+						alpha = set;
+						alphaShared = shared;
+					}
+				}
+				if (alpha != null) {
+					if (fallbackLogged_.Add(shaderName + "|" + string.Join(" ", want))) {
+						Kino.Log.Info($"[NatureFX] {shaderName}: no bundled variant for [{string.Join(" ", want)}]; kept the alpha test with [{string.Join(" ", alpha)}]");
+					}
+					return alpha;
+				}
+			}
 			return best ?? new HashSet<string>();
 		}
+
+		private const string AlphaTest = "_ALPHATEST_ON";
+		// keywords a variant may add to what a material asked for without changing its look much
+		private static readonly HashSet<string> HarmlessExtras = new() {
+			"_DISABLE_SSR", "_DISABLE_SSR_TRANSPARENT", "_DISABLE_DECALS", "_MATERIAL_FEATURE_TRANSMISSION", "_NORMALMAP_TANGENT_SPACE",
+			"_NORMALMAP", "_DOUBLESIDED_ON"
+		};
+		private readonly HashSet<string> fallbackLogged_ = new();
 
 		private void LoadVariantList() {
 			variants_.Clear();
