@@ -90,6 +90,27 @@ namespace NatureFX.Rendering {
 			handles_.Clear();
 			nativeInstances_.Clear();
 			nativeClear_ = true;
+			// the meshes made for the last scene go now, so the engine frees their BLAS in this upload (it keeps
+			// what is still a Mesh): Sync makes the terrain chunks again, and a baked skinned mesh whose renderer
+			// is gone has no use. Kept, every rebuild added a duplicate set (VRAM grew with each map and car change)
+			foreach (var mesh in terrainMeshes_) {
+				if (mesh != null) {
+					Object.DestroyImmediate(mesh);
+				}
+			}
+			terrainMeshes_.Clear();
+			goneBaked_.Clear();
+			foreach (var pair in baked_) {
+				if (pair.Key == null) {
+					goneBaked_.Add(pair.Key);
+					if (pair.Value != null) {
+						Object.DestroyImmediate(pair.Value);
+					}
+				}
+			}
+			foreach (var r in goneBaked_) {
+				baked_.Remove(r);
+			}
 			InstanceCount = 0;
 			failed_ = 0;
 			skipped_ = 0;
@@ -450,6 +471,7 @@ namespace NatureFX.Rendering {
 			return smoothness >= 0.6f;
 		}
 		private readonly Dictionary<SkinnedMeshRenderer, Mesh> baked_ = new();
+		private readonly List<SkinnedMeshRenderer> goneBaked_ = new();
 
 		private List<int> AddRenderer(Renderer r, Mesh mesh, int firstSubMesh, Matrix4x4 matrix, bool moving, bool unscaled, Renderer owner) {
 			var handles = new List<int>();

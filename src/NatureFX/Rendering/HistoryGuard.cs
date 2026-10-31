@@ -49,6 +49,10 @@ namespace NatureFX.Rendering {
 			if (StillFrames == 0 || blend >= 1.0f) {
 				return blend;
 			}
+			// photo mode: no floor, the mean of every frame since the camera stopped
+			if (PhotoMode.Active) {
+				minBlend = 1.0f / 65536.0f;
+			}
 			float progressive = 1.0f / (1.0f / Mathf.Max(blend, 1e-3f) + StillFrames);
 			return Mathf.Max(progressive, Mathf.Min(minBlend, blend));
 		}

@@ -79,8 +79,10 @@ bool IsOccluded(float3 center, float3 axisX, float3 axisY, float3 axisZ)
     if (sizePx.x <= 0.0 || sizePx.y <= 0.0)
         return false;
 
-    // mip where the rectangle covers at most ~2x2 texels
-    int mip = (int)ceil(log2(max(max(sizePx.x, sizePx.y) * 0.5, 1.0)));
+    // mip whose texel is at least the rectangle's size: unaligned it then covers at most 2x2 texels, the four corners
+    // read below (a texel of half the size let the rectangle span three, and the middle one's depth was never read:
+    // objects half hidden behind something thin were culled and popped)
+    int mip = (int)ceil(log2(max(max(sizePx.x, sizePx.y), 1.0)));
     mip = clamp(mip, 0, max(_MaxMipLevel, 0));
 
     uint w, h, levels;

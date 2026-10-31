@@ -49,7 +49,7 @@ namespace NatureFX.Map {
 		public const string Prefix = "nfx_";
 		public const string MeshPrefix = "nocol_nfx_";
 
-		public static readonly string[] Kinds = { "zone", "light", "probe", "grass", "fx", "decal", "puddle", "water", "volume" };
+		public static readonly string[] Kinds = { "zone", "light", "probe", "grass", "fx", "decal", "puddle", "water", "volume", "forest" };
 
 		// ".001" (Blender), " (1)" (Unity duplicates)
 		private static readonly Regex CopySuffix = new(@"(\.\d+|\s*\(\d+\))$");

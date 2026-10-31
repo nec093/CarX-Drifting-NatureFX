@@ -35,6 +35,11 @@
 #include "GI.h"            // g_GI: shaders/GI.hlsl as DXIL
 #include "GICacheResolve.h"  // g_GICacheResolve: shaders/GICacheResolve.hlsl as DXIL
 #include "Glass.h"            // g_Glass: shaders/Glass.hlsl as DXIL
+#include "SkyTransmittance.h" // g_SkyTransmittance: shaders/SkyTransmittance.hlsl (Sky.hlsli)
+#include "SkyMultiScatter.h"  // g_SkyMultiScatter
+#include "SkyView.h"          // g_SkyView
+#include "CloudNoise.h"       // g_CloudNoise: the clouds' noise and type map (Sky.hlsli)
+#include "Clouds.h"           // g_Clouds: the cloud layer
 #include "SanitizeIndices.h"  // g_SanitizeIndices: shaders/SanitizeIndices.hlsl as DXIL
 #include "ExtractUvs.h"       // g_ExtractUvs: shaders/ExtractUvs.hlsl as DXIL
 // the same traces as DXR 1.0 libraries (NFX_PIPELINE: TraceRay in a ray tracing pipeline), g_<name>Lib
@@ -47,6 +52,11 @@
 #include "GILib.h"
 #include "GICacheResolveLib.h"
 #include "GlassLib.h"
+#include "SkyTransmittanceLib.h"
+#include "SkyMultiScatterLib.h"
+#include "SkyViewLib.h"
+#include "CloudNoiseLib.h"
+#include "CloudsLib.h"
 #include "CopyRaw.h"          // g_CopyRaw: shaders/CopyRaw.hlsl as DXIL
 #include "WindDisplace.h"     // g_WindDisplace: shaders/WindDisplace.hlsl (foliage swayed by the wind)
 #include "BakeAlpha.h"        // g_BakeAlpha: shaders/BakeAlpha.hlsl as DXIL
@@ -268,7 +278,10 @@ D3D12_SHADER_BYTECODE ShaderCode(const char* name, const void* embedded, size_t 
 // the shaders (shader model 6.6)
 enum TraceKind {
 	kTraceSun = 0, kTraceAmbient = 1, kTraceLocal = 2, kTraceShafts = 3, kTraceSurface = 4, kTraceReflection = 5,
-	kTraceGI = 6, kTraceCacheResolve = 7, kTraceGlass = 8, kTraceKinds = 9
+	kTraceGI = 6, kTraceCacheResolve = 7, kTraceGlass = 8,
+	// the sky (Sky.hlsli): its tables, no rays
+	kTraceSkyTransmittance = 9, kTraceSkyMultiScatter = 10, kTraceSkyView = 11, kTraceCloudNoise = 12, kTraceClouds = 13,
+	kTraceKinds = 14
 };
 // GI's world space radiance cache (NFXCommon.hlsli: CacheEntries x CacheEntryBytes), u2 of every trace
 constexpr UINT64 kCacheBytes = (1ull << 19) * 48;
@@ -294,7 +307,10 @@ bool CreateTraceStateObjects() {
 		ShaderCode("LocalShadowsLib", g_LocalShadowsLib, sizeof(g_LocalShadowsLib)), ShaderCode("ShaftsLib", g_ShaftsLib, sizeof(g_ShaftsLib)),
 		ShaderCode("SurfaceLib", g_SurfaceLib, sizeof(g_SurfaceLib)), ShaderCode("ReflectionLib", g_ReflectionLib, sizeof(g_ReflectionLib)),
 		ShaderCode("GILib", g_GILib, sizeof(g_GILib)), ShaderCode("GICacheResolveLib", g_GICacheResolveLib, sizeof(g_GICacheResolveLib)),
-		ShaderCode("GlassLib", g_GlassLib, sizeof(g_GlassLib))
+		ShaderCode("GlassLib", g_GlassLib, sizeof(g_GlassLib)),
+		ShaderCode("SkyTransmittanceLib", g_SkyTransmittanceLib, sizeof(g_SkyTransmittanceLib)),
+		ShaderCode("SkyMultiScatterLib", g_SkyMultiScatterLib, sizeof(g_SkyMultiScatterLib)), ShaderCode("SkyViewLib", g_SkyViewLib, sizeof(g_SkyViewLib)),
+		ShaderCode("CloudNoiseLib", g_CloudNoiseLib, sizeof(g_CloudNoiseLib)), ShaderCode("CloudsLib", g_CloudsLib, sizeof(g_CloudsLib))
 	};
 	// every kind: 3 records (ray generation, miss, hit group), one table row
 	if (!g_traceTables) {
@@ -388,7 +404,10 @@ bool CreateTracePipelines() {
 		ShaderCode("LocalShadows", g_LocalShadows, sizeof(g_LocalShadows)), ShaderCode("Shafts", g_Shafts, sizeof(g_Shafts)),
 		ShaderCode("Surface", g_Surface, sizeof(g_Surface)), ShaderCode("Reflection", g_Reflection, sizeof(g_Reflection)),
 		ShaderCode("GI", g_GI, sizeof(g_GI)), ShaderCode("GICacheResolve", g_GICacheResolve, sizeof(g_GICacheResolve)),
-		ShaderCode("Glass", g_Glass, sizeof(g_Glass))
+		ShaderCode("Glass", g_Glass, sizeof(g_Glass)),
+		ShaderCode("SkyTransmittance", g_SkyTransmittance, sizeof(g_SkyTransmittance)),
+		ShaderCode("SkyMultiScatter", g_SkyMultiScatter, sizeof(g_SkyMultiScatter)), ShaderCode("SkyView", g_SkyView, sizeof(g_SkyView)),
+		ShaderCode("CloudNoise", g_CloudNoise, sizeof(g_CloudNoise)), ShaderCode("Clouds", g_Clouds, sizeof(g_Clouds))
 	};
 	for (int k = 0; k < kTraceKinds; ++k) {
 		if (g_tracePso[k]) {
@@ -463,6 +482,11 @@ struct Material {
 };
 std::vector<Material> g_materials;
 std::vector<Geometry> g_geometries;
+// Released between two scene builds: kept alive until the next BuildScene, since g_resolved and g_records still
+// point at their BLAS, own buffers and textures and the render thread builds its TLAS from them every frame
+// (freed at once, a frame traced a BLAS that was gone: device removed on a map change)
+std::vector<Geometry> g_retiredGeometries;
+std::vector<Material> g_retiredMaterials;
 std::vector<D3D12_RAYTRACING_INSTANCE_DESC> g_instances;
 // The instances with their BLAS addresses, as the render thread rebuilds its TLAS from them every frame; moving
 // ones get new transforms (NFX_Native_UpdateTransforms). Guarded by g_sceneMutex, as are the geometries.
@@ -494,6 +518,7 @@ UINT64 g_recordCapacity = 0;
 ComPtr<ID3D12DescriptorHeap> g_heap;
 UINT g_heapNext = 0;
 UINT g_heapStep = 0;
+UINT g_descriptorsRefused = 0;  // allocations past the end of the heap (reported in the scene stats)
 constexpr UINT kHeapSize = 1 << 16;
 
 UINT AllocateDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE* handle) {
@@ -508,6 +533,8 @@ UINT AllocateDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE* handle) {
 		g_heapStep = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 	}
 	if (g_heapNext >= kHeapSize) {
+		// never reclaimed but by ClearScene: full, materials go without textures (opaque alpha tests, grey hits)
+		++g_descriptorsRefused;
 		return ~0u;
 	}
 	UINT index = g_heapNext++;
@@ -779,6 +806,8 @@ NFX_EXPORT int NFX_Native_RayQueryTest() {
 NFX_EXPORT void NFX_Native_ClearScene() {
 	std::lock_guard<std::mutex> lock(g_sceneMutex);
 	WaitRenderIdle();  // frames in flight still trace the old BLAS
+	g_retiredGeometries.clear();
+	g_retiredMaterials.clear();
 	g_geometries.clear();
 	g_instances.clear();
 	g_resolved.clear();
@@ -1021,26 +1050,27 @@ NFX_EXPORT int NFX_Native_AddMaterial(void* texture, int srgb, float cutoff, flo
 	return static_cast<int>(g_materials.size() - 1);
 }
 
-// Its mesh is gone (a new map): the BLAS and buffers are freed once the GPU is done with them
+// Its mesh is gone (a new map): the BLAS and buffers are freed with the next scene build, once nothing points at
+// them any more (g_retiredGeometries)
 NFX_EXPORT void NFX_Native_ReleaseGeometry(int id) {
 	std::lock_guard<std::mutex> lock(g_sceneMutex);
 	if (id < 0 || id >= static_cast<int>(g_geometries.size())) {
 		return;
 	}
-	WaitRenderIdle();
+	g_retiredGeometries.push_back(std::move(g_geometries[id]));
 	Geometry released;
 	released.released = true;
 	g_geometries[id] = released;
 	ReleaseRtGeometry(id);
 }
 
-// Its material or texture is gone
+// Its material or texture is gone: its textures are held until the next scene build (g_retiredMaterials)
 NFX_EXPORT void NFX_Native_ReleaseMaterial(int id) {
 	std::lock_guard<std::mutex> lock(g_sceneMutex);
 	if (id < 0 || id >= static_cast<int>(g_materials.size())) {
 		return;
 	}
-	WaitRenderIdle();
+	g_retiredMaterials.push_back(std::move(g_materials[id]));
 	g_materials[id] = Material();
 }
 
@@ -1302,6 +1332,10 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 		}
 	}
 	WaitRenderIdle();
+	// nothing traces the old scene now (the render thread waits for g_sceneMutex): what was released since the
+	// last build goes
+	g_retiredGeometries.clear();
+	g_retiredMaterials.clear();
 	if (!EnsureBuffer(g_records, g_recordCapacity, data.size() * 4, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ)) {
 		return -11;
 	}
@@ -1329,6 +1363,10 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 	         g_geometries.size(), built, instances.size(), alphaInstances, triangles / 1e6, blasBytes / (1024.0 * 1024.0),
 	         tlasInfo.ResultDataMaxSizeInBytes / (1024.0 * 1024.0), NowMs() - start);
 	g_sceneStats = stats;
+	if (g_descriptorsRefused > 0) {
+		snprintf(stats, sizeof(stats), ", DESCRIPTOR HEAP FULL (%u refused, %u of %u used)", g_descriptorsRefused, g_heapNext, kHeapSize);
+		g_sceneStats += stats;
+	}
 	// the render thread's work uses these pipelines: create them here, on the main thread
 	g_sceneRay.Create(g_SceneRay, sizeof(g_SceneRay), 8);
 	CreateTracePipelines();
@@ -1581,8 +1619,8 @@ ComPtr<ID3D12Resource> g_renderTlas, g_renderScratch, g_renderInstances[kInstanc
 UINT64 g_renderTlasCapacity = 0, g_renderScratchCapacity = 0, g_renderInstanceCapacity[kInstanceSlots] = {};
 UINT32 g_renderTlasFrame = ~0u;
 int g_renderTlasBuilds = 0;
-ComPtr<ID3D12Resource> g_frameConstants;  // a 512 byte slot per submission in flight
-constexpr UINT kConstantSlot = 2304;  // the Frame constants (564 floats), rounded up to 256 bytes
+ComPtr<ID3D12Resource> g_frameConstants;  // a kConstantSlot slot per submission in flight
+constexpr UINT kConstantSlot = 8448;  // the Frame constants (2100 floats: 52 + 4 x 128 lights x 4), rounded up to 256 bytes
 // buffers the render thread outgrew, with the submission after which the GPU no longer uses them
 std::vector<std::pair<ComPtr<ID3D12Resource>, UINT64>> g_renderRetired;
 
@@ -1620,7 +1658,7 @@ struct TraceEventData {
 	UINT32 kind;              // TraceKind
 	UINT32 width, height;
 	UINT32 unityFrame;        // Time.frameCount: the TLAS is built once per Unity frame (the passes count frames apart)
-	float constants[564];     // the Frame constant buffer of NFXCommon.hlsli (FrameIndex at 11)
+	float constants[2100];    // the Frame constant buffer of NFXCommon.hlsli (FrameIndex at 11)
 };
 static_assert(sizeof(TraceEventData::constants) <= kConstantSlot, "the Frame constants outgrew their slot");
 

@@ -24,7 +24,9 @@ namespace NatureFX.Ui {
 		private static readonly Dictionary<string, bool> collapsed_ = new();
 		private static Dictionary<string, bool> sectionMatched_ = new();
 		private static Dictionary<string, bool> sectionMatchedNext_ = new();
-		private static readonly Dictionary<string, PropertyInfo> resetTargets_ = new();
+		// the ISettings property behind a row's setter, and whether the setter stores the value as it is (a row shown
+		// in other units, like the haze per 10 km, converts: its default goes to the property directly)
+		private static readonly Dictionary<string, (PropertyInfo Property, bool Direct)> resetTargets_ = new();
 		private static readonly Stack<(int Indent, bool Enabled, Color Color)> scopes_ = new();
 		private static string section_;
 		private static bool sectionTitleMatches_;
@@ -433,25 +435,38 @@ namespace NatureFX.Ui {
 			}
 
 			string key = section_ + "/" + label;
-			if (!resetTargets_.TryGetValue(key, out var property)) {
+			if (!resetTargets_.TryGetValue(key, out var target)) {
 				var properties = typeof(ISettings).GetProperties();
 				var before = new object[properties.Length];
 				for (int i = 0; i < properties.Length; ++i) {
 					before[i] = properties[i].GetValue(data);
 				}
 				set(probe);
+				PropertyInfo property = null;
+				bool direct = true;
 				for (int i = 0; i < properties.Length; ++i) {
-					if (!Equals(properties[i].GetValue(data), before[i])) {
-						property ??= properties[i];
+					object now = properties[i].GetValue(data);
+					if (!Equals(now, before[i])) {
+						if (property == null) {
+							property = properties[i];
+							direct = Equals(now, probe);
+						}
 						properties[i].SetValue(data, before[i]);
 					}
 				}
-				resetTargets_[key] = property;
+				target = (property, direct);
+				resetTargets_[key] = target;
 			}
-			if (property == null || property.PropertyType != typeof(T)) {
+			if (target.Property == null || target.Property.PropertyType != typeof(T)) {
 				return false;
 			}
-			set((T)property.GetValue(defaults));
+			object value = target.Property.GetValue(defaults);
+			if (target.Direct) {
+				set((T)value);
+			} else {
+				// the setter converts units: the raw default through it came out wrong (the haze slider's 0.0003 / 10000)
+				target.Property.SetValue(data, value);
+			}
 			return true;
 		}
 	}

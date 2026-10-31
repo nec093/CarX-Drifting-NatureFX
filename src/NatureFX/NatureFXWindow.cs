@@ -18,7 +18,7 @@ namespace NatureFX {
 		private const float SidebarWidth = 150;
 		private const float DefaultScale = 0.85f;
 
-		private static readonly string[] Tabs = { "Overview", "Sun", "Weather", "Road & cars", "Nature", "Settings", "Reflections", "RT shadows", "RT ambient light", "Exposure & tone", "Shader rebuild", "Developer" };
+		private static readonly string[] Tabs = { "Overview", "Sun", "Weather", "Road & cars", "Nature", "Settings", "Reflections", "RT shadows", "RT ambient light", "Exposure & tone", "Shader rebuild", "Developer", "Map" };
 		private static readonly string[] TonemapNames = { "ACES", "Neutral", "Filmic (GT)", "None" };
 		private static readonly string[] ReflectionQualityNames = { "Performance", "Balanced", "Quality" };
 		private static readonly string[] BackendNames = { "DXR 1.0", "DXR 1.1" };
@@ -162,9 +162,6 @@ namespace NatureFX {
 		}
 
 		private void DrawTab(int index) {
-			if (S.DevRayTracingOnly && index < 5) {
-				index = 6; // tabs hidden in ray tracing only mode
-			}
 			switch (index) {
 				case 0: DrawOverview(); break;
 				case 1: DrawSun(); break;
@@ -178,6 +175,7 @@ namespace NatureFX {
 				case 9: DrawExposureAndTone(); break;
 				case 10: DrawShaderRebuild(); break;
 				case 11: DrawDeveloper(); break;
+				case 12: DrawMapProfile(); break;
 			}
 		}
 
@@ -187,8 +185,7 @@ namespace NatureFX {
 			GUILayout.Space(10);
 			string api = SystemInfo.graphicsDeviceType.ToString().Replace("Direct3D", "DX");
 			string engine = BackendNames[Mathf.Clamp(S.RTBackend, 0, BackendNames.Length - 1)];
-			string mode = S.DevRayTracingOnly ? "  ·  <color=#F5B14C>ray tracing only</color>" : "";
-			GUILayout.Label($"{api}  ·  {engine}{mode}", Theme.Subtitle, GUILayout.Height(24));
+			GUILayout.Label($"{api}  ·  {engine}", Theme.Subtitle, GUILayout.Height(24));
 			GUILayout.FlexibleSpace();
 
 			GUILayout.Label("Search", Theme.Value, GUILayout.Width(48), GUILayout.Height(24)); // Ctrl+F
@@ -218,21 +215,13 @@ namespace NatureFX {
 		}
 
 		// tab index groups shown in the sidebar
-		// ray tracing development: only the ray traced reflections and the settings
-		private static readonly (string Name, int[] Tabs)[] RayTracingGroups = {
-			("RAY TRACING", new[] { 6, 7, 8 }),
-			("CAMERA", new[] { 9 }),
-			("REBUILD", new[] { 10 }),
-			("OTHER", new[] { 5, 11 })
-		};
-
-		private static (string Name, int[] Tabs)[] VisibleGroups => S.DevRayTracingOnly ? RayTracingGroups : Groups;
+		private static (string Name, int[] Tabs)[] VisibleGroups => Groups;
 
 		private static readonly (string Name, int[] Tabs)[] Groups = {
 			("GENERAL", new[] { 0 }),
-			("LIGHT", new[] { 1, 6, 7, 8 }),
-			("WORLD", new[] { 2, 4, 3 }),
-			("OTHER", new[] { 5, 11 })
+			("LIGHT", new[] { 1, 6, 7, 8, 9 }),
+			("WORLD", new[] { 2, 4, 3, 12 }),
+			("OTHER", new[] { 10, 5, 11 })
 		};
 
 		private void DrawSidebar() {
@@ -488,6 +477,43 @@ namespace NatureFX {
 			Widgets.Info($"Now: rain {w.Rain:P0} · wet {w.Wetness:P0} · snow {w.Snow:P0} · leaves {w.Leaves:P0} · clouds {w.Cloud:P0}");
 			Widgets.EndCard();
 
+			Widgets.BeginCard("Season", "Colours of the trees and grass that the map's profile describes, and the floating particles. " +
+			                            "Auto: the Autumn and Snow weather, else the map's own season.");
+			int season = Mathf.Clamp(S.Season, 0, SeasonNames.Length - 1);
+			if (Widgets.Chips(ref season, SeasonNames)) {
+				S.Season = season;
+				Other(true);
+			}
+			Widgets.Info($"Now: {Seasons.Describe()}");
+			Widgets.EndCard();
+
+			Widgets.BeginCard("Sky", "HDRP volumetric clouds that follow the weather, their shadows on the mountains, and the blue haze over distant ridges. " +
+			                         "A map can put a cloud sea into its valleys ([clouds] sea = <height>).");
+			Widgets.Switch("Native sky", S.NativeSky, v => S.NativeSky = v);
+			Widgets.Info($"The sky's colours computed by NatureFX's engine from the sun and the air (needs the ray traced effects). Now: {mod_.RT.SkyStatus}");
+			Widgets.Switch("Volumetric clouds", S.Clouds, v => S.Clouds = v);
+			Widgets.BeginDependent(S.Clouds);
+			Widgets.Slider("Cloud shadows", S.CloudShadows, 0, 1, v => S.CloudShadows = v);
+			Widgets.EndDependent();
+			Widgets.Slider("Distant haze", S.AerialHaze, 0, 1, v => S.AerialHaze = v);
+			Widgets.Info($"Clouds: {mod_.Clouds.State}  ·  Night sky: {mod_.Night.State}");
+			Widgets.EndCard();
+
+			Widgets.BeginCard("Rain and snow", "Falling rain and snow around the camera, with the weather: rain streaks that splash where they land and show in headlights and under street lights, drifting snowflakes. 0 turns them off.");
+			Widgets.Slider("Precipitation", S.Precipitation, 0, 2, v => S.Precipitation = v);
+			Widgets.Info($"Now: {mod_.Rain.State}");
+			Widgets.EndCard();
+
+			Widgets.BeginCard("Eye and lens", "Night vision: in the dark colours fade towards blue-green and dim parts get grainy, as the eye sees. " +
+			                                  "Lens flare: ghosts and streaks from bright lights. Depth of field: focus on the car, for replays and photos.");
+			Widgets.Slider("Night vision", S.NightVision, 0, 1, v => S.NightVision = v);
+			Widgets.Slider("Lens flare", S.LensFlare, 0, 1, v => S.LensFlare = v);
+			Widgets.BeginDependent(S.LensFlare > 0.0f);
+			Widgets.Slider("Light streaks", S.LensStreaks, 0, 1, v => S.LensStreaks = v);
+			Widgets.EndDependent();
+			Widgets.Switch("Depth of field", S.DepthOfField, v => S.DepthOfField = v);
+			Widgets.EndCard();
+
 			// only the Manual preset uses these values
 			if (S.WeatherPreset == 0) {
 				DrawManualWeather();
@@ -545,6 +571,23 @@ namespace NatureFX {
 			Other(Widgets.Slider("Drops", S.CarRainDrops, 0, 1, v => S.CarRainDrops = v));
 			Other(Widgets.Slider("Oil film", S.OilFilm, 0, 1, v => S.OilFilm = v));
 			Widgets.EndDependent();
+			Widgets.EndCard();
+
+			Widgets.BeginCard("Smoke and light from the cars", "Volumetric tyre smoke and spray lit by the sun, lamps and headlights " +
+			                                                    "(needs Tyre marks on: it starts where the tyres slide). Brake discs that glow after hard braking, afterfire.");
+			Widgets.Slider("Tyre smoke and spray", S.TireSmoke, 0, 2, v => S.TireSmoke = v);
+			Widgets.BeginDependent(S.TireSmoke > 0.0f);
+			Widgets.Switch("Replace the game's smoke (DX11)", S.ReplaceGameSmoke, v => S.ReplaceGameSmoke = v, "On DX12 the game has no tyre smoke, so this one is always used there.");
+			Widgets.EndDependent();
+			Widgets.Switch("Glowing brakes, afterfire", S.CarGlow, v => S.CarGlow = v);
+			Widgets.Switch("Dirt, dust and snow on the car", S.CarDirt, v => S.CarDirt = v, "Builds up as you drive: mud on wet roads, dust on dusty ones, snow on top while it snows. Rain washes it off.");
+			Widgets.BeginDependent(S.CarDirt);
+			Widgets.Slider("Most dirt", S.CarDirtAmount, 0, 1, v => S.CarDirtAmount = v);
+			if (Widgets.Button("Wash the car", 140)) {
+				mod_.CarRainFx.Wash();
+			}
+			Widgets.EndDependent();
+			Widgets.Info($"Smoke puffs: {mod_.Smoke.Alive}  ·  Car: mud {mod_.CarRainFx.Mud:P0}, dust {mod_.CarRainFx.Dust:P0}, snow {mod_.CarRainFx.Snow:P0}");
 			Widgets.EndCard();
 		}
 
@@ -745,6 +788,9 @@ namespace NatureFX {
 				mod_.SetShaderReplacement(true);
 				mod_.MarkDirty();
 			}, "Off: trees, bushes and grass keep the game's shaders (no wind or snow on them).");
+			Other(Widgets.Slider("Anti-tiling", S.AntiTiling, 0, 1, v => S.AntiTiling = v));
+			Widgets.Info("Hex tiles against a texture's visible repeat and seams, on the materials the map's profile asks for (antitiling=). " +
+			             "Three texture reads instead of one there.");
 			Other(Widgets.Slider("Road wear", S.RoadWear, 0, 1, v => S.RoadWear = v));
 			Widgets.Info("Rubber laid down on the driven ground in long streaks, worn smooth in places.");
 			Other(Widgets.Slider("Surface detail", S.SurfaceDetail, 0, 1, v => S.SurfaceDetail = v));
@@ -769,18 +815,8 @@ namespace NatureFX {
 
 		private string inventoryPath_;
 
-		private void DrawRayTracingOnly() {
-			Widgets.BeginCard("Ray tracing only", "Turns everything off except the ray traced reflections and shadows (NatureFX effects, NatureFX GI and the game's screen space reflections, GI, AO and contact shadows) to judge them alone. Your settings are kept.");
-			Widgets.Switch("Ray tracing only", S.DevRayTracingOnly, v => {
-				S.DevRayTracingOnly = v;
-				tab_ = v ? 6 : 0;
-				scroll_ = Vector2.zero;
-				mod_.MarkDirty();
-			});
-			Widgets.EndCard();
-
-			DrawShaderRebuild();
-
+		// Developer: clearing the accumulated ray traced image and measuring each stage's cost
+		private void DrawRayTracingTools() {
 			Widgets.BeginCard("Ray tracing history", "Shadows, ambient light and reflections build up over several frames. " +
 			                                         "Camera cuts reset them on their own; this clears anything left burnt in.");
 			if (Widgets.Button("Reset accumulated image", 200)) {
@@ -828,7 +864,7 @@ namespace NatureFX {
 			}
 			Widgets.Info(scale == 0 ? "Ambient light, GI and lamp shadows at half resolution."
 				: "Ambient light, GI and lamp shadows at quarter resolution, a different pixel of each 2x2 block every frame, built up over frames and upscaled by depth: about a quarter of the rays.");
-			int denoiser = Mathf.Clamp(S.RTDenoiser, 0, 1);
+			int denoiser = Mathf.Clamp(S.RTDenoiser, 0, 2);
 			if (Widgets.Chips(ref denoiser, new[] { "Simple blur", "Variance guided", "NVIDIA NRD" })) {
 				S.RTDenoiser = denoiser;
 				Other(true);
@@ -871,11 +907,6 @@ namespace NatureFX {
 
 			DrawRayTracingBackend();
 
-			if (S.DevRayTracingOnly) {
-				DrawRayTracingOnly();
-				return;
-			}
-
 			Widgets.Heading("ADVANCED");
 			DrawGraphicsApi();
 			Widgets.BeginCard("Shader replacement", "NatureFX swaps game materials to its own shaders for wind, snow, wetness and the rest.", true);
@@ -886,12 +917,11 @@ namespace NatureFX {
 			}));
 			Other(Widgets.Switch("Wet look on unreplaced HDRP/Lit", S.WetGameMaterials, v => S.WetGameMaterials = v));
 			Widgets.EndCard();
-			DrawMapProfile();
 		}
 
 		// tools for working on NatureFX itself: reload, status, diagnostics, variant recording
 		private void DrawDeveloper() {
-			DrawRayTracingOnly();
+			DrawRayTracingTools();
 			Widgets.BeginCard("Reload shaders", "Without a restart: the newest shader bundle in kino/mods/NatureFX/reload/ (the bundle build " +
 				"puts one there while the game runs) and the engine's shaders in NativeShaders/ (tools/build_native.ps1 -ShadersOnly). " +
 				"C# and the engine's C++ still need a restart.");
@@ -955,34 +985,39 @@ namespace NatureFX {
 			Widgets.EndCard();
 		}
 
+		private static readonly string[] SeasonNames = { "Auto", "Spring", "Summer", "Autumn", "Winter", "None" };
+
+		// The Map tab: what the loaded map asks for and what NatureFX is doing with it right now, card by card, so a map
+		// author sees at a glance what loaded, what shows and why something does not
 		private void DrawMapProfile() {
 			var map = mod_.Map;
-			Widgets.BeginCard("Map profile", "Per-map materials, lights and markers from kino/config/NatureFX/maps/<scene>.nfx (docs/map-authoring.md).", true);
+			var cam = Camera.main;
+			var camPos = cam != null ? cam.transform.position : Vector3.zero;
+			var scenes = MapProfile.LoadedSceneNames();
+
+			// --- the profile itself
+			Widgets.BeginCard("Map profile", "Per-map settings from the map's nfx_profile object, or kino/config/NatureFX/maps/<scene>.nfx (that file wins). docs/map-authoring.md");
 			if (Widgets.Switch("Use map profiles", S.UseMapProfile, v => S.UseMapProfile = v)) {
 				mod_.ReloadMap();
 			}
-
-			var scenes = MapProfile.LoadedSceneNames();
+			Widgets.Switch("Show markers", S.ShowMarkers, v => S.ShowMarkers = v,
+				"Draws every marker over the picture: zones, fog, particle boxes, puddles, decals, probes and lights, with what each is doing.");
 			if (map.Loaded) {
-				Widgets.Info($"'{map.Name}' from {map.Source}");
+				Widgets.Info($"Map:  {map.Name}");
+				Widgets.Info($"From:  {map.Source}");
 				if (!map.FromMap && map.InMapText != null) {
 					Widgets.Info("The map has its own profile too; this file overrides it.");
 				}
-				Widgets.Info($"{map.Section("rules").Count} rules  ·  {mod_.MaterialLooks.MaterialCount} materials  ·  {mod_.MaterialLooks.EmissiveCount} emissive  ·  {mod_.Markers.Markers.Count} markers");
 			} else {
-				Widgets.Info($"No profile for the loaded scenes ({string.Join(", ", scenes)}). Name the file after one of them.");
-				Widgets.Info($"{mod_.Markers.Markers.Count} markers found in the map objects");
+				Widgets.Info($"No profile for the loaded scenes ({string.Join(", ", scenes)}). Put an nfx_profile in the map, or a file named after one of these scenes.");
 			}
-
 			GUILayout.BeginHorizontal();
 			if (Widgets.Button("Reload map profile", 170)) {
 				mod_.ReloadMap();
 			}
 			if (Widgets.Button("Copy camera position", 190)) {
-				var cam = Camera.main;
 				if (cam != null) {
-					var p = cam.transform.position;
-					GUIUtility.systemCopyBuffer = FormattableString.Invariant($"{p.x:0.0}, {p.y:0.0}, {p.z:0.0}");
+					GUIUtility.systemCopyBuffer = FormattableString.Invariant($"{camPos.x:0.0}, {camPos.y:0.0}, {camPos.z:0.0}");
 					mapMessage_ = $"Copied {GUIUtility.systemCopyBuffer}";
 				}
 			}
@@ -998,6 +1033,72 @@ namespace NatureFX {
 			GUILayout.EndHorizontal();
 			if (mapMessage_ != null) {
 				Widgets.Info(mapMessage_);
+			}
+			Widgets.EndCard();
+
+			if (!S.UseMapProfile) {
+				return;
+			}
+
+			// --- what was read
+			Widgets.BeginCard("Loaded", "What the profile and the map's markers gave NatureFX.");
+			var looks = mod_.MaterialLooks;
+			Widgets.Info($"Rules {map.Section("rules").Count}  ·  materials {looks.MaterialCount}  ·  emissive {looks.EmissiveCount}  ·  foliage {looks.FoliageCount}  ·  terrain {looks.TerrainCount}");
+			var kinds = new System.Collections.Generic.SortedDictionary<string, int>();
+			foreach (var m in mod_.Markers.Markers) {
+				kinds.TryGetValue(m.Kind, out int n);
+				kinds[m.Kind] = n + 1;
+			}
+			var parts = new System.Collections.Generic.List<string>();
+			foreach (var kv in kinds) {
+				parts.Add($"{kv.Key} {kv.Value}");
+			}
+			Widgets.Info(parts.Count > 0 ? $"Markers:  {string.Join("  ·  ", parts)}" : "Markers:  none in this map");
+			Widgets.EndCard();
+
+			// --- weather
+			Widgets.BeginCard("Weather and season", "The map's starting weather ([defaults]) and its weather zones, at the camera. A slider you moved since the map loaded is yours (\"yours\").");
+			Widgets.Info($"Map values now:  {mod_.MapWeather.Describe()}");
+			Widgets.Info(mod_.Zones.Count > 0 ? $"Zones ({mod_.Zones.Count}):  {mod_.Zones.Describe()}" : "Zones:  none");
+			Widgets.Info($"Season:  {Seasons.Describe()}  (Weather > Season)");
+			Widgets.Info($"Sky:  {mod_.Clouds.State}  ·  night: {mod_.Night.State}");
+			Widgets.Info($"Sky type:  {mod_.Volume.SkyState}");
+			Widgets.EndCard();
+
+			// --- light
+			Widgets.BeginCard("Lights and reflections", "Light markers switch on at dusk or night (Sun > time of day to check).");
+			Widgets.Info(mod_.Lights.Count > 0 ? $"Lights:  {mod_.Lights.Describe()}" : "Lights:  no light markers");
+			Widgets.Switch("Map reflection probes", S.MapProbes, v => S.MapProbes = v, "Reflection probes at the map's markers and along the road (redrawn when the time or the weather changes).");
+			Widgets.Info(mod_.Probes.Count > 0 ? $"Reflection probes:  {mod_.Probes.Describe()}" : "Reflection probes:  none");
+			Widgets.EndCard();
+
+			// --- plants
+			Widgets.BeginCard("Grass and forest", "3D grass needs Replace shaders on (Shader rebuild).");
+			Widgets.Slider("3D grass density", S.GrassDensity, 0, 2, v => S.GrassDensity = v);
+			Widgets.Slider("3D grass distance", S.GrassDistance, 10, 120, v => S.GrassDistance = v, "0", " m");
+			Widgets.Info(mod_.Grass.AreaCount > 0 ? $"3D grass:  {mod_.Grass.Describe()}" : "3D grass:  no grass markers");
+			Widgets.Info(mod_.Forest.AreaCount > 0 ? $"Forest:  {mod_.Forest.Describe()}" : "Forest:  no forest markers");
+			Widgets.EndCard();
+
+			// --- effects, each with what it waits for
+			Widgets.BeginCard("Effects", "Decals, puddles and water, local fog and floating particles. Each shows what it is doing or what it waits for.");
+			Widgets.Switch("Map effects", S.MapEffects, v => S.MapEffects = v);
+			Widgets.Info($"Decals {mod_.Decals.Count}  ·  puddles {mod_.Water.PuddleCount} (water {mod_.Water.Level:P0})  ·  water surfaces {mod_.Water.SurfaceCount}");
+			Widgets.Info($"Volumetric fog:  {mod_.CameraFog.State}");
+			Widgets.Info($"Volumetric clouds:  {mod_.CameraClouds.State}");
+			var fog = mod_.Volumes.Status(camPos);
+			if (fog.Count > 0) {
+				Widgets.Info("Local fog:");
+				foreach (string line in fog) {
+					Widgets.Info("   " + line);
+				}
+			}
+			var fx = mod_.Particles.Status(camPos);
+			if (fx.Count > 0) {
+				Widgets.Info("Particles:");
+				foreach (string line in fx) {
+					Widgets.Info("   " + line);
+				}
 			}
 			Widgets.EndCard();
 		}

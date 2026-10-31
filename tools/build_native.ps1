@@ -24,13 +24,13 @@ $pluginApi = if ($env:NFX_UNITY_PLUGINAPI) { $env:NFX_UNITY_PLUGINAPI } else { '
 $game = if ($env:GAME_DIR) { $env:GAME_DIR } else { 'C:\Program Files (x86)\Steam\steamapps\common\CarX Drift Racing Online' }
 
 # shaders: DXIL embedded as byte arrays (g_<name>)
-foreach ($shader in @(@{ Name = 'RayQueryTest'; Profile = 'cs_6_5' }, @{ Name = 'SceneRay'; Profile = 'cs_6_5' }, @{ Name = 'SceneRays'; Profile = 'cs_6_5' }, @{ Name = 'SunShadow'; Profile = 'cs_6_6' }, @{ Name = 'SanitizeIndices'; Profile = 'cs_6_5' }, @{ Name = 'ExtractUvs'; Profile = 'cs_6_5' }, @{ Name = 'Ambient'; Profile = 'cs_6_6' }, @{ Name = 'LocalShadows'; Profile = 'cs_6_6' }, @{ Name = 'Shafts'; Profile = 'cs_6_6' }, @{ Name = 'Surface'; Profile = 'cs_6_6' }, @{ Name = 'Reflection'; Profile = 'cs_6_6' }, @{ Name = 'GI'; Profile = 'cs_6_6' }, @{ Name = 'GICacheResolve'; Profile = 'cs_6_6' }, @{ Name = 'Glass'; Profile = 'cs_6_6' }, @{ Name = 'CopyRaw'; Profile = 'cs_6_5' }, @{ Name = 'BakeAlpha'; Profile = 'cs_6_6' }, @{ Name = 'BakeOmm'; Profile = 'cs_6_6' }, @{ Name = 'WindDisplace'; Profile = 'cs_6_5' })) {
+foreach ($shader in @(@{ Name = 'RayQueryTest'; Profile = 'cs_6_5' }, @{ Name = 'SceneRay'; Profile = 'cs_6_5' }, @{ Name = 'SceneRays'; Profile = 'cs_6_5' }, @{ Name = 'SunShadow'; Profile = 'cs_6_6' }, @{ Name = 'SanitizeIndices'; Profile = 'cs_6_5' }, @{ Name = 'ExtractUvs'; Profile = 'cs_6_5' }, @{ Name = 'Ambient'; Profile = 'cs_6_6' }, @{ Name = 'LocalShadows'; Profile = 'cs_6_6' }, @{ Name = 'Shafts'; Profile = 'cs_6_6' }, @{ Name = 'Surface'; Profile = 'cs_6_6' }, @{ Name = 'Reflection'; Profile = 'cs_6_6' }, @{ Name = 'GI'; Profile = 'cs_6_6' }, @{ Name = 'GICacheResolve'; Profile = 'cs_6_6' }, @{ Name = 'Glass'; Profile = 'cs_6_6' }, @{ Name = 'SkyTransmittance'; Profile = 'cs_6_6' }, @{ Name = 'SkyMultiScatter'; Profile = 'cs_6_6' }, @{ Name = 'SkyView'; Profile = 'cs_6_6' }, @{ Name = 'CloudNoise'; Profile = 'cs_6_6' }, @{ Name = 'Clouds'; Profile = 'cs_6_6' }, @{ Name = 'CopyRaw'; Profile = 'cs_6_5' }, @{ Name = 'BakeAlpha'; Profile = 'cs_6_6' }, @{ Name = 'BakeOmm'; Profile = 'cs_6_6' }, @{ Name = 'WindDisplace'; Profile = 'cs_6_5' })) {
 	& $dxc -nologo -T $shader.Profile -E main -O3 -Vn "g_$($shader.Name)" -Fh (Join-Path $out "$($shader.Name).h") -Fo (Join-Path $out "$($shader.Name).cso") (Join-Path $src "shaders\$($shader.Name).hlsl")
 	if ($LASTEXITCODE -ne 0) { throw "dxc failed on $($shader.Name)" }
 }
 
 # the traces again as DXR 1.0 libraries (TraceRay in a ray tracing pipeline): g_<name>Lib
-foreach ($name in @('SunShadow', 'Ambient', 'LocalShadows', 'Shafts', 'Surface', 'Reflection', 'GI', 'GICacheResolve', 'Glass')) {
+foreach ($name in @('SunShadow', 'Ambient', 'LocalShadows', 'Shafts', 'Surface', 'Reflection', 'GI', 'GICacheResolve', 'Glass', 'SkyTransmittance', 'SkyMultiScatter', 'SkyView', 'CloudNoise', 'Clouds')) {
 	& $dxc -nologo -T lib_6_6 -O3 -D NFX_PIPELINE -Vn "g_$($name)Lib" -Fh (Join-Path $out "$($name)Lib.h") -Fo (Join-Path $out "$($name)Lib.cso") (Join-Path $src "shaders\$name.hlsl")
 	if ($LASTEXITCODE -ne 0) { throw "dxc failed on $name (library)" }
 }

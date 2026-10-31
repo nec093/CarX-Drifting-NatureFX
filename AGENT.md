@@ -4,10 +4,13 @@
 - **回答・報告は必ず日本語で書く。** 英語での返答はしない（コード・コミットメッセージ・ログ文字列は英語のままでよい）。
 - 説明はユーザーに向けて平易に。何を変えたか・何が未確認か（ゲーム内で未検証など）を必ず添える。
 
+## 引き継ぎ
+- セッションを始めたら、まず `docs/HANDOFF.md`（今の状態・未確認の項目・次にやること）を読む。区切りごとに更新する。
+
 ## プロジェクト概要
 - CarX Drift Racing Online（Unity 2023.2 / HDRP 16）向けの KSL Mod。リポジトリはこのフォルダ。
 - Unity のビルド用プロジェクトはリポジトリ外: `C:\Users\kppn1223\NatureFX-Unity`（Documents は Controlled Folder Access で Unity が書けないため）。
-- 現在の開発の中心は **RT のみモード（ray tracing only）でのレイトレーシング** と、CarX のシェーダーを置き換える **シェーダーリビルド**。当面の目標は公式マップ parking（vp_parking）を完璧にすること。
+- 現在の開発の中心は **レイトレーシング**、CarX のシェーダーを置き換える **シェーダーリビルド**、**マップ拡張**（docs/map-extension-plan.md）。RT のみモード（ray tracing only）は 2026-10-31 に削除した（ゲームの画面効果は、RT が置き換える分だけ VolumeOverhaul が切る）。当面の目標は公式マップ parking（vp_parking）を完璧にすること。
 - 独自レイトレーシングエンジン `native/NFXNative`（C++ / D3D12）を開発中。Unity のプレイヤーがインライン RT（DXR 1.1）を無効と報告するため、Unity の D3D12 デバイスを直接使って自前で BLAS/TLAS とシェーダーを動かす。
 
 ## ビルド
@@ -17,7 +20,7 @@
 | シェーダーバンドル | `bash tools/build_bundle.sh /c/Users/kppn1223/NatureFX-Unity` | `kino/mods/NatureFX/naturefx.bundle` |
 | 独自エンジン（C++） | `powershell -File tools/build_native.ps1` | `kino/mods/NatureFX/NFXNative.dll` |
 
-- バンドルのビルドは長い。`NFX_Accumulation.hlsl` など全マテリアル共通の hlsl を変えると 1248 バリアントを全部コンパイルし直すので **40〜50 分**かかる。RT の合成シェーダーだけなら数分。必ずバックグラウンドで実行する。
+- バンドルのビルドは長い。`NFX_Accumulation.hlsl` など全マテリアル共通の hlsl を変えると Lit 系の全バリアントをコンパイルし直す（2026-11-01 のフルビルドは 6.4 時間。その後、ノイズをテクスチャ参照にして 1 バリアントの時間を 3〜5 分の 1 に、`unity/variants/game_variant_profile.txt` で Forward パス等を外して変種数を減らした。見込みは 30〜60 分、`unity/variants/README.md` 4 章）。RT の合成シェーダーだけなら数分。必ずバックグラウンドで実行する。ビルドログの `finished in ... compiled N variants (... CPU time)` の行で、どのパスに時間がかかったかが分かる。
 - ビルドスクリプトは開始時にソースを Unity プロジェクトへコピーするので、ビルド中にリポジトリを編集してよい。
 - **再起動なしのシェーダー再読み込み**: ゲーム起動中にバンドルをビルドすると `kino/mods/NatureFX/reload/naturefx-<日時>.bundle` に別名で置かれる。独自エンジンのシェーダーは `powershell -File tools/build_native.ps1 -ShadersOnly` で `NativeShaders/*.cso` に置かれる（DLL は作らない）。ゲームの Developer > Reload shaders で両方を読み直す（バンドルは同名シェーダーのマテリアルを差し替え、エンジンは描画イベント 8 でトレースのパイプラインと NRD の受け渡しカーネルを作り直す）。C#・C++・構造体の配置を変えたときは再起動が必要。再起動後は DLL に埋め込まれたシェーダーに戻るので、変更を残すには通常のビルドもする。
 - ゲーム起動中は `NFXNative.dll` がロックされてコピーに失敗する。`naturefx.bundle` は**ロックされず上書きできてしまい、ゲームが壊れたバンドルを読む**（"archive ... is corrupted"）。バンドルのビルドはゲーム起動中ならコピーしないようにしてある。どちらもゲームを閉じてからコピーする。MOD（.ksm）と DLL の API が変わったときは、両方そろうまで起動しない。
@@ -53,4 +56,4 @@
 - NRD（NVIDIA Real-Time Denoisers、`src/Nrd.inl`）: `%USERPROFILE%\NatureFX-Deps\NRD`（GitHub NVIDIA-RTX/NRD を clone）を vcvars64 の中で `cmake -S . -B _Build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DNRD_STATIC_LIBRARY=ON -DNRD_NRI=OFF -DNRD_EMBEDS_SPIRV_SHADERS=OFF -DNRD_EMBEDS_DXBC_SHADERS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded` → `cmake --build _Build` で `_Bin\NRD.lib` を作る（ShaderMake・MathLib・DXC を自動で取得する）。NRI は使わず、NRD のディスパッチを独自エンジンが Unity のキューで直接実行する（共有ルートシグネチャ: ルート CBV、SRV テーブル、UAV テーブル、静的サンプラー。記述子は専用ヒープのリング）。SIGMA_SHADOW_TRANSLUCENCY で太陽の影（ガラス越しは透過率の分だけ暗く。描画イベント 5、`NrdSigmaPack.hlsl` / `NrdSigmaUnpack.hlsl`）、REBLUR_DIFFUSE 2 つで環境光と GI（イベント 6、GI は跳ね返りの光と空の見える割合を別々に。半解像度のときだけ。`Ambient.hlsl` / `GI.hlsl` はレイの距離を表面バッファーの最後の float（+44）に書く）。ランプの影も REBLUR（イベント 6 モード 2、別インスタンス、遮られた光と発光面が足す光を別々に）、反射は REBLUR_SPECULAR（イベント 7、フレネルで割って渡し掛け戻す。粗さと法線はトレース入力のもの）。NRD のときは影のパスと反射のパスの自前のフィルターを飛ばす。C# は `NativeEngine.IssueNrd`、`NrdEventData` 328 バイト。配布時はライセンスに従い README に NVIDIA の表記を残す。
 - フレーム定数（`NFXCommon.hlsli` の `Frame`）はローカルライトを最後に置く（`NFX_MAX_LOCAL_LIGHTS` = 32、564 float、`kConstantSlot` 2304）。C# の `NativeEngine.Issue` の添字と必ず揃える。`Flags`（c[15]）は `NFX_FLAG_*`。
 - ランプの影（`LocalShadows.hlsl`）は寄与に比例して 1 画素 2 本のライトを選ぶ（RIS）。`LightColor.w` 2 は発光面の代役（HDRP にない光）で、届いた分を負の「遮られた光」として足す。合成の `color -= min(...)` は負を通す前提。
-- テストマップ `test_map` の `props_rt_features`（`tools/kino_sdk/NfxDataTestMap.cs` の `BuildFeatureArea`）に各 RT 機能の確認場所がある。ビルドは `Unity.exe -batchmode -quit -projectPath C:/Users/kppn1223/Desktop/kino_content_sdk -executeMethod NfxDataTestMap.BuildAll`（スクリプトを SDK の `Assets/Editor/NatureFX/` にコピーしてから）。
+- テストマップ `test_map` の `props_rt_features`（`tools/kino_sdk/NfxDataTestMap.cs` の `BuildFeatureArea`）に各 RT 機能の確認場所がある。ビルドは `Unity.exe -batchmode -quit -projectPath C:/Users/kppn1223/Desktop/kino_content_sdk -executeMethod NfxDataTestMap.BuildAll`（スクリプトを SDK の `Assets/Editor/NatureFX/` にコピーしてから）。実写素材の峠区間（`BuildRealArea`、スポーンの後ろ）は Poly Haven の CC0 素材を使う。先に `tools/kino_sdk/polyhaven_import.py` で SDK の `Assets/Content/NfxAssets` に変換しておく（docs/testmap-assets.md）。

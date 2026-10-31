@@ -144,8 +144,43 @@ namespace NatureFX {
 		// shader rebuild: road surface detail of the NatureFX shaders (grain, rubber laid down on the driven line)
 		public float RoadWear { get; set; }
 
-		// development: everything off except the ray traced effects (settings are kept)
-		public bool DevRayTracingOnly { get; set; }
+		// map extension (docs/map-authoring.md 5 and 7): season of the foliage colours and the floating particles
+		// (0 automatic: the weather preset, else the map's [defaults] season; 1 spring .. 4 winter; 5 none), the 3D
+		// grass (density multiplier, metres from the camera) and the map's decals, water, local fog and particles
+		public int Season { get; set; }
+		public float GrassDensity { get; set; }
+		public float GrassDistance { get; set; }
+		public bool MapEffects { get; set; }
+		// sky: HDRP volumetric clouds following the weather (and the map's cloud sea), the strength of their shadows,
+		// the blue haze over distant mountains (0 off)
+		public bool Clouds { get; set; }
+		public float CloudShadows { get; set; }
+		public float AerialHaze { get; set; }
+		// the sky drawn by NatureFX's own engine (physically based atmosphere) over HDRP's
+		public bool NativeSky { get; set; }
+		// falling rain (with splashes) and snow around the camera: how dense (0 off)
+		public float Precipitation { get; set; }
+		// shader rebuild: hex tiled textures where the map's [materials] ask for it (antitiling=), 0 off .. 1
+		public float AntiTiling { get; set; }
+		// cars: NatureFX's lit volumetric tyre smoke and spray (amount, 0 off), whether it replaces the game's own smoke
+		// on DX11 (on DX12 the game has none), glowing brake discs and afterfire
+		public float TireSmoke { get; set; }
+		public bool ReplaceGameSmoke { get; set; }
+		public bool CarGlow { get; set; }
+		// dirt, dust and snow building up on the car nearest the camera (how much at most)
+		public bool CarDirt { get; set; }
+		public float CarDirtAmount { get; set; }
+		// the camera and the eye: night vision (Purkinje shift and grain, 0 off), lens flare (0 off), depth of field on
+		// the car nearest the camera
+		public float NightVision { get; set; }
+		public float LensFlare { get; set; }
+		public float LensStreaks { get; set; }
+		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
+		public bool MapProbes { get; set; }
+		// draw the map's markers over the picture (F8 > Map), for map authors
+		public bool ShowMarkers { get; set; }
+		public bool DepthOfField { get; set; }
+
 	}
 
 	// Plain implementation of ISettings holding the default values (Settings.Defaults); the members mirror the
@@ -292,8 +327,43 @@ namespace NatureFX {
 		// shader rebuild: road surface detail of the NatureFX shaders (grain, rubber laid down on the driven line)
 		public float RoadWear { get; set; }
 
-		// development: everything off except the ray traced effects (settings are kept)
-		public bool DevRayTracingOnly { get; set; }
+		// map extension (docs/map-authoring.md 5 and 7): season of the foliage colours and the floating particles
+		// (0 automatic: the weather preset, else the map's [defaults] season; 1 spring .. 4 winter; 5 none), the 3D
+		// grass (density multiplier, metres from the camera) and the map's decals, water, local fog and particles
+		public int Season { get; set; }
+		public float GrassDensity { get; set; }
+		public float GrassDistance { get; set; }
+		public bool MapEffects { get; set; }
+		// sky: HDRP volumetric clouds following the weather (and the map's cloud sea), the strength of their shadows,
+		// the blue haze over distant mountains (0 off)
+		public bool Clouds { get; set; }
+		public float CloudShadows { get; set; }
+		public float AerialHaze { get; set; }
+		// the sky drawn by NatureFX's own engine (physically based atmosphere) over HDRP's
+		public bool NativeSky { get; set; }
+		// falling rain (with splashes) and snow around the camera: how dense (0 off)
+		public float Precipitation { get; set; }
+		// shader rebuild: hex tiled textures where the map's [materials] ask for it (antitiling=), 0 off .. 1
+		public float AntiTiling { get; set; }
+		// cars: NatureFX's lit volumetric tyre smoke and spray (amount, 0 off), whether it replaces the game's own smoke
+		// on DX11 (on DX12 the game has none), glowing brake discs and afterfire
+		public float TireSmoke { get; set; }
+		public bool ReplaceGameSmoke { get; set; }
+		public bool CarGlow { get; set; }
+		// dirt, dust and snow building up on the car nearest the camera (how much at most)
+		public bool CarDirt { get; set; }
+		public float CarDirtAmount { get; set; }
+		// the camera and the eye: night vision (Purkinje shift and grain, 0 off), lens flare (0 off), depth of field on
+		// the car nearest the camera
+		public float NightVision { get; set; }
+		public float LensFlare { get; set; }
+		public float LensStreaks { get; set; }
+		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
+		public bool MapProbes { get; set; }
+		// draw the map's markers over the picture (F8 > Map), for map authors
+		public bool ShowMarkers { get; set; }
+		public bool DepthOfField { get; set; }
+
 	}
 
 	public static class Settings {
@@ -301,10 +371,6 @@ namespace NatureFX {
 
 		// Values of a fresh install (first run plus every migration); F8 resets single values to these.
 		public static ISettings Defaults { get; private set; }
-
-		// Everything off (Enabled = false): handed to the non ray tracing effects while DevRayTracingOnly is on,
-		// so they switch themselves off without touching the saved settings.
-		public static readonly ISettings Off = new SettingsDefaults();
 
 		public static bool Init() {
 			Data = Kino.Config.RegisterConfig<ISettings>();
@@ -387,7 +453,6 @@ namespace NatureFX {
 				d.RTReflectionIntensity = 1.0f;
 				d.RTReflectionRoughness = 0.5f;
 				d.RTReflectionDistance = 150.0f;
-				d.DevRayTracingOnly = true; // ray tracing development phase (2026-10-29)
 				d.ConfigVersion = 7;
 			}
 			if (d.ConfigVersion < 8) {
@@ -519,6 +584,52 @@ namespace NatureFX {
 				d.RTGlassRefraction = 0.35f;
 				d.RTDenoiser = 1;
 				d.ConfigVersion = 33;
+			}
+			if (d.ConfigVersion < 34) {
+				d.GrassDensity = 1.0f;
+				d.GrassDistance = 60.0f;
+				d.MapEffects = true;
+				d.ConfigVersion = 34;
+			}
+			if (d.ConfigVersion < 35) {
+				d.Clouds = true;
+				d.CloudShadows = 0.7f;
+				d.AerialHaze = 0.4f;
+				d.ConfigVersion = 35;
+			}
+			if (d.ConfigVersion < 36) {
+				d.TireSmoke = 1.0f;
+				d.CarGlow = true;
+				d.ConfigVersion = 36;
+			}
+			if (d.ConfigVersion < 37) {
+				d.CarDirt = true;
+				d.CarDirtAmount = 1.0f;
+				d.ConfigVersion = 37;
+			}
+			if (d.ConfigVersion < 38) {
+				d.NightVision = 0.8f;
+				d.LensFlare = 0.5f;
+				d.ConfigVersion = 38;
+			}
+			if (d.ConfigVersion < 39) {
+				// the first lens flare was far too strong
+				d.LensFlare = 0.3f;
+				d.LensStreaks = 0.3f;
+				d.MapProbes = true;
+				d.ConfigVersion = 39;
+			}
+			if (d.ConfigVersion < 40) {
+				d.Precipitation = 1.0f;
+				d.ConfigVersion = 40;
+			}
+			if (d.ConfigVersion < 41) {
+				d.AntiTiling = 1.0f;
+				d.ConfigVersion = 41;
+			}
+			if (d.ConfigVersion < 42) {
+				d.NativeSky = true;
+				d.ConfigVersion = 42;
 			}
 		}
 

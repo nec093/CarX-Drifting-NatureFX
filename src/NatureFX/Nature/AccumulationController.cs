@@ -6,6 +6,7 @@ namespace NatureFX.Nature {
 	// Snow / leaves / dust / wetness. NFX shaders read the global vector directly;
 	// plain HDRP/Lit track materials get a cheap wetness approximation (darker albedo + higher smoothness).
 	public class AccumulationController {
+		private static readonly int AntiTilingId = Shader.PropertyToID("_NFX_AntiTiling");
 		private struct LitOriginal {
 			public Color BaseColor;
 			public float Smoothness;
@@ -26,11 +27,6 @@ namespace NatureFX.Nature {
 		private float nextGround_;
 		private float groundY_;
 		private bool groundKnown_;
-
-		// The rebuilt shaders' surface grain while only the ray traced effects run (Update got everything off)
-		public void SetSurfaceDetail(float detail) {
-			Shader.SetGlobalVector(ShaderGlobals.Weather, new Vector4(0.0f, 0.0f, detail, 0.0f));
-		}
 
 		// Road wear of the rebuilt shaders (_NFX_Road): how much rubber the driven ground carries, and the height of
 		// that ground so roofs and trailers stay clean
@@ -83,6 +79,7 @@ namespace NatureFX.Nature {
 			Shader.SetGlobalVector(ShaderGlobals.Accumulation, current_);
 			float rain = s.Enabled && s.Accumulation ? Weather.Current.Rain : 0.0f;
 			Shader.SetGlobalVector(ShaderGlobals.Weather, new Vector4(rain, s.SnowDepth, s.Enabled ? s.SurfaceDetail : 0.0f, 0.0f));
+			Shader.SetGlobalFloat(AntiTilingId, s.Enabled ? s.AntiTiling : 0.0f);
 
 			float wet = s.WetGameMaterials ? current_.w : 0.0f;
 			if (Mathf.Abs(wet - appliedWetness_) > 0.005f) {

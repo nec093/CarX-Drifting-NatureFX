@@ -38,6 +38,7 @@ namespace NatureFX.Rendering {
 		private static readonly int LeafParams = Shader.PropertyToID("_NFX_LeafParams");
 		private static readonly int ShaftTex = Shader.PropertyToID("_NFX_ShaftTex");
 		private static readonly int ShaftSize = Shader.PropertyToID("_NFX_ShaftSize");
+		private static readonly int ShaftParams = Shader.PropertyToID("_NFX_ShaftParams");
 		private static readonly int ExposureTexture = Shader.PropertyToID("_ExposureTexture");
 		private static readonly int LocalTex = Shader.PropertyToID("_NFX_LocalTex");
 		private static readonly int LocalSize = Shader.PropertyToID("_NFX_LocalSize");
@@ -71,6 +72,17 @@ namespace NatureFX.Rendering {
 		public bool ExactSun = true;
 		private bool exactUsed_;
 		public ComputeShader Bridge;  // NFX_NativeBridge.compute: what the own engine reads and writes
+		// the sky drawn by the own engine (Sky.hlsli) over HDRP's: the sun's illuminance above the air (lux), haze
+		public bool NativeSky;
+		public float SkySunLux;
+		public float SkyAerosols = 1.0f;
+		public string SkyStatus { get; private set; } = "off";
+		private bool cloudsUsed_;
+		private RTHandle skyView_, skyTransmittance_, clouds_;
+		private static readonly int CloudTex = Shader.PropertyToID("_NFX_CloudTex");
+		private static readonly int SkyViewTex = Shader.PropertyToID("_NFX_SkyView");
+		private static readonly int SkyTransmittanceTex = Shader.PropertyToID("_NFX_SkyTransmittance");
+		private static readonly int SkyParamsId = Shader.PropertyToID("_NFX_SkyParams");
 		public float Strength = 1.0f;
 		public bool FullResolutionShadows = true;
 		public bool TraceAO = true;
@@ -298,6 +310,31 @@ namespace NatureFX.Rendering {
 			}
 			NativeEngine.BeginFrame(ctx.hdCamera.camera, SunDirection, sunRadius, SunIlluminance, frame_, ambientParams, Lights, probe);
 			Surfaces.EnsureTraced(ctx);
+			bool skyUsed = NativeSky && SkySunLux > 0.0f;
+			float cameraHeight = Mathf.Max(1.0f, ctx.hdCamera.camera.transform.position.y);
+			if (skyUsed) {
+				if (skyView_ == null) {
+					skyView_ = RTHandles.Alloc(NativeEngine.SkyViewW, NativeEngine.SkyViewH, TextureXR.slices, dimension: TextureXR.dimension,
+						colorFormat: GraphicsFormat.R32G32B32A32_SFloat, enableRandomWrite: true, name: "NFX_SkyView");
+					skyTransmittance_ = RTHandles.Alloc(NativeEngine.TransmittanceW, NativeEngine.TransmittanceH, TextureXR.slices, dimension: TextureXR.dimension,
+						colorFormat: GraphicsFormat.R16G16B16A16_SFloat, enableRandomWrite: true, name: "NFX_SkyTransmittance");
+				}
+				// the clouds at a quarter of the screen's resolution (soft enough; the composite filters them up)
+				bool cloudsOn = CloudController.NativeOn;
+				int cw = Mathf.Max(1, (ctx.hdCamera.actualWidth + 3) / 4), ch = Mathf.Max(1, (ctx.hdCamera.actualHeight + 3) / 4);
+				if (cloudsOn && (clouds_ == null || clouds_.rt.width != cw || clouds_.rt.height != ch)) {
+					clouds_?.Release();
+					clouds_ = RTHandles.Alloc(cw, ch, TextureXR.slices, dimension: TextureXR.dimension,
+						colorFormat: GraphicsFormat.R16G16B16A16_SFloat, enableRandomWrite: true, filterMode: FilterMode.Bilinear, name: "NFX_Clouds");
+				}
+				NativeEngine.TraceSky(cmd, Bridge, skyView_, skyTransmittance_, SkySunLux, cameraHeight, SkyAerosols,
+					cloudsOn ? clouds_ : null, new Vector4(cw, ch, 1.0f / cw, 1.0f / ch), CloudController.NativeCover, CloudController.NativeMotion);
+				cloudsUsed_ = cloudsOn;
+				SkyStatus = $"own engine, sun {SkySunLux:0} lx above the air, haze x{SkyAerosols:0.00}";
+			} else {
+				SkyStatus = NativeSky ? "waiting for the sun" : "off (HDRP's sky)";
+				cloudsUsed_ = false;
+			}
 			exactUsed_ = ExactSun && TraceShadows && SunExactMaterial != null;
 			if (exactUsed_) {
 				RTTimings.ShadowFilter.Begin(cmd);
@@ -377,6 +414,7 @@ namespace NatureFX.Rendering {
 			props_.SetVector(SunSize, sunSize);
 			props_.SetVector(AmbientSize, ambientSize);
 			props_.SetVector(ShaftSize, shaftSize);
+			props_.SetVector(ShaftParams, shaftParams);
 			props_.SetTexture(ShaftTex, shaftResult ?? color_);
 			props_.SetVector(LocalSize, ambientSize);
 			props_.SetTexture(LocalTex, localResult ?? color_);
@@ -393,6 +431,10 @@ namespace NatureFX.Rendering {
 			props_.SetVector(LeafParams, new Vector4(TraceShadows ? LeafTranslucency : 0.0f, Shafts ? 1.0f : 0.0f, localShadows ? 1.0f : 0.0f,
 				giUsed_ ? Mathf.Max(0.001f, GIIntensity) : 0.0f));
 			props_.SetBuffer(AmbientProbeId, probe); // GI: the sky light HDRP gave, which the sky's share scales
+			props_.SetTexture(SkyViewTex, skyUsed ? skyView_ : color_);
+			props_.SetTexture(SkyTransmittanceTex, skyUsed ? skyTransmittance_ : color_);
+			props_.SetVector(SkyParamsId, new Vector4(skyUsed ? (cloudsUsed_ ? 2.0f : 1.0f) : 0.0f, SkySunLux, cameraHeight, sunRadius));
+			props_.SetTexture(CloudTex, skyUsed && cloudsUsed_ ? clouds_ : color_);
 			CoreUtils.SetRenderTarget(cmd, ctx.cameraColorBuffer, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, Material, props_, PassComposite);
 			RTTimings.ShadowFilter.End(cmd);
@@ -444,6 +486,10 @@ namespace NatureFX.Rendering {
 			shafts_.Release();
 			local_.Release();
 			ReleaseExactTargets();
+			skyView_?.Release();
+			skyTransmittance_?.Release();
+			clouds_?.Release();
+			skyView_ = skyTransmittance_ = clouds_ = null;
 		}
 	}
 }

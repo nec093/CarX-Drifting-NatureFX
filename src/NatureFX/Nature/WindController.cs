@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using NatureFX.Map;
 using UnityEngine;
 
 namespace NatureFX.Nature {
@@ -12,6 +13,7 @@ namespace NatureFX.Nature {
 		private readonly Vector4[] interactors_ = new Vector4[ShaderGlobals.MaxInteractors];
 		private readonly Collider[] overlap_ = new Collider[128];
 		private readonly HashSet<Rigidbody> seen_ = new();
+		private readonly List<Rigidbody> bodies_ = new();
 
 		private GameObject zoneObject_;
 		private WindZone zone_;
@@ -41,13 +43,15 @@ namespace NatureFX.Nature {
 
 		public void Update(ISettings s) {
 			bool on = s.Enabled && s.Wind;
-			float strength = on ? s.WindStrength * Mathf.Max(0.0f, Weather.Current.WindScale) : 0.0f;
+			// the map's [defaults] and weather zones where the user left a slider as it was (Map/MapDefaults)
+			float gustiness = MapDefaults.Value(MapKey.WindGust, s.WindGust);
+			float strength = on ? MapDefaults.Value(MapKey.WindStrength, s.WindStrength) * Mathf.Max(0.0f, Weather.Current.WindScale) : 0.0f;
 
 			time_ += Time.unscaledDeltaTime;
 
-			var dir = Quaternion.Euler(0.0f, s.WindDirection, 0.0f) * Vector3.forward;
+			var dir = Quaternion.Euler(0.0f, MapDefaults.Value(MapKey.WindDirection, s.WindDirection), 0.0f) * Vector3.forward;
 			Shader.SetGlobalVector(ShaderGlobals.Wind, new Vector4(dir.x, 0.0f, dir.z, strength));
-			Shader.SetGlobalVector(ShaderGlobals.WindParams, new Vector4(0.35f, s.WindGust, 6.0f, s.LeafFlutter));
+			Shader.SetGlobalVector(ShaderGlobals.WindParams, new Vector4(0.35f, gustiness, 6.0f, s.LeafFlutter));
 			Shader.SetGlobalFloat(ShaderGlobals.WindTime, time_);
 			TracedBend = s.FoliageSway > 0.0f ? s.FoliageSway : DefaultFoliageBend;
 			Shader.SetGlobalFloat(ShaderGlobals.FoliageBend, DrawnSway ? TracedBend : 0.0f);
@@ -56,8 +60,8 @@ namespace NatureFX.Nature {
 				zoneObject_.SetActive(on);
 				zoneObject_.transform.rotation = Quaternion.LookRotation(dir);
 				zone_.windMain = strength;
-				zone_.windTurbulence = strength * s.WindGust;
-				zone_.windPulseMagnitude = s.WindGust;
+				zone_.windTurbulence = strength * gustiness;
+				zone_.windPulseMagnitude = gustiness;
 				zone_.windPulseFrequency = 0.25f;
 			}
 
@@ -66,6 +70,9 @@ namespace NatureFX.Nature {
 					nextScan_ = Time.unscaledTime + InteractorScanInterval;
 					ScanInteractors();
 				}
+				// the scan finds the cars; their positions go to the shaders every frame, or the plants they push
+				// would follow them in 0.2 s steps
+				SendInteractors();
 			} else {
 				Shader.SetGlobalInt(ShaderGlobals.InteractorCount, 0);
 			}
@@ -75,19 +82,28 @@ namespace NatureFX.Nature {
 		private void ScanInteractors() {
 			var cam = Camera.main;
 			if (cam == null) {
-				Shader.SetGlobalInt(ShaderGlobals.InteractorCount, 0);
+				bodies_.Clear();
 				return;
 			}
 
 			int hits = Physics.OverlapSphereNonAlloc(cam.transform.position, InteractorScanRadius, overlap_, ~0, QueryTriggerInteraction.Ignore);
-			int count = 0;
 			seen_.Clear();
-			for (int i = 0; i < hits && count < interactors_.Length; ++i) {
+			bodies_.Clear();
+			for (int i = 0; i < hits && bodies_.Count < interactors_.Length; ++i) {
 				var rb = overlap_[i].attachedRigidbody;
 				if (rb == null || rb.mass < MinCarMass || !seen_.Add(rb)) {
 					continue;
 				}
+				bodies_.Add(rb);
+			}
+		}
 
+		private void SendInteractors() {
+			int count = 0;
+			foreach (var rb in bodies_) {
+				if (rb == null) {
+					continue;
+				}
 				var p = rb.worldCenterOfMass;
 				interactors_[count++] = new Vector4(p.x, p.y, p.z, 2.6f);
 			}

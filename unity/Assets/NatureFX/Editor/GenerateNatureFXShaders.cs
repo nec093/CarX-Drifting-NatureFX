@@ -22,18 +22,36 @@ namespace NatureFX.Editor {
 			"float4 _NFX_Material2;      // x: wear, y: dirt, z: water beading, w: retroreflection\n" +
 			"float4 _NFX_Emission;       // rgb: emitted colour in nits, w: when (0 off, 1 night, 2 dusk, 3 always)\n" +
 			"float4 _NFX_EmissionParams; // x: mask (0 bright texels, 1 alpha, 2 whole surface), y: share lit, z: flicker\n" +
-			"float4 _NFX_Paint;          // rgb: paint colour where the mask map's blue channel is white, a: 1 = on (CarX Colormask)\n\n";
+			"float4 _NFX_Paint;          // rgb: paint colour where the mask map's blue channel is white, a: 1 = on (CarX Colormask)\n" +
+			"float4 _NFX_Foliage;        // x: type (0 none, 1 conifer, 2 deciduous, 3 bamboo, 4 grass), y: translucency, z: variation, w: autumn colour\n" +
+			"float4 _NFX_Foliage2;       // x: 1 = generated grass blades, y: hue shift (degrees), z: 1 = plumes, w: 1 = vertex colours drive the sway\n" +
+			"float4 _NFX_Water;          // x: 1 = water surface, y: flow direction (radians), z: flow speed (m/s), w: wind ripples\n" +
+			"float4 _NFX_Terrain;        // x: 1 = triplanar, y: metres per texture tile (0: no [terrain]), z: slope where the steep look starts (0 flat .. 1 wall), w: blend width\n" +
+			"float4 _NFX_Terrain2;       // x: 1 = steep map set, y: 1 = flat map set, z: noise in the blend, w: tile of the steep / flat maps (m)\n" +
+			"float4 _NFX_Surface;        // x: anti-tiling (hex tiles, 0 off .. 1), y: large scale variation (0 .. 1), z: its size (m), w: unused\n\n";
 
 		private const string NfxMaterialProperties =
 			"        [HideInInspector] _NFX_Material(\"NFX Material\", Vector) = (-1, 0, 0, 0)\n" +
 			"        [HideInInspector] _NFX_Material2(\"NFX Material 2\", Vector) = (0, 0, 0, 0)\n" +
 			"        [HideInInspector] _NFX_Emission(\"NFX Emission\", Vector) = (0, 0, 0, 0)\n" +
 			"        [HideInInspector] _NFX_EmissionParams(\"NFX Emission Params\", Vector) = (0, 1, 0, 0)\n" +
-			"        [HideInInspector] _NFX_Paint(\"NFX Paint\", Vector) = (1, 1, 1, 0)\n";
+			"        [HideInInspector] _NFX_Paint(\"NFX Paint\", Vector) = (1, 1, 1, 0)\n" +
+			"        [HideInInspector] _NFX_Foliage(\"NFX Foliage\", Vector) = (0, 0, 0, 0)\n" +
+			"        [HideInInspector] _NFX_Foliage2(\"NFX Foliage 2\", Vector) = (0, 0, 0, 0)\n" +
+			"        [HideInInspector] _NFX_Water(\"NFX Water\", Vector) = (0, 0, 0, 0)\n" +
+			"        [HideInInspector] _NFX_Terrain(\"NFX Terrain\", Vector) = (0, 0, 0.55, 0.15)\n" +
+			"        [HideInInspector] _NFX_Terrain2(\"NFX Terrain 2\", Vector) = (0, 0, 0.5, 4)\n" +
+			"        [HideInInspector] _NFX_Surface(\"NFX Surface\", Vector) = (0, 0, 20, 0)\n" +
+			"        [HideInInspector] _NFX_SteepMap(\"NFX Steep Map\", 2D) = \"grey\" {}\n" +
+			"        [HideInInspector] _NFX_FlatMap(\"NFX Flat Map\", 2D) = \"grey\" {}\n";
 
 		private static readonly (string Name, string File, string[] Defines)[] Variants = {
-			("NatureFX/Foliage", "NFX_Foliage.shader", new[] { "NFX_WIND", "NFX_ACCUMULATION" }),
-			("NatureFX/LitAccumulation", "NFX_LitAccumulation.shader", new[] { "NFX_ACCUMULATION" })
+			// ATTRIBUTES_NEED_COLOR: the vertex colour in every pass, also depth and shadows (map vertex colours drive the wind)
+			("NatureFX/Foliage", "NFX_Foliage.shader", new[] { "NFX_WIND", "NFX_ACCUMULATION", "ATTRIBUTES_NEED_COLOR" }),
+			// ATTRIBUTES_NEED_NORMAL: the vertex normal in every pass, so the snow lifts the surface in the depth and
+			// shadow passes too (HDRP hands the shadow pass no normal: the drifts cast and received shadows at the bare
+			// ground's height)
+			("NatureFX/LitAccumulation", "NFX_LitAccumulation.shader", new[] { "NFX_ACCUMULATION", "ATTRIBUTES_NEED_NORMAL" })
 		};
 
 		[MenuItem("NatureFX/Generate Shaders From HDRP Lit")]

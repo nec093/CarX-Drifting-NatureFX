@@ -22,6 +22,8 @@ namespace NatureFX.Rendering {
 		private bool sizeApplied_;
 
 		public Light Sun => sun_;
+		// the track's daylight sun as the sun above the air (Sky.hlsli: the atmosphere colours and dims it itself)
+		public static float TopOfAtmosphereLux { get; private set; }
 
 		// Call after each scene load: tracks bring their own sun.
 		public void Refresh() {
@@ -56,6 +58,7 @@ namespace NatureFX.Rendering {
 				sizeApplied_ = false;
 			}
 
+			TopOfAtmosphereLux = (original_.Intensity > 0.0f ? original_.Intensity : sun_.intensity) * (s.SunOverride ? s.SunIntensityScale : 1.0f);
 			float cloud = Weather.Current.Cloud;
 			float cloudDim = 1.0f - 0.75f * cloud;
 			if (!s.Enabled || (!s.SunOverride && cloud < 0.01f)) {
@@ -64,7 +67,14 @@ namespace NatureFX.Rendering {
 			}
 
 			if (!s.SunOverride) {
-				// weather only: keep the track's sun, dim it under clouds
+				// weather only: keep the track's sun, dim it under clouds. What the time of day override set (the moon,
+				// the sun's shadows off at night, its volumetric dimmer) goes back first: switching the override off
+				// under clouds left the moon on and the sun without shadows
+				UpdateMoon(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+				SetSunShadows(true);
+				if (hdSun_ != null) {
+					hdSun_.volumetricDimmer = original_.VolumetricDimmer;
+				}
 				sun_.transform.rotation = original_.Rotation;
 				sun_.intensity = original_.Intensity * cloudDim;
 				sun_.colorTemperature = original_.Temperature;
@@ -81,18 +91,23 @@ namespace NatureFX.Rendering {
 
 			sun_.transform.rotation = Quaternion.Euler(Mathf.Max(elevation, -10.0f), heading, 0.0f);
 			float daylight = Mathf.SmoothStep(0.0f, 1.0f, Mathf.InverseLerp(-2.0f, 10.0f, elevation));
-			sun_.intensity = original_.Intensity * s.SunIntensityScale * Mathf.Max(daylight, 0.002f) * cloudDim;
+			// below the horizon the sun gives no light (a directional light ignores the horizon and lit the scene from
+			// under the ground at night)
+			sun_.intensity = original_.Intensity * s.SunIntensityScale * daylight * cloudDim;
 			sun_.useColorTemperature = true;
 			sun_.colorTemperature = Mathf.Lerp(2200.0f, s.SunTemperature, Mathf.InverseLerp(0.0f, 30.0f, elevation));
 
 			// Night: a separate moon light high on the opposite side. The sun stays below the horizon so the
 			// physically based sky goes dark; only one directional light casts shadows, so they swap.
 			float night = s.Moonlight ? Mathf.InverseLerp(-2.0f, -12.0f, elevation) : 0.0f;
-			UpdateMoon(night, Mathf.Clamp(-elevation * 0.8f, 20.0f, 65.0f), heading + 180.0f, s.SunIntensityScale * cloudDim, s.LightShafts);
+			// moonlight in the air is faint: the eye's adaptation would otherwise turn a night sky into a bright haze
+			UpdateMoon(night, Mathf.Clamp(-elevation * 0.8f, 20.0f, 65.0f), heading + 180.0f, s.SunIntensityScale * cloudDim, s.LightShafts * 0.15f);
 			SetSunShadows(night < 0.5f);
 
 			if (hdSun_ != null) {
-				hdSun_.volumetricDimmer = s.LightShafts;
+				// a sun below the horizon lights no air: volumetric fog does not know the horizon, and the faint light
+				// the sun keeps at night lit the whole sky white once the camera's volumetrics were on
+				hdSun_.volumetricDimmer = s.LightShafts * Mathf.SmoothStep(0.0f, 1.0f, Mathf.InverseLerp(-2.0f, 2.0f, elevation));
 			}
 			applied_ = true;
 		}
@@ -121,7 +136,10 @@ namespace NatureFX.Rendering {
 
 			moon_.enabled = true;
 			moonObject_.transform.rotation = Quaternion.Euler(elevation, heading, 0.0f);
-			moon_.intensity = original_.Intensity * 0.004f * scale * amount;
+			// a bright moonlit night: about 2 lux against the track's daylight sun (about 100 000 lux); shapes show,
+			// colours and detail mostly come from the lamps and headlights. (0.4 % of the sun lit the night like an
+			// overcast day.)
+			moon_.intensity = original_.Intensity * 0.00002f * scale * amount;
 			moon_.useColorTemperature = true;
 			moon_.colorTemperature = 7800.0f;
 			if (hdMoon_ != null) {

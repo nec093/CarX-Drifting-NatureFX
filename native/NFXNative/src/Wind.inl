@@ -24,6 +24,8 @@ ComPtr<ID3D12Resource> g_windFrames;  // kWindFrameBytes per render slot
 constexpr UINT kWindFrameBytes = 256;
 float g_windFrame[48] = {};            // NFX_Native_SetWind
 std::atomic<bool> g_windActive{ false };
+constexpr size_t kWindBudget = 64;  // wind BLAS swayed and updated a frame (RecordWind)
+size_t g_windCursor = 0;
 std::mutex g_windMutex;
 
 // The per frame updates' scratch, for the largest wind BLAS: only here, while the render thread's work is waited for
@@ -201,17 +203,33 @@ void RecordWind(ID3D12GraphicsCommandList4* list, int slot, const std::vector<D3
 	g_windFrames->Unmap(0, nullptr);
 	D3D12_GPU_VIRTUAL_ADDRESS frame = g_windFrames->GetGPUVirtualAddress() + static_cast<UINT64>(slot % 16) * kWindFrameBytes;
 
-	// 1. sway the vertices of every wind BLAS (its first instance's place)
+	// Only kWindBudget of the wind BLAS a frame, in turn: each update waits for the one before (they share the
+	// scratch), and a forest of 500 swaying trees updated all at once took most of the frame. A tree's traced
+	// shadow then follows its sway every few frames, which the shadow filter's history hides.
+	std::vector<int> firstInstance(g_windBlas.size(), -1);
+	for (size_t i = 0; i < g_instanceWind.size() && i < resolved.size(); ++i) {
+		int k = g_instanceWind[i];
+		if (k >= 0 && firstInstance[k] < 0) {
+			firstInstance[k] = static_cast<int>(i);
+		}
+	}
+	const size_t count = g_windBlas.size();
+	const size_t budget = count < kWindBudget ? count : kWindBudget;
+	std::vector<bool> chosen(count, false);
+	for (size_t n = 0; n < budget; ++n) {
+		chosen[(g_windCursor + n) % count] = true;
+	}
+	g_windCursor = (g_windCursor + budget) % count;
+
+	// 1. sway the vertices of this frame's wind BLAS (its first instance's place)
 	list->SetComputeRootSignature(g_windDisplace.root.Get());
 	list->SetPipelineState(g_windDisplace.pso.Get());
 	list->SetComputeRootShaderResourceView(3, frame);
-	std::vector<bool> done(g_windBlas.size(), false);
-	for (size_t i = 0; i < g_instanceWind.size() && i < resolved.size(); ++i) {
-		int k = g_instanceWind[i];
-		if (k < 0 || done[k]) {
+	for (size_t k = 0; k < count; ++k) {
+		if (!chosen[k] || firstInstance[k] < 0) {
 			continue;
 		}
-		done[k] = true;
+		size_t i = static_cast<size_t>(firstInstance[k]);
 		const auto& w = g_windBlas[k];
 		const auto& g = g_geometries[w.geometry];
 		if (!g.ownPositions) {
@@ -227,12 +245,20 @@ void RecordWind(ID3D12GraphicsCommandList4* list, int slot, const std::vector<D3
 	}
 	// 2. the swayed vertices are read by the updates: unordered access -> shader resource, and back after
 	std::vector<D3D12_RESOURCE_BARRIER> toRead, toWrite;
-	for (const auto& w : g_windBlas) {
+	for (size_t k = 0; k < count; ++k) {
+		if (!chosen[k]) {
+			continue;
+		}
+		const auto& w = g_windBlas[k];
 		toRead.push_back(Transition(w.positions.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
 		toWrite.push_back(Transition(w.positions.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
 	}
 	list->ResourceBarrier(static_cast<UINT>(toRead.size()), toRead.data());
-	for (auto& w : g_windBlas) {
+	for (size_t k = 0; k < count; ++k) {
+		if (!chosen[k] || firstInstance[k] < 0) {
+			continue;
+		}
+		auto& w = g_windBlas[k];
 		// a geometry released since the scene was built: its index buffer is gone, the update would read freed memory
 		const auto& g = g_geometries[w.geometry];
 		if (g.released || !g.ownIndices || !g.ownPositions) {

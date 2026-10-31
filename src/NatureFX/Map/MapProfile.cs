@@ -33,6 +33,8 @@ namespace NatureFX.Map {
 		// the drawn foliage sways with the wind only where the map says its foliage meshes allow it (elsewhere trunks
 		// merged into the same mesh swayed too); the traced shadows sway everywhere
 		public bool FoliageWind => string.Equals(Get("map", "foliageWind"), "true", StringComparison.OrdinalIgnoreCase);
+		// [map] vertexColors = true: the meshes' vertex colours drive the wind and the open sky (docs/map-authoring.md 2)
+		public bool VertexColors => string.Equals(Get("map", "vertexColors"), "true", StringComparison.OrdinalIgnoreCase);
 
 		// Scene names a profile can be named after (tracks load several scenes additively).
 		public static List<string> LoadedSceneNames() {
@@ -147,7 +149,7 @@ namespace NatureFX.Map {
 
 		private const string Template =
 			"# NatureFX map profile for scene '{0}' (docs/map-authoring.md)\n" +
-			"# Lines starting with # are comments. Edit, then F8 > Tools > Reload map profile.\n" +
+			"# Lines starting with # are comments. Edit, then F8 > Map > Reload map profile.\n" +
 			"\n" +
 			"[map]\n" +
 			"name = {0}\n" +
@@ -170,7 +172,7 @@ namespace NatureFX.Map {
 			"# (?i)window => nits=60, k=2700, when=night, random=0.6\n" +
 			"\n" +
 			"[markers]\n" +
-			"# <kind>_<preset> = x, y, z[, key=value ...]   (F8 > Tools > Copy camera position)\n" +
+			"# <kind>_<preset> = x, y, z[, key=value ...]   (F8 > Map > Copy camera position)\n" +
 			"# light_sodium = 120.5, 34.0, -88.2, yaw=90, pitch=70\n";
 
 		public void Clear() {

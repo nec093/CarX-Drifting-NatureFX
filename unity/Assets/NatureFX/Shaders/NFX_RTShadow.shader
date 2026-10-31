@@ -31,12 +31,18 @@ Shader "Hidden/NatureFX/RTShadow"
     float4 _NFX_SunSize;              // sun trace resolution: xy size, zw 1 / size
     float4 _NFX_AmbientSize;          // ambient trace resolution
     float4 _NFX_ShaftSize;            // light shaft trace resolution
+    float4 _NFX_ShaftParams;          // x scattering of the air (1/m), y anisotropy, z max distance (m)
     float4 _NFX_LocalSize;            // local light shadow trace resolution
     float4 _NFX_ShadowCompose;        // x: shadow strength (0: not traced), y: 1 = debug view, 2 = GI debug view, 3 = exact sun light, z: share of the new frame, w: ambient strength
                                       // (_NFX_LeafParams w: own engine GI bounce strength, 0 = one bounce ambient light)
     float4 _NFX_SunFilter;            // x: 2 tan(sun angular radius), y: angle one sun trace pixel covers (radians)
     float4 _NFX_RTSunDir;             // xyz: direction towards the sun, w: 1 when the sun is up
     float4 _NFX_RTSunColor;           // rgb: sun illuminance at the ground (lux)
+    // the own engine's sky (NFXNative Sky.hlsli, NativeEngine.TraceSky): the sky view and transmittance tables
+    TEXTURE2D_X(_NFX_SkyView);
+    TEXTURE2D_X(_NFX_SkyTransmittance);
+    float4 _NFX_SkyParams;            // x 1 = draw it, 2 = with clouds, y the sun above the air (lux), z camera height (m), w sun radius
+    TEXTURE2D_X(_NFX_CloudTex);       // the own engine's clouds (Clouds.hlsl), quarter resolution: rgb radiance, a transmittance
     StructuredBuffer<float4> _NFX_AmbientProbe; // HDRP's diffuse sky probe (7 float4, the SH9 constants)
     float4 _NFX_LeafParams;           // x: share of the sun leaves let through, y: 1 = light shafts, z: 1 = local light shadows,
                                       // w: own engine GI bounce strength (0: the ambient texture is the one bounce factor)
@@ -270,10 +276,80 @@ Shader "Hidden/NatureFX/RTShadow"
             uint2 pixel = (uint2)v.positionCS.xy;
             float2 uv = (pixel + 0.5) * _ScreenSize.zw;
             float depth = LoadCameraDepth(pixel);
-            float linearDepth = depth == UNITY_RAW_FAR_CLIP_VALUE ? 1e6 : LinearEyeDepth(depth, _ZBufferParams);
-            result.rgb += Upsample(2, _NFX_ShaftSize, uv, linearDepth).rgb;
+            // the sky already holds the light its air scatters (HDRP's sky and fog): adding 120 m more of it turned
+            // the sky white, by night too. On a surface the light the air adds in front of it comes with the light the
+            // same air takes away from it, or the whole picture gets a white veil.
+            if (depth != UNITY_RAW_FAR_CLIP_VALUE)
+            {
+                float linearDepth = LinearEyeDepth(depth, _ZBufferParams);
+                float transmittance = exp(-_NFX_ShaftParams.x * min(linearDepth, _NFX_ShaftParams.z));
+                result.rgb = result.rgb * transmittance + Upsample(2, _NFX_ShaftSize, uv, linearDepth).rgb;
+            }
         }
         return result;
+    }
+
+    // ------------------------------------------------------------------ the own engine's sky
+    // The same parameterisations as NFXNative's Sky.hlsli (keep them in step): Bruneton's for transmittance,
+    // Hillaire's for the sky view (zenith split at the horizon, azimuth from the sun squared).
+    static const float SkyGround = 6360000.0, SkyTop = 6460000.0;
+
+    float3 SkySunTransmittance(float r, float mu)
+    {
+        float H = sqrt(SkyTop * SkyTop - SkyGround * SkyGround);
+        float rho = sqrt(max(r * r - SkyGround * SkyGround, 0.0));
+        float disc = r * r * (mu * mu - 1.0) + SkyTop * SkyTop;
+        float d = max(-r * mu + sqrt(max(disc, 0.0)), 0.0);
+        float dMin = SkyTop - r, dMax = rho + H;
+        float2 uv = float2((d - dMin) / max(dMax - dMin, 1e-3), rho / H);
+        return SAMPLE_TEXTURE2D_X_LOD(_NFX_SkyTransmittance, s_linear_clamp_sampler, uv, 0).rgb;
+    }
+
+    // dir: towards the sky; hdrpSky: what HDRP drew there (its stars and moon lit sky take over at night)
+    float3 NativeSky(float3 dir, float3 hdrpSky, float2 uv)
+    {
+        float r = SkyGround + max(_NFX_SkyParams.z, 1.0);
+        float cosBeta = sqrt(max(r * r - SkyGround * SkyGround, 0.0)) / r;
+        float beta = acos(cosBeta);
+        float zenithHorizon = PI - beta;
+        float viewZenith = acos(clamp(dir.y, -1.0, 1.0));
+        float2 screenUv = uv;
+        bool aboveHorizon = dir.y >= -cosBeta;
+        if (aboveHorizon)
+        {
+            float c = 1.0 - saturate(viewZenith / zenithHorizon);
+            uv.y = (1.0 - sqrt(c)) * 0.5;
+        }
+        else
+        {
+            uv.y = sqrt(saturate((viewZenith - zenithHorizon) / beta)) * 0.5 + 0.5;
+        }
+        float3 sun = normalize(_NFX_RTSunDir.xyz);
+        float2 dh = dir.xz, sh = sun.xz;
+        float azimuthCos = dot(dh, dh) > 1e-8 && dot(sh, sh) > 1e-8 ? dot(normalize(dh), normalize(sh)) : 1.0;
+        uv.x = sqrt(saturate(-azimuthCos * 0.5 + 0.5));
+        float2 skyUv = uv;
+        uv = screenUv;
+        float3 sky = SAMPLE_TEXTURE2D_X_LOD(_NFX_SkyView, s_linear_clamp_sampler, skyUv, 0).rgb;
+        // the clouds in front of the sky (and the sun)
+        float4 clouds = _NFX_SkyParams.x > 1.5 ? SAMPLE_TEXTURE2D_X_LOD(_NFX_CloudTex, s_linear_clamp_sampler, uv, 0) : float4(0.0, 0.0, 0.0, 1.0);
+
+        // the sun's disc: its illuminance over its solid angle, dimmed by the air, darker towards the limb
+        float radius = max(_NFX_SkyParams.w, 0.0047);
+        float cosSun = dot(dir, sun);
+        float cosR = cos(radius);
+        if (cosSun > cosR && aboveHorizon)
+        {
+            float edge = saturate((1.0 - cosSun) / (1.0 - cosR));
+            float mu = sqrt(1.0 - edge);
+            float limb = 1.0 - 0.6 * (1.0 - mu);
+            sky += SkySunTransmittance(r, sun.y) * _NFX_SkyParams.y / (PI * radius * radius) * limb;
+        }
+        sky = sky * clouds.a + clouds.rgb;
+        float3 color = sky * GetCurrentExposureMultiplier();
+        // after dusk the stars and the moon lit sky of HDRP's own (MapNight) come through
+        float night = smoothstep(-0.03, -0.12, sun.y);
+        return min(color + hdrpSky * night * clouds.a, 60000.0);
     }
 
     float4 CompositeSurface(Varyings v)
@@ -288,7 +364,16 @@ Shader "Hidden/NatureFX/RTShadow"
 
         float depth = LoadCameraDepth(pixel);
         if (depth == UNITY_RAW_FAR_CLIP_VALUE)
-            return float4(debug ? float3(0.25, 0.3, 0.4) : color, 1.0); // debug: sky blue-grey
+        {
+            if (debug)
+                return float4(0.25, 0.3, 0.4, 1.0); // debug: sky blue-grey
+            if (_NFX_SkyParams.x > 0.5)
+            {
+                float3 dir = normalize(ComputeWorldSpacePosition(uv, UNITY_NEAR_CLIP_VALUE, UNITY_MATRIX_I_VP));
+                color = NativeSky(dir, color, uv);
+            }
+            return float4(color, 1.0);
+        }
         float linearDepth = LinearEyeDepth(depth, _ZBufferParams);
         // local lights HDRP casts no shadows for: their blocked light comes off first (not part of the sun / ambient
         // split below)
@@ -385,7 +470,8 @@ Shader "Hidden/NatureFX/RTShadow"
             if (gi)
             {
                 skyPart *= min(1.0, Luminance(color) / max(Luminance(skyPart), 1e-6));
-                return float4(color - skyPart * (1.0 - ambientFactor) + bounceLight, 1.0);
+                // not below zero: the sky share is clamped by brightness, a channel of it can still exceed the pixel's
+                return float4(max(color - skyPart * (1.0 - ambientFactor), 0.0) + bounceLight, 1.0);
             }
             return float4(color * lerp(1.0, ambientFactor, 0.6) + bounceLight, 1.0);
         }
@@ -395,8 +481,12 @@ Shader "Hidden/NatureFX/RTShadow"
         float3 sunPart = 0.0;
         if (exactKnown)
         {
-            // exact: what HDRP added, per channel (never more than the pixel has: local light shadows came off first)
-            sunPart = min(exact.rgb, color);
+            // exact: what HDRP added, never more than the pixel has (local light shadows came off first). Scaled as a
+            // whole, like the lamp light above: clamped per channel, a sun brighter in one channel than the pixel
+            // (HDRP's contact shadows and direct AO are not in the exact pass) lost that channel and shifted the hue
+            float3 exactSun = max(exact.rgb, 0.0);
+            float exactLum = Luminance(exactSun);
+            sunPart = exactLum > 0.0 ? exactSun * min(1.0, 0.95 * Luminance(color) / exactLum) : 0.0;
         }
         else if (sunLit)
         {
@@ -408,7 +498,7 @@ Shader "Hidden/NatureFX/RTShadow"
         if (gi)
         {
             skyPart *= min(1.0, Luminance(rest) / max(Luminance(skyPart), 1e-6));
-            result = sunPart * sunFactor + rest - skyPart * (1.0 - ambientFactor) + bounceLight;
+            result = sunPart * sunFactor + max(rest - skyPart * (1.0 - ambientFactor), 0.0) + bounceLight;
         }
         else
         {

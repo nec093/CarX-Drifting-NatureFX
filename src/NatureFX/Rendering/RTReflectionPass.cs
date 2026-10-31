@@ -110,9 +110,11 @@ namespace NatureFX.Rendering {
 			bool resetHistory = History.CheckReset(ctx.hdCamera);
 			int width = ctx.hdCamera.actualWidth;
 			int height = ctx.hdCamera.actualHeight;
-			int div = FullResolution ? 1 : 2;
-			int tw = Mathf.Max(1, width / div);
-			int th = Mathf.Max(1, height / div);
+			// rounded like the RTHandle system sizes the half resolution targets (width / 2 left their last column
+			// untraced on odd widths)
+			float scale = FullResolution ? 1.0f : 0.5f;
+			int tw = Mathf.Max(1, Mathf.RoundToInt(width * scale));
+			int th = Mathf.Max(1, Mathf.RoundToInt(height * scale));
 			var low = new Vector4(tw, th, 1.0f / tw, 1.0f / th);
 
 			CustomPassUtils.Copy(ctx, ctx.cameraColorBuffer, color_);

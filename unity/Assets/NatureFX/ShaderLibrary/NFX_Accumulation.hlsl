@@ -45,9 +45,10 @@ float NFX_LeafLayer(float2 p, float seed, out float3 color, out float2 tilt, out
 	color = NFX_LeafColorA;
 	tilt = 0.0;
 
-	[unroll]
+	// real loops, not unrolled: unrolled, the nine cells' maths compiled for seconds per shader variant
+	[loop]
 	for (int y = -1; y <= 1; ++y) {
-		[unroll]
+		[loop]
 		for (int x = -1; x <= 1; ++x) {
 			float2 c = cell + float2(x, y) + seed;
 			float h = NFX_Hash12(c);
@@ -83,7 +84,7 @@ float NFX_LeafLayer(float2 p, float seed, out float3 color, out float2 tilt, out
 // Expanding rain drop rings in puddles; returns a world xz normal offset
 float2 NFX_Ripples(float2 xz, float time, float rain) {
 	float2 offset = 0.0;
-	[unroll]
+	[loop]
 	for (int layer = 0; layer < 2; ++layer) {
 		float2 p = xz * (2.2 + layer * 1.3) + layer * 17.0;
 		float2 cell = floor(p);
@@ -99,6 +100,16 @@ float2 NFX_Ripples(float2 xz, float time, float rain) {
 		offset += d / max(dist, 1e-3) * ring;
 	}
 	return offset * 0.6;
+}
+
+// How much snow the plough and the tyres pushed here: the driven line within about 3 m, but not on it
+float NFX_SnowBank(float2 xz, float driven) {
+	if (_NFX_TrackParams.w <= 0.0) {
+		return 0.0;
+	}
+	float near = max(max(NFX_Track(xz + float2(3.0, 0.0)).b, NFX_Track(xz - float2(3.0, 0.0)).b),
+	                 max(NFX_Track(xz + float2(0.0, 3.0)).b, NFX_Track(xz - float2(0.0, 3.0)).b));
+	return saturate(near * 1.5 - driven * 3.0);
 }
 
 // porosity : how much the surface darkens when wet (asphalt ~1, metal ~0)
@@ -199,7 +210,7 @@ void NFX_ApplyAccumulation(inout NFXSurface s, float3 positionAWS, float3 geomNo
 	if (leaves > 0.001) {
 		// tyres sweep leaves out of the driven line
 		float patch = smoothstep(1.0 - leaves, 1.0 - leaves + 0.3, large + detail * 0.25) * pow(up, 2.0) * saturate(leaves * 3.0) * exposure * (1.0 - track.b * 0.85);
-		[unroll]
+		[loop]
 		for (int layer = 0; layer < 2; ++layer) {
 			float3 leafColor;
 			float2 tilt;
@@ -222,6 +233,8 @@ void NFX_ApplyAccumulation(inout NFXSurface s, float3 positionAWS, float3 geomNo
 	// ruts: compressed snow is thinner, greyer slush with the ground showing through
 	float rut = track.b * snowMask;
 	snowMask *= 1.0 - track.b * 0.75;
+	// banks: snow pushed aside piles up just beside where the cars run
+	snowMask = saturate(snowMask + NFX_SnowBank(xz, track.b) * snow * exposure);
 	if (snowMask > 0.001) {
 		const float e = 0.15;
 		float h0 = NFX_SnowHeight(xz);
@@ -244,6 +257,14 @@ void NFX_ApplyAccumulation(inout NFXSurface s, float3 positionAWS, float3 geomNo
 		s.baseColor = lerp(s.baseColor, s.baseColor * 0.6 + float3(0.12, 0.12, 0.13), rut * 0.5);
 		s.smoothness = lerp(s.smoothness, 0.7, rut * 0.6); // packed, glazed slush
 	}
+
+	// black ice: a cold, wet road freezes into a clear glaze, in patches, polished most on the driven line
+	float ice = _NFX_Ice.x * saturate(wet * 1.5) * pow(up, 4.0) * exposure * (1.0 - snowMask) * smoothstep(0.3, 0.55, large + track.b * 0.3);
+	if (ice > 0.001) {
+		s.baseColor *= lerp(1.0, 0.8, ice);
+		s.smoothness = lerp(s.smoothness, 0.98, ice);
+		s.normalWS = normalize(lerp(s.normalWS, geomNormalWS, ice));
+	}
 }
 
 // Vertex stage: lift snow-covered, upward-facing geometry so drifts have real thickness.
@@ -253,9 +274,11 @@ float3 NFX_SnowDisplacementWS(float3 positionAWS, float3 normalWS) {
 		return 0.0;
 	}
 	float up = saturate(normalWS.y);
-	float mask = NFX_SnowMask(up, positionAWS.xz, snow) * (1.0 - NFX_Track(positionAWS.xz).b * 0.8);
+	float driven = NFX_Track(positionAWS.xz).b;
+	float mask = NFX_SnowMask(up, positionAWS.xz, snow) * (1.0 - driven * 0.8);
+	float bank = NFX_SnowBank(positionAWS.xz, driven) * snow * up;
 	float h = NFX_SnowHeight(positionAWS.xz);
-	return normalWS * mask * _NFX_Weather.y * (0.5 + h);
+	return normalWS * (mask * (0.5 + h) + bank * 1.8) * _NFX_Weather.y;
 }
 
 // Shader Graph "Custom Function" node (Type: File, Name: NFX_Accumulation)

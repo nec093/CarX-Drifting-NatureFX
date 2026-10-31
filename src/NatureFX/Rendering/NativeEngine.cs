@@ -96,6 +96,7 @@ namespace NatureFX.Rendering {
 					return $"no {folder}";
 				}
 				int count = NFX_Native_LoadShaders(folder);
+				InvalidateSky();
 				var cmd = new CommandBuffer { name = "NatureFX shader reload" };
 				cmd.IssuePluginEvent(NFX_Native_RenderEventFunc(), 8);
 				Graphics.ExecuteCommandBuffer(cmd);
@@ -520,13 +521,13 @@ namespace NatureFX.Rendering {
 		// sun shadow rays from past this distance treat alpha tested surfaces as solid (Blocked / FirstBlocker coarse)
 		private const float CoarseShadowDistance = 50.0f;
 
-		// render event data (TraceEventData in NFXNative.cpp): 4 pointers, kind, width, height, Unity frame, 564 floats
-		private const int EventSlotSize = 2304;
+		// render event data (TraceEventData in NFXNative.cpp): 4 pointers, kind, width, height, Unity frame, 2100 floats
+		private const int EventSlotSize = 8448;
 		private const int ConstantsOffset = 48;
 		private const int EventSlots = 64;
 		private static IntPtr eventData_;
 		private static int eventSlot_;
-		private static readonly float[] constants_ = new float[564];
+		private static readonly float[] constants_ = new float[2100];
 
 		// per trace kind: the buffer Prepare fills and the result buffer
 		private class TraceBuffers {
@@ -534,7 +535,7 @@ namespace NatureFX.Rendering {
 			public IntPtr SurfacePtr, ResultPtr;
 			public int Pixels;
 		}
-		private static readonly TraceBuffers[] buffers_ = { new(), new(), new(), new(), new(), new(), new(), new(), new() };
+		private static readonly TraceBuffers[] buffers_ = { new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new() };
 		private static GraphicsBuffer screen_;
 		private static IntPtr screenPtr_;
 		private static int screenPixels_;
@@ -634,7 +635,7 @@ namespace NatureFX.Rendering {
 		}
 
 		// Render event 3 with this trace's data (the Frame constant buffer of NFXCommon.hlsli)
-		private static void Issue(CommandBuffer cmd, int kind, IntPtr surface, IntPtr result, int width, int height, IntPtr screen = default) {
+		private static void Issue(CommandBuffer cmd, int kind, IntPtr surface, IntPtr result, int width, int height, IntPtr screen = default, IntPtr probe = default) {
 			var c = constants_;
 			Array.Clear(c, 0, c.Length);
 			c[0] = sunDirection_.x; c[1] = sunDirection_.y; c[2] = sunDirection_.z; c[3] = sunRadius_;
@@ -643,11 +644,21 @@ namespace NatureFX.Rendering {
 			c[12] = Bits((uint)width); c[13] = Bits((uint)height); c[14] = Bits(sunDirection_.w > 0.0f ? 1u : 0u);
 			c[15] = Bits(GlassShadows ? 1u : 0u);
 			c[16] = ambientParams_.x; c[17] = ambientParams_.y; c[18] = ambientParams_.z; c[19] = ambientParams_.w;
+			Put(c, 20, skyParams_);
+			c[25] = aerosols_; c[26] = 1.0f; // LightCount.y aerosols, .z ozone (Sky.hlsli)
 			for (int i = 0; i < 16; ++i) {
-				c[28 + i] = viewProj_[i / 4, i % 4]; // row major, as HLSL reads a float4x4 constant
+				// column major (Matrix4x4's single index), as dxc packs a float4x4 constant without -Zpr: written by
+				// rows it arrived transposed and ScreenVisibility (the camera colour in reflections and glass) never
+				// found the hit on screen
+				c[28 + i] = viewProj_[i];
 			}
 			Put(c, 44, screenSize_);
 			Put(c, 48, reflParams_);
+			if (kindParams_) {
+				// the clouds' own values in slots their kind does not otherwise read (Clouds.hlsl)
+				Put(c, 16, kindA_);
+				Put(c, 48, kindB_);
+			}
 			// the local lights last: LightPos, LightColor, LightDir, LightSpot, LocalLights.Max each
 			if (lights_ != null) {
 				const int m = LocalLights.Max * 4;
@@ -665,7 +676,7 @@ namespace NatureFX.Rendering {
 			var slot = eventData_ + EventSlotSize * (eventSlot_++ % EventSlots);
 			Marshal.WriteIntPtr(slot, 0, surface);
 			Marshal.WriteIntPtr(slot, 8, result);
-			Marshal.WriteIntPtr(slot, 16, probePtr_);
+			Marshal.WriteIntPtr(slot, 16, probe != IntPtr.Zero ? probe : probePtr_);
 			Marshal.WriteIntPtr(slot, 24, screen);
 			Marshal.WriteInt32(slot, 32, kind);
 			Marshal.WriteInt32(slot, 36, width);
@@ -685,6 +696,78 @@ namespace NatureFX.Rendering {
 			cmd.SetComputeBufferParam(bridge, unpack, NativeResultId, b.Result);
 			cmd.SetComputeTextureParam(bridge, unpack, NativeTargetId, target);
 			cmd.DispatchCompute(bridge, unpack, ((int)size.x + 7) / 8, ((int)size.y + 7) / 8, TextureXR.slices);
+		}
+
+		// ------------------------------------------------------------------ sky (Sky.hlsli)
+		// The atmosphere's tables in buffers of their own: transmittance and multiple scattering when the air changes
+		// (and after a shader reload), the sky view every frame. No rays: these kinds only use the trace plumbing.
+		public const int TraceSkyTransmittance_ = 9, TraceSkyMultiScatter_ = 10, TraceSkyView_ = 11;
+		public const int TransmittanceW = 256, TransmittanceH = 64, MultiScatterSize = 32, SkyViewW = 192, SkyViewH = 108;
+		private static TraceBuffers skyTransmittance_, skyMultiScatter_, skyView_;
+		// the transmittance table, then the clouds' noise and type map (Sky.hlsli: SkyDataBytes / 16)
+		private const int SkyDataFloat4s = 155648;
+		public const int TraceCloudNoise_ = 12, TraceClouds_ = 13;
+		private static bool cloudNoiseMade_;
+		private static bool kindParams_;
+		private static Vector4 kindA_, kindB_;
+		private static Vector4 skyParams_;
+		private static float aerosols_ = 1.0f;
+		private static float skyTablesFor_ = float.NaN; // the aerosols the two slow tables were made for
+
+		public static void InvalidateSky() {
+			skyTablesFor_ = float.NaN;
+			cloudNoiseMade_ = false;
+		}
+
+		private static TraceBuffers SkyBuffer(ref TraceBuffers b, int texels, string name) {
+			if (b == null) {
+				var buffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, texels, 16) { name = name };
+				var ptr = buffer.GetNativeBufferPtr();
+				b = new TraceBuffers { Surface = buffer, Result = buffer, SurfacePtr = ptr, ResultPtr = ptr, Pixels = texels };
+			}
+			return b;
+		}
+
+		// sunLux: the sun's illuminance above the air; height: the camera above the ground (m); aerosols: haze relative
+		// to a clear day. view gets the sky view table every frame, transmittance its table when it is remade.
+		// clouds: their target (null: none) and size, cover (x cumulus, y altostratus, z cumulonimbus, w density) and
+		// motion (xy wind offset, z age, w the haze distance), CloudController.Native*
+		public static void TraceSky(CommandBuffer cmd, ComputeShader bridge, RTHandle view, RTHandle transmittance, float sunLux, float height, float aerosols,
+		                            RTHandle clouds, Vector4 cloudSize, Vector4 cover, Vector4 motion) {
+			var t = SkyBuffer(ref skyTransmittance_, SkyDataFloat4s, "NFX_SkyData");
+			var m = SkyBuffer(ref skyMultiScatter_, MultiScatterSize * MultiScatterSize, "NFX_SkyMultiScatter");
+			var v = SkyBuffer(ref skyView_, SkyViewW * SkyViewH, "NFX_SkyView");
+			skyParams_ = new Vector4(sunLux, sunLux, sunLux, Mathf.Max(1.0f, height));
+			aerosols_ = aerosols;
+			if (float.IsNaN(skyTablesFor_) || Mathf.Abs(skyTablesFor_ - aerosols) > 0.02f) {
+				skyTablesFor_ = aerosols;
+				Issue(cmd, TraceSkyTransmittance_, m.ResultPtr, t.ResultPtr, TransmittanceW, TransmittanceH);
+				Issue(cmd, TraceSkyMultiScatter_, v.ResultPtr, m.ResultPtr, MultiScatterSize, MultiScatterSize, t.ResultPtr);
+			}
+			// every frame (cheap): an unpacked table survives a lost render texture this way
+			Unpack4(cmd, bridge, t, transmittance, new Vector4(TransmittanceW, TransmittanceH, 1.0f / TransmittanceW, 1.0f / TransmittanceH));
+			Issue(cmd, TraceSkyView_, m.ResultPtr, v.ResultPtr, SkyViewW, SkyViewH, t.ResultPtr);
+			Unpack4(cmd, bridge, v, view, new Vector4(SkyViewW, SkyViewH, 1.0f / SkyViewW, 1.0f / SkyViewH));
+			if (clouds != null) {
+				if (!cloudNoiseMade_) {
+					cloudNoiseMade_ = true;
+					Issue(cmd, TraceCloudNoise_, m.ResultPtr, t.ResultPtr, 4096, 64);
+				}
+				int width = (int)cloudSize.x, height2 = (int)cloudSize.y;
+				var b = Buffers(TraceClouds_, width * height2, 1, 16);
+				int prepare = bridge.FindKernel("PrepareClouds");
+				cmd.SetComputeVectorParam(bridge, TargetSizeId, cloudSize);
+				cmd.SetComputeBufferParam(bridge, prepare, NativeSurfaceId, b.Surface);
+				cmd.SetComputeBufferParam(bridge, prepare, NativeResultId, b.Result);
+				cmd.DispatchCompute(bridge, prepare, (width + 7) / 8, (height2 + 7) / 8, 1);
+				kindParams_ = true;
+				kindA_ = cover;
+				kindB_ = motion;
+				Issue(cmd, TraceClouds_, b.SurfacePtr, b.ResultPtr, width, height2, t.ResultPtr, v.ResultPtr);
+				kindParams_ = false;
+				Unpack4(cmd, bridge, b, clouds, cloudSize);
+			}
+			skyParams_ = Vector4.zero; // the other kinds see zeros, as before
 		}
 
 		// Sun shadows into the shadow pass's sun texture

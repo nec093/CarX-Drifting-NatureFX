@@ -15,11 +15,28 @@ float4 _NFX_Road;           // x: wear of the driven ground, y: its height (abso
 float4 _NFX_TrackParams;    // xy: world origin of the track map, z: 1 / world size, w: enabled
 TEXTURE2D(_NFX_TrackMap);   // r: rubber, g: dry line, b: compression
 float4 _NFX_Lights;         // x: sun elevation (degrees), y: unscaled time (lamp flicker)
+float  _NFX_VertexColors;    // 1: the map's vertex colours drive wind and exposure ([map] vertexColors, docs/map-authoring.md 2)
+float4 _NFX_Headlights[4];   // the headlights nearest the camera: xyz absolute world position, w intensity (cd; 0 = none)
+float4 _NFX_HeadlightDirs[4]; // xyz direction, w cosine of the half cone angle (retroreflection, NFX_MaterialProfile.hlsl)
+float4 _NFX_Season;          // x: 0 spring, 1 summer, 2 autumn, 3 winter (blends between; < 0: no seasonal colours)
+float4 _NFX_SunDir;          // xyz: towards the sun (world), w: 1 by day .. 0 at night (back lit leaves)
+float4 _NFX_Puddles[16];     // puddle markers: xyz centre (absolute world), w how full (0 dry .. 1 after long rain)
+float4 _NFX_PuddleSizes[16]; // xyz half size (m), w yaw (radians)
+float  _NFX_PuddleCount;
+float4 _NFX_Ice;             // x: how frozen wet roads are (0 .. 1, black ice)
 
+// Noise from a texture the mod makes at start (ShaderGlobals.CreateNoiseTexture): 1024 texels over 256 units, so it
+// repeats every 256 m. r: value noise (NFX_ValueNoise, the 4 lattice hashes and the smooth blend baked, read with
+// bilinear filtering), b: white noise per integer cell (NFX_Hash12, read at the cell's texel). Computed in the
+// shader, the hashes made FXC take 10 to 30 seconds per variant (every block below inlines dozens of them: 6 hours
+// of bundle build); as lookups a variant compiles in a few seconds and the GPU does less too. Explicit LOD 0, so
+// they are allowed in loops and in the vertex stage.
+TEXTURE2D(_NFX_NoiseTex);
+#define NFX_NOISE_PERIOD 256.0
+
+// White noise for an integer cell (the fraction of p is dropped: callers pass cells, plus seeds like + 7.3)
 float NFX_Hash12(float2 p) {
-	float3 p3 = frac(float3(p.xyx) * 0.1031);
-	p3 += dot(p3, p3.yzx + 33.33);
-	return frac((p3.x + p3.y) * p3.z);
+	return SAMPLE_TEXTURE2D_LOD(_NFX_NoiseTex, s_point_clamp_sampler, frac((floor(p) + 0.5) * (1.0 / NFX_NOISE_PERIOD)), 0).b;
 }
 
 float NFX_Hash13(float3 p3) {
@@ -28,21 +45,15 @@ float NFX_Hash13(float3 p3) {
 	return frac((p3.x + p3.y) * p3.z);
 }
 
+// Smooth value noise (one unit per lattice cell), 0 .. 1
 float NFX_ValueNoise(float2 p) {
-	float2 i = floor(p);
-	float2 f = frac(p);
-	float2 u = f * f * (3.0 - 2.0 * f);
-	float a = NFX_Hash12(i);
-	float b = NFX_Hash12(i + float2(1, 0));
-	float c = NFX_Hash12(i + float2(0, 1));
-	float d = NFX_Hash12(i + float2(1, 1));
-	return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+	return SAMPLE_TEXTURE2D_LOD(_NFX_NoiseTex, s_linear_repeat_sampler, p * (1.0 / NFX_NOISE_PERIOD), 0).r;
 }
 
 float NFX_Fbm(float2 p) {
 	float v = 0.0;
 	float a = 0.5;
-	[unroll]
+	[loop]
 	for (int i = 0; i < 4; ++i) {
 		v += a * NFX_ValueNoise(p);
 		p = p * 2.03 + 17.1;

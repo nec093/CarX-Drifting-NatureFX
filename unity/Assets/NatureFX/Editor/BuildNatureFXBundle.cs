@@ -249,9 +249,10 @@ namespace NatureFX.Editor {
 			if (Directory.Exists(VariantListFolder)) {
 				foreach (string file in Directory.GetFiles(VariantListFolder, "*.txt")) {
 					// recorded_variants.txt is the stripping list of RecordedVariantStripper, not material keyword sets
-					// game_hdrp_levels.txt is the quality level table of the HDRP settings dump
+					// game_hdrp_levels.txt is the quality level table of the HDRP settings dump, game_variant_profile.txt
+					// the facts of VariantProfileStripper
 					string fileName = Path.GetFileName(file);
-					if (fileName.StartsWith("recorded_variants", StringComparison.OrdinalIgnoreCase) || fileName.StartsWith("game_hdrp", StringComparison.OrdinalIgnoreCase)) {
+					if (fileName.StartsWith("recorded_variants", StringComparison.OrdinalIgnoreCase) || fileName.StartsWith("game_", StringComparison.OrdinalIgnoreCase)) {
 						continue;
 					}
 					lines.AddRange(File.ReadAllLines(file).Where(l => l.Trim().Length > 0 && !l.StartsWith("#")));
@@ -371,6 +372,18 @@ namespace NatureFX.Editor {
 					case "_MATERIAL_FEATURE_CLEAR_COAT":
 						Set("_CoatMask", 1.0f);
 						break;
+					case "_PIXEL_DISPLACEMENT":
+						Set("_DisplacementMode", 2.0f); // DisplacementMode.Pixel (POM), needs the height map too
+						break;
+					case "_MAPPING_PLANAR":
+						Set("_UVBase", 4.0f); // UVBaseMapping.Planar
+						break;
+					case "_SPECULARCOLORMAP":
+						Tex("_SpecularColorMap");
+						break;
+					case "_MATERIAL_FEATURE_SPECULAR_COLOR":
+						Set("_MaterialID", 4.0f); // MaterialId.LitSpecular
+						break;
 					case "_MATERIAL_FEATURE_TRANSMISSION":
 						Set("_MaterialID", 5.0f); // translucent: transmission without subsurface
 						Set("_TransmissionEnable", 1.0f);
@@ -449,6 +462,7 @@ namespace NatureFX.Editor {
 				BuildAssetBundleOptions.ChunkBasedCompression | BuildAssetBundleOptions.StrictMode,
 				BuildTarget.StandaloneWindows64);
 			RecordedVariantStripper.LogSummary();
+			VariantProfileStripper.LogSummary();
 
 			if (manifest == null) {
 				Debug.LogError("[NatureFX] Bundle build failed");

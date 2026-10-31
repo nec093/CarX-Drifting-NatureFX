@@ -1,14 +1,35 @@
 // NFXNative local light shadows, per half resolution pixel: how much of the light of the lamps near it is blocked.
-// Many lamps can reach a pixel, so not every one gets a ray: two lights are picked per pixel and frame in proportion
-// to the light each would put there (resampled importance sampling, as the first stage of ReSTIR), each towards a
+// Many lamps can reach a pixel (up to NFX_MAX_LOCAL_LIGHTS: a lit mountain pass, a town), so not every one gets a ray:
+// two lights are picked per pixel and frame in proportion to the light each would put there, each traced towards a
 // random point of the light's shape (soft shadows), and weighted so the sum over frames is the full blocked light;
-// the shadow pass accumulates and blurs it. Lamps HDRP draws come off where blocked; lights HDRP does not have
-// (emissive surfaces standing in as lamps, LightColor.w 2) go on where they get through (a negative blocked share).
+// the shadow pass (and NRD) accumulate and denoise it.
+// The pick is ReSTIR's first stage: with few lights every one is a candidate (resampled importance sampling over all
+// of them), with many a streaming reservoir looks at a fixed number of candidates drawn at random, so the cost per
+// pixel stays the same however many lamps there are. (The reservoirs are not reused across frames or neighbours:
+// the temporal accumulation and the denoiser do that part.)
+// Lamps HDRP draws come off where blocked; lights HDRP does not have (emissive surfaces standing in as lamps,
+// LightColor.w 2) go on where they get through (a negative blocked share).
 // Surface: as Ambient.hlsl. Output: float4 per pixel (blocked illuminance rgb, before the surface's diffuse colour
 // and the exposure). Compiled into LocalShadows.h.
 #include "NFXCommon.hlsli"
 
 static const int Samples = 2;
+static const int ExactUpTo = 16;  // every light a candidate up to this many
+static const int Candidates = 8;  // else this many per sample, drawn uniformly
+
+// the candidate's target weight: the luminance of the light it puts on the point, unshadowed (0: HDRP shadows it)
+float TargetWeight(int i, float3 p, float3 n, out float3 light, out float3 toLight, out float dist)
+{
+    light = 0;
+    toLight = 0;
+    dist = 0;
+    if (LightColor[i].w < 0.5)
+        return 0.0;
+    float3 e = LocalLightIlluminance(i, p, toLight, dist);
+    float ndl = saturate(dot(n, toLight));
+    light = e * ndl;
+    return Luminance(light);
+}
 
 NFX_ENTRY(id)
 {
@@ -21,50 +42,76 @@ NFX_ENTRY(id)
     if (a.w > 0.5)
     {
         int count = min((int)LightCount.x, NFX_MAX_LOCAL_LIGHTS);
-        // the candidates' weights: the luminance of the light each puts on the point, unshadowed
+        bool exact = count <= ExactUpTo;
+        // exact: the sum of every light's weight, for the picks below
         float total = 0.0;
-        for (int i = 0; i < count; ++i)
+        if (exact)
         {
-            if (LightColor[i].w < 0.5)
-                continue; // HDRP shadows this one
-            float3 toLight;
-            float dist;
-            float3 e = LocalLightIlluminance(i, a.xyz, toLight, dist);
-            total += Luminance(e) * saturate(dot(b.xyz, toLight));
+            for (int i = 0; i < count; ++i)
+            {
+                float3 l, t;
+                float d;
+                total += TargetWeight(i, a.xyz, b.xyz, l, t, d);
+            }
         }
-        if (total > 1e-4)
+        if (count > 0 && (!exact || total > 1e-4))
         {
             for (int k = 0; k < Samples; ++k)
             {
-                // pick a light by its weight (a walk over the running sum)
                 float2 u = Hash22(id.xy, FrameIndex, 11u + (uint)k * 2u);
-                float target = u.x * total;
-                float running = 0.0;
                 int chosen = -1;
                 float chosenWeight = 0.0;
                 float3 chosenLight = 0;
                 float3 chosenDir = 0;
                 float chosenDist = 0.0;
-                for (int j = 0; j < count && chosen < 0; ++j)
+                float share = 0.0; // what the pick stands for: the sum of weights over the pick's weight
+                if (exact)
                 {
-                    if (LightColor[j].w < 0.5)
-                        continue;
-                    float3 toLight;
-                    float dist;
-                    float3 e = LocalLightIlluminance(j, a.xyz, toLight, dist);
-                    float ndl = saturate(dot(b.xyz, toLight));
-                    float w = Luminance(e) * ndl;
-                    running += w;
-                    if (w > 0.0 && running >= target)
+                    // a walk over the running sum
+                    float target = u.x * total;
+                    float running = 0.0;
+                    for (int j = 0; j < count && chosen < 0; ++j)
                     {
-                        chosen = j;
-                        chosenWeight = w;
-                        chosenLight = e * ndl;
-                        chosenDir = toLight;
-                        chosenDist = dist;
+                        float3 l, t;
+                        float d;
+                        float w = TargetWeight(j, a.xyz, b.xyz, l, t, d);
+                        running += w;
+                        if (w > 0.0 && running >= target)
+                        {
+                            chosen = j;
+                            chosenWeight = w;
+                            chosenLight = l;
+                            chosenDir = t;
+                            chosenDist = d;
+                        }
                     }
+                    share = total;
                 }
-                if (chosen < 0)
+                else
+                {
+                    // a streaming reservoir over uniformly drawn candidates: each kept with its weight over the
+                    // running sum; the resampling weight is target / source chance = target * count
+                    float sum = 0.0;
+                    for (int c = 0; c < Candidates; ++c)
+                    {
+                        float2 r = Hash22(id.xy, FrameIndex, 101u + (uint)(k * Candidates + c) * 3u);
+                        int j = min((int)(r.x * count), count - 1);
+                        float3 l, t;
+                        float d;
+                        float w = TargetWeight(j, a.xyz, b.xyz, l, t, d) * count;
+                        sum += w;
+                        if (w > 0.0 && r.y * sum < w)
+                        {
+                            chosen = j;
+                            chosenWeight = w / count;
+                            chosenLight = l;
+                            chosenDir = t;
+                            chosenDist = d;
+                        }
+                    }
+                    share = sum / Candidates;
+                }
+                if (chosen < 0 || chosenWeight <= 0.0)
                     continue;
                 // towards a random point of the light's shape: a disc facing the point
                 float3 dir = chosenDir;
@@ -81,13 +128,13 @@ NFX_ENTRY(id)
                     dir = d / max(len, 1e-4);
                 }
                 // the sample stands for all the light: its own over the chance it was picked, over the samples
-                float3 share = chosenLight * (total / chosenWeight) / Samples;
+                float3 light = chosenLight * (share / chosenWeight) / Samples;
                 // the last 0.6 m before the light are not tested: car lamps sit inside their housing and glass
                 bool hidden = Blocked(a.xyz, dir, max(len - 0.6, 0.0), false);
                 if (LightColor[chosen].w > 1.5)
-                    blocked -= hidden ? 0.0 : share; // a light only NatureFX has: added where it gets through
+                    blocked -= hidden ? 0.0 : light; // a light only NatureFX has: added where it gets through
                 else if (hidden)
-                    blocked += share;
+                    blocked += light;
             }
         }
     }

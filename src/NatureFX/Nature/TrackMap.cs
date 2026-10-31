@@ -40,6 +40,20 @@ namespace NatureFX.Nature {
 			public readonly List<Wheel> Wheels = new();
 		}
 
+		// What the wheels did this frame, for the tyre smoke, the spray and the brake glow (Rendering/TireSmoke.cs,
+		// Rendering/CarGlow.cs): contact point, how much it slides (0..1), the car's velocity there, the wheel and car
+		public struct WheelContact {
+			public Vector3 Point;
+			public float Slide;
+			public Vector3 Velocity;
+			public Transform Wheel;
+			public Rigidbody Body;
+		}
+
+		public static readonly List<WheelContact> Contacts = new();
+		// the cars being tracked (CarGlow)
+		public static readonly List<Rigidbody> Bodies = new();
+
 		private static readonly int MapId = Shader.PropertyToID("_NFX_Map");
 		private static readonly int StampsId = Shader.PropertyToID("_NFX_Stamps");
 		private static readonly int StampCountId = Shader.PropertyToID("_NFX_StampCount");
@@ -105,12 +119,17 @@ namespace NatureFX.Nature {
 		}
 
 		public void Update(ISettings s) {
+			Contacts.Clear();
 			if (compute_ == null) {
+				Bodies.Clear();
 				return;
 			}
 			bool on = s.Enabled && s.TireMarks;
 			var cam = Camera.main;
 			if (!on || cam == null) {
+				// the bodies too: left over from before, they were destroyed with the car / scene and the brake glow
+				// sorted them by position (an exception every frame)
+				Bodies.Clear();
 				Shader.SetGlobalVector(ShaderGlobals.TrackParams, Vector4.zero);
 				return;
 			}
@@ -131,8 +150,12 @@ namespace NatureFX.Nature {
 			}
 
 			SetMapParams();
+			Bodies.Clear();
 			foreach (var car in cars_) {
 				StampCar(car, s);
+				if (car.Body != null) {
+					Bodies.Add(car.Body);
+				}
 			}
 
 			// rain gradually re-wets the dry line
@@ -175,6 +198,7 @@ namespace NatureFX.Nature {
 					var v = car.Body.GetPointVelocity(contact);
 					float lateral = Mathf.Abs(Vector3.Dot(v, wheel.Transform.right));
 					float slide = Mathf.Clamp01((lateral - 1.5f) / 6.0f);
+					Contacts.Add(new WheelContact { Point = contact, Slide = slide, Velocity = v, Wheel = wheel.Transform, Body = car.Body });
 
 					stampData_[count++] = new StampData {
 						A = new Vector2(wheel.LastContact.x, wheel.LastContact.z),

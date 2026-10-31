@@ -146,6 +146,7 @@ namespace NatureFX.Rendering {
 
 		public string ShadowStatus => shadows_ == null ? "unavailable (needs DX12 ray tracing)" : !shadows_.enabled ? "off" : shadows_.Status;
 		public string ReflectionStatus => reflection_ == null ? "unavailable (needs DX12 ray tracing)" : !reflection_.enabled ? "off" : reflection_.Status;
+		public string SkyStatus => shadows_ == null ? "unavailable (needs DX12 ray tracing)" : !shadows_.enabled ? "off (needs a ray traced effect on)" : shadows_.SkyStatus;
 		public string GlassStatus => glass_ == null ? "unavailable (needs DX12 ray tracing)" : !glass_.enabled ? "off" : glass_.Status;
 
 		// Per frame: move car instances, pass the sun to the hit lighting.
@@ -488,7 +489,11 @@ namespace NatureFX.Rendering {
 
 		// Point and spot lights lose their shadow maps while the traced lamp shadows run (LocalLights then traces them),
 		// and get them back as they were when those stop. Also spares HDRP a shadow map per lamp.
+		// lamps get ray traced shadows instead of shadow maps right now (MapLights then gives its lamps none)
+		public bool LampShadowsTraced { get; private set; }
+
 		private void UpdateLampShadows(bool takeOver) {
+			LampShadowsTraced = takeOver;
 			if (!takeOver) {
 				if (lampShadowsBefore_.Count > 0) {
 					foreach (var kv in lampShadowsBefore_) {
@@ -570,7 +575,9 @@ namespace NatureFX.Rendering {
 			applied_ = s;
 			// one backend for every ray traced effect (Settings > Ray tracing)
 			// the own engine traces everything: DXR 1.0 (ray tracing pipelines, backend 0) or DXR 1.1 (inline, 1)
-			NativeEngine.Enabled = s.Enabled;
+			// the scene (BLAS, TLAS, their memory, the per frame wind upload) only while a ray traced effect runs; with
+			// all of them off the engine stays idle (RayTracingScene.PushNative uploads it again when one comes on)
+			NativeEngine.Enabled = s.Enabled && (s.RTShadows || s.RTAO || s.RTShafts || s.RTReflections);
 			NativeEngine.Pipeline = s.RTBackend == 0;
 			NativeEngine.Dxr12Sun = NativeEngine.Enabled && s.RTDxr12Sun;
 			NativeEngine.Wind = s.RTWind;
@@ -582,8 +589,8 @@ namespace NatureFX.Rendering {
 				reflection_.RoughnessCutoff = Mathf.Clamp(s.RTReflectionRoughness, 0.05f, 1.0f);
 				reflection_.MaxDistance = Mathf.Max(5.0f, s.RTReflectionDistance);
 				// 0 performance: half resolution, 1 balanced: + second bounce on metal, 2 quality: full resolution too
-				reflection_.FullResolution = s.RTReflectionQuality >= 2;
-				reflection_.SecondBounce = s.RTReflectionQuality >= 1;
+				reflection_.FullResolution = s.RTReflectionQuality >= 2 || PhotoMode.Active;
+				reflection_.SecondBounce = s.RTReflectionQuality >= 1 || PhotoMode.Active;
 				reflection_.WetStreaks = s.RTWetReflections;
 			}
 			if (glass_ != null) {
@@ -594,6 +601,10 @@ namespace NatureFX.Rendering {
 			}
 			if (shadows_ != null) {
 				shadows_.enabled = s.Enabled && (s.RTShadows || s.RTAO || s.RTShafts);
+				shadows_.NativeSky = s.NativeSky;
+				shadows_.SkySunLux = SunController.TopOfAtmosphereLux;
+				// haze: more aerosols as it clouds over and rains (the air near the ground turns milky)
+				shadows_.SkyAerosols = 1.0f + 2.0f * Nature.Weather.Current.Cloud + 2.0f * Nature.Weather.Current.Rain;
 				shadows_.TraceShadows = s.RTShadows;
 				shadows_.TraceAO = s.RTAO;
 				shadows_.AOStrength = s.RTAOStrength;
@@ -601,11 +612,11 @@ namespace NatureFX.Rendering {
 				shadows_.SkyOcclusionDistance = s.RTSkyOcclusion;
 				shadows_.ContactShadows = s.RTContactShadows;
 				shadows_.Bounce = s.RTGIBounce;
-				shadows_.MultiBounceGI = s.RTGIMultiBounce;
+				shadows_.MultiBounceGI = s.RTGIMultiBounce || PhotoMode.Active;
 				shadows_.GIDistance = Mathf.Max(1.0f, s.RTGIDistance);
 				shadows_.GIIntensity = Mathf.Max(0.0f, s.RTGIIntensity);
 				shadows_.Strength = s.RTShadowStrength;
-				shadows_.FullResolutionShadows = s.RTShadowFullRes;
+				shadows_.FullResolutionShadows = s.RTShadowFullRes || PhotoMode.Active;
 				shadows_.ExactSun = s.RTExactSun;
 				shadows_.LeafTranslucency = s.RTLeafTranslucency;
 				shadows_.Shafts = s.RTShafts;
@@ -613,7 +624,8 @@ namespace NatureFX.Rendering {
 				LampShadows = s.RTLampShadows;
 				lights_.Emissive = s.RTEmissiveLights;
 				NativeEngine.GlassShadows = s.RTGlassShadows;
-				shadows_.QuarterResolution = s.RTTraceScale == 1;
+				// photo mode: half resolution traces at least (the denoisers stay: PhotoMode averages their frames)
+				shadows_.QuarterResolution = s.RTTraceScale == 1 && !PhotoMode.Active;
 				shadows_.VarianceDenoiser = s.RTDenoiser >= 1;
 				NativeEngine.NrdEnabled = s.RTDenoiser == 2 && s.Enabled;
 				NativeEngine.NrdSun = NativeEngine.NrdEnabled && NativeEngine.DevNrdSun;

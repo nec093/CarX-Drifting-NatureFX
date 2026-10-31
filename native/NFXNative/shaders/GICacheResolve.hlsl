@@ -24,7 +24,13 @@ NFX_ENTRY(id)
     {
         uint last = Cache.Load(address + 32);
         if (FrameIndex - last > CacheKeepFrames)
-            Cache.Store4(address, uint4(0u, 0u, 0u, 0u)); // freed: key, count, sums
+        {
+            // freed: the whole entry (key, count, sums, resolved, last used, frames). With the resolved colour and
+            // frames left, the next cell to take the slot answered lookups with the old owner's light at once
+            Cache.Store4(address, uint4(0u, 0u, 0u, 0u));
+            Cache.Store4(address + 16, uint4(0u, 0u, 0u, 0u));
+            Cache.Store4(address + 32, uint4(0u, 0u, 0u, 0u));
+        }
         return;
     }
     uint samples = min(count, CacheMaxSamples);

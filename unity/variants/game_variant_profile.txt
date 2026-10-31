@@ -1,0 +1,12 @@
+# NatureFX: how the game draws, merged over every map loaded so far (VariantProfileDump.cs). Copy to
+# unity/variants/ with the game_hdrp files: the bundle build leaves out the variants these rule out
+# (Editor/VariantProfileStripper.cs). A fact seen once stays; delete the file to start over.
+#
+# This first copy was written by hand (2026-11-01) from what is known for certain; the mod rewrites it in
+# kino/config/NatureFX/game_hdrp/ after each map load, and that copy replaces this one.
+#   litShaderMode: the game's camera draws deferred (the exact sun shadows read the G-buffer HDRP wrote)
+#   msaa: the game's HDRP asset has msaaSampleCount 1 (game_hdrp_HDRenderPipelineAsset.json)
+# Directional lightmaps, shadow masks and LOD cross fade are unknown until the mod has seen the maps, so
+# those lines are absent: their variants are kept.
+litShaderMode=Deferred
+msaa=no

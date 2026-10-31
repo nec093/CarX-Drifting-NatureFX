@@ -9,7 +9,7 @@ namespace NatureFX.Rendering {
 	// shadows (LocalShadows.hlsl, from the size of the light's shape). Lights with HDRP shadows keep them (shadowing
 	// them twice would darken) unless RayTracingEffects took those over (Settings.RTLampShadows).
 	public class LocalLights {
-		public const int Max = 32; // NFX_MAX_LOCAL_LIGHTS in NFXCommon.hlsli
+		public const int Max = 128; // NFX_MAX_LOCAL_LIGHTS in NFXCommon.hlsli
 		// the smallest light shape the soft shadows assume: HDRP's default (2.5 cm) is a bare bulb, lamps and
 		// headlights have a reflector and a lens around it
 		private const float MinShapeRadius = 0.12f;

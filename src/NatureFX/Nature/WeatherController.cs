@@ -1,3 +1,4 @@
+using NatureFX.Map;
 using UnityEngine;
 
 namespace NatureFX.Nature {
@@ -29,6 +30,19 @@ namespace NatureFX.Nature {
 
 	public static class Weather {
 		public static WeatherState Current;
+		// black ice on wet roads (0..1): forms over about a minute when it is cold (snow on the ground or winter) and
+		// the road is wet but no rain is falling on it, thaws in the sun (_NFX_Ice, NFX_Accumulation.hlsl)
+		public static float Ice;
+		private static readonly int IceId = Shader.PropertyToID("_NFX_Ice");
+
+		public static void UpdateIce(bool on, Light sun) {
+			var w = Current;
+			float elevation = sun != null ? Mathf.Asin(Mathf.Clamp(-sun.transform.forward.y, -1.0f, 1.0f)) * Mathf.Rad2Deg : 45.0f;
+			bool cold = w.Snow > 0.05f || Seasons.Current == 3;
+			float target = on && cold && w.Rain < 0.1f ? Mathf.Clamp01(w.Wetness * 2.0f) * (elevation > 25.0f ? 0.4f : 1.0f) : 0.0f;
+			Ice = Mathf.MoveTowards(Ice, target, Time.deltaTime / 60.0f);
+			Shader.SetGlobalVector(IceId, new Vector4(Ice, 0.0f, 0.0f, 0.0f));
+		}
 	}
 
 	public class WeatherController {
@@ -88,7 +102,12 @@ namespace NatureFX.Nature {
 
 		private static WeatherState Manual(ISettings s) {
 			return new WeatherState {
-				Rain = s.Rain, Wetness = s.Wetness, Snow = s.Snow, Leaves = s.Leaves, Dust = s.Dust,
+				// the map's [defaults] and weather zones where the user left a slider as it was (Map/MapDefaults)
+				Rain = s.Rain,
+				Wetness = MapDefaults.Value(MapKey.Wetness, s.Wetness),
+				Snow = MapDefaults.Value(MapKey.Snow, s.Snow),
+				Leaves = MapDefaults.Value(MapKey.Leaves, s.Leaves),
+				Dust = MapDefaults.Value(MapKey.Dust, s.Dust),
 				Cloud = 0.0f, FogScale = 1.0f, WindScale = 1.0f
 			};
 		}

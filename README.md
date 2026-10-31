@@ -90,6 +90,10 @@ Unity エディタで開いた場合は、メニュー **NatureFX > Generate Sha
   - Lighting / Ray tracing / Foliage & wind / Weather & accumulation / Tools
 - レイトレーシングを使うには Steam の起動オプションに `-force-d3d12` を追加
   (Ray tracing 画面に「GPU / Pipeline が対応しているか」が表示されます)
+- **F9**：写真モード。カメラを止めている間、レイトレーシングの効果を最高品質で積み上げ続け、ノイズのない 1 枚に近づけます
+- F8 の Weather > **Season / Sky / Eye and lens**：季節の色、ボリュームの雲と雲の影・遠くの霞、暗所の見え方・レンズフレア・被写界深度
+- F8 の Weather > **Rain and snow**：カメラのまわりに降る雨（着地点の水しぶき、ヘッドライトや街灯の光の中で光る）と雪。Precipitation で量（0 で消える）
+- F8 の Road and cars > **Smoke and light from the cars**：光を受けるボリュームのタイヤスモークと水しぶき、ブレーキの赤熱とアフターファイア、車の泥・ほこり・雪
 
 ### シェーダー差し替えルール
 

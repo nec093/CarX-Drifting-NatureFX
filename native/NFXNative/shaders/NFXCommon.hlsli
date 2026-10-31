@@ -12,7 +12,7 @@ ByteAddressBuffer Screen : register(t4);   // per full resolution pixel: colour 
 RWByteAddressBuffer Cache : register(u2); // world space radiance cache (GI), see the cache section below
 SamplerState LinearWrap : register(s0);
 
-#define NFX_MAX_LOCAL_LIGHTS 32
+#define NFX_MAX_LOCAL_LIGHTS 128
 static const uint RecordSize = 128;
 
 cbuffer Frame : register(b0)
@@ -28,8 +28,8 @@ cbuffer Frame : register(b0)
     uint SunUp;
     uint Flags;             // NFX_FLAG_*
     float4 AmbientParams;   // x ambient ray length, y 1 = bounce light, z sky occlusion length (0 off), w contact strength
-    float4 ShaftParams;     // unused here (Unity prepares the shaft samples)
-    float4 LightCount;      // x lights in use
+    float4 SkyParams;       // xyz the sun above the air (lux), w the camera above the ground (m): Sky.hlsli
+    float4 LightCount;      // x lights in use; y aerosols, z ozone (Sky.hlsli)
     float4x4 ViewProj;      // camera relative world to clip (reflections: what of a hit is on screen)
     float4 ScreenSize;      // full resolution: xy size, zw 1 / size
     float4 ReflParams;      // x max distance (m), y roughness cutoff, z 1 = second bounce (glass: refraction strength),

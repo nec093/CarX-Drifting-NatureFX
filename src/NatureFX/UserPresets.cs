@@ -22,7 +22,7 @@ namespace NatureFX {
 		// window layout and development switches are per PC, not part of a look
 		private static readonly HashSet<string> Excluded = new() {
 			nameof(ISettings.ConfigVersion), nameof(ISettings.Enabled), nameof(ISettings.UiOpacity), nameof(ISettings.UiScale), nameof(ISettings.UiWidth),
-			nameof(ISettings.UiHeight), nameof(ISettings.UiLargeText), nameof(ISettings.RecordShaderVariants), nameof(ISettings.DevRayTracingOnly)
+			nameof(ISettings.UiHeight), nameof(ISettings.UiLargeText), nameof(ISettings.RecordShaderVariants)
 		};
 
 		private static readonly PropertyInfo[] Properties = typeof(ISettings).GetProperties()
