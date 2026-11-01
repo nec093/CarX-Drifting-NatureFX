@@ -6,6 +6,9 @@ namespace NatureFX.Rebuild {
 	// smoothness, alpha clip and emission found by the usual property names. HDRP/Lit sources already use the
 	// target's names and only change shader.
 	public static class GenericTranslator {
+		// cd/m² an unlit sign or screen glows at (a lit sign or an LCD screen: a few hundred)
+		public const float UnlitLuminance = 250.0f;
+
 		public static void Apply(Material m, MaterialSnapshot src) {
 			string shaderName = src.Shader != null ? src.Shader.name : "";
 			bool litNames = shaderName == "HDRP/Lit" || shaderName.StartsWith("HDRP/LitTessellation");
@@ -69,6 +72,23 @@ namespace NatureFX.Rebuild {
 			if ((src.TryFloat(out float twoSided, "_DoubleSidedEnable") && twoSided > 0.5f)
 			    || (src.TryFloat(out float cull, "_CullMode", "_Cull") && cull < 0.5f)) {
 				m.SetFloat("_DoubleSidedEnable", 1.0f);
+			}
+
+			// unlit (signs, screens): their colour is light. In the track's units it was a dim glow that vanished in real
+			// daylight (Units: the sun raised to real sunshine): it glows at a lit sign's or a screen's luminance instead,
+			// over a dark surface (what the rays see of it), and the own engine's emitters take it as a light
+			if (shaderName.IndexOf("unlit", System.StringComparison.OrdinalIgnoreCase) >= 0) {
+				var glow = src.TryColor(out var unlitColor, "_UnlitColor", "_BaseColor", "_Color", "_MainColor", "_TintColor") ? unlitColor : Color.white;
+				m.SetColor("_EmissiveColor", new Color(glow.r, glow.g, glow.b) * UnlitLuminance);
+				m.SetTexture("_EmissiveColorMap", baseMap != null ? src.Textures[baseMap].Texture : null);
+				if (baseMap != null) {
+					m.SetTextureScale("_EmissiveColorMap", src.Textures[baseMap].Scale);
+					m.SetTextureOffset("_EmissiveColorMap", src.Textures[baseMap].Offset);
+				}
+				m.SetColor("_BaseColor", new Color(glow.r * 0.04f, glow.g * 0.04f, glow.b * 0.04f, glow.a));
+				m.SetFloat("_Smoothness", 0.6f);
+				m.SetFloat("_Metallic", 0.0f);
+				return;
 			}
 
 			if (!litNames && src.TryColor(out var emission, "_EmissiveColor", "_EmissionColor") && emission.maxColorComponent > 0.0f) {

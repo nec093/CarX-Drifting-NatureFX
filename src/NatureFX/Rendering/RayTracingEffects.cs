@@ -184,7 +184,8 @@ namespace NatureFX.Rendering {
 			lights_.Update(Camera.main);
 			RTTimings.BeginSceneUpdate();
 			dxrScene_.Update();
-			dxrScene_.SetCarMotionVectors(NativeEngine.NrdEnabled && NativeEngine.DevCarMotionVectors);
+			// NRD and DLSS both follow the cars' pixels by their motion vectors
+			dxrScene_.SetCarMotionVectors((NativeEngine.NrdEnabled || Dlaa.Active) && NativeEngine.DevCarMotionVectors);
 			RTTimings.EndSceneUpdate();
 
 			// the own engine's light: the sun, or after dusk the moon (SunController.SkyLight): the traced shadows,

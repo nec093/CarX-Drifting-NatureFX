@@ -35,28 +35,39 @@ namespace NatureFX.Rendering {
 
 		public int InstanceCount { get; private set; }
 
-		// Car materials (moving renderers'). The game draws them without their motion vector pass, so HDRP's motion
-		// vectors give their pixels the camera's motion only: NRD, which follows each pixel through time by them, then
-		// lost a moving car's history every frame (GI and shadows on it stayed noise). SetCarMotionVectors turns the
-		// pass on while NRD runs and puts back what it changed when it stops.
+		// Cars (moving renderers and their materials). The game draws them without their motion vectors (the
+		// materials' pass off, the renderers on camera motion only), so HDRP's motion vectors give their pixels the
+		// camera's motion: NRD and DLSS, which follow each pixel through time by them, lost a moving car's history
+		// every frame (GI and shadows on it stayed noise, its edges smeared). SetCarMotionVectors turns both on while
+		// NRD or DLSS runs and puts back what it changed when they stop.
 		private readonly HashSet<Material> carMaterials_ = new();
+		private readonly HashSet<Renderer> carRenderers_ = new();
 		private readonly HashSet<Material> motionVectorsOn_ = new();
-		private int carMaterialsSeen_ = -1;
+		private readonly Dictionary<Renderer, MotionVectorGenerationMode> modesChanged_ = new();
+		private int carMaterialsSeen_ = -1, carRenderersSeen_ = -1;
 		private bool carMotionVectors_;
 
 		public void SetCarMotionVectors(bool on) {
-			if (on == carMotionVectors_ && carMaterials_.Count == carMaterialsSeen_) {
+			if (on == carMotionVectors_ && carMaterials_.Count == carMaterialsSeen_ && carRenderers_.Count == carRenderersSeen_) {
 				return;
 			}
 			carMotionVectors_ = on;
 			carMaterialsSeen_ = carMaterials_.Count;
+			carRenderersSeen_ = carRenderers_.Count;
 			if (on) {
 				foreach (var m in carMaterials_) {
 					if (m != null && !m.GetShaderPassEnabled("MotionVectors") && motionVectorsOn_.Add(m)) {
 						m.SetShaderPassEnabled("MotionVectors", true);
 					}
 				}
-				KSL.API.Kino.Log.Info($"[NatureFX] NRD: motion vector pass on for {motionVectorsOn_.Count} car materials");
+				// HDRP draws a renderer's motion vectors only when it asks for its own (Object)
+				foreach (var r in carRenderers_) {
+					if (r != null && r.motionVectorGenerationMode != MotionVectorGenerationMode.Object && !modesChanged_.ContainsKey(r)) {
+						modesChanged_[r] = r.motionVectorGenerationMode;
+						r.motionVectorGenerationMode = MotionVectorGenerationMode.Object;
+					}
+				}
+				KSL.API.Kino.Log.Info($"[NatureFX] Car motion vectors on: pass on {motionVectorsOn_.Count} materials, {modesChanged_.Count} of {carRenderers_.Count} renderers switched to their own motion");
 			} else {
 				foreach (var m in motionVectorsOn_) {
 					if (m != null) {
@@ -64,6 +75,12 @@ namespace NatureFX.Rendering {
 					}
 				}
 				motionVectorsOn_.Clear();
+				foreach (var kv in modesChanged_) {
+					if (kv.Key != null) {
+						kv.Key.motionVectorGenerationMode = kv.Value;
+					}
+				}
+				modesChanged_.Clear();
 			}
 		}
 
@@ -484,6 +501,7 @@ namespace NatureFX.Rendering {
 			// the glass the own engine draws is hidden from HDRP (OwnGlass): the scene reads what was there
 			var materials = OwnGlass.Originals(r) ?? r.sharedMaterials;
 			if (moving) {
+				carRenderers_.Add(r);
 				foreach (var m in materials) {
 					if (m != null) {
 						carMaterials_.Add(m);

@@ -192,6 +192,8 @@ namespace NatureFX {
 		public bool NativeGlass { get; set; }              // roadmap E: the own engine draws the glass whole (HDRP's hidden)
 		public float PostBloom { get; set; }               // the share of the light the lens and eye scatter (own post)
 		public float LensStreaks { get; set; }
+		public float MotionBlur { get; set; }              // own post: the shutter's share of a frame (0.5: 180°), 0 off
+		public float DofFStop { get; set; }                // own post's depth of field: the lens's f-number
 		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
 		public bool MapProbes { get; set; }
 		// draw the map's markers over the picture (F8 > Map), for map authors
@@ -392,6 +394,8 @@ namespace NatureFX {
 		public bool NativeGlass { get; set; }              // roadmap E: the own engine draws the glass whole (HDRP's hidden)
 		public float PostBloom { get; set; }               // the share of the light the lens and eye scatter (own post)
 		public float LensStreaks { get; set; }
+		public float MotionBlur { get; set; }              // own post: the shutter's share of a frame (0.5: 180°), 0 off
+		public float DofFStop { get; set; }                // own post's depth of field: the lens's f-number
 		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
 		public bool MapProbes { get; set; }
 		// draw the map's markers over the picture (F8 > Map), for map authors
@@ -739,6 +743,12 @@ namespace NatureFX {
 				// DLAA in place of TAA (falls back to TAA without an RTX GPU)
 				d.Dlaa = true;
 				d.ConfigVersion = 57;
+			}
+			if (d.ConfigVersion < 58) {
+				// motion blur and depth of field in the own post-processing (HDRP's off with it)
+				d.MotionBlur = 0.5f;
+				d.DofFStop = 2.8f;
+				d.ConfigVersion = 58;
 			}
 		}
 

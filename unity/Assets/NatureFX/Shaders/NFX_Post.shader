@@ -13,6 +13,12 @@
 //   glow close round the light, and short soft diffraction rays.
 //   Final: bloom, the flare, the exposure compensation, the tone curve (ACES fitted, Khronos PBR Neutral, AgX, none), then contrast
 //   and saturation on the display picture.
+//   MotionBlur: the light gathered along the path each pixel moved while the shutter was open (its motion to the previous
+//   frame times the shutter's share of a frame), a nearer surface that hardly moves (the chased car over a streaming
+//   road) kept out of what moves behind it.
+//   DepthOfField: a thin lens: each pixel's circle of confusion from its distance, the focus distance, the focal length
+//   (from the field of view on a 24 mm high sensor) and the f-number, gathered over a disc; a blurred nearer surface
+//   spreads over what is behind it, a blurred farther one never over a sharper nearer one.
 Shader "Hidden/NatureFX/Post"
 {
     HLSLINCLUDE
@@ -335,6 +341,111 @@ Shader "Hidden/NatureFX/Post"
         return float4(pow(p, 2.2), 1.0);
     }
 
+    // --- motion blur and depth of field (PostPass, before the meter and the bloom: on the scene's light). Depth and
+    // motion are HDRP's, at the render resolution; the target may be the display's (DLSS upscaling).
+    TEXTURE2D_X(_NFX_PostMotion);   // motion to the previous frame in uv (previous - current), render resolution
+    float4 _NFX_PostBlur;           // x the shutter's share of a frame, y longest blur (target pixels), w largest circle of confusion (target pixels)
+    float4 _NFX_PostLens;           // x focal length (mm), y f-number, z focus distance (m), w sensor height (mm)
+
+    uint2 RenderPixel(float2 uv)
+    {
+        return min((uint2)(saturate(uv) * _ScreenSize.xy), (uint2)_ScreenSize.xy - 1);
+    }
+
+    float2 MotionAt(float2 uv)
+    {
+        return LOAD_TEXTURE2D_X(_NFX_PostMotion, RenderPixel(uv)).xy;
+    }
+
+    float DistanceAt(float2 uv)
+    {
+        float d = LoadCameraDepth(RenderPixel(uv));
+        return d == UNITY_RAW_FAR_CLIP_VALUE ? 1e5 : LinearEyeDepth(d, _ZBufferParams);
+    }
+
+    float4 MotionBlur(Varyings v) : SV_Target
+    {
+        float2 uv = TargetUV(v);
+        float3 c0 = SampleRT(_NFX_PostSource, uv).rgb;
+        float2 m = MotionAt(uv) * _NFX_PostBlur.x;
+        float len = length(m * _NFX_PostTargetSize.xy);
+        if (len < 0.5)
+            return float4(c0, 1.0);
+        if (len > _NFX_PostBlur.y)
+        {
+            m *= _NFX_PostBlur.y / len;
+            len = _NFX_PostBlur.y;
+        }
+        float d0 = DistanceAt(uv);
+        float3 sum = c0;
+        float w = 1.0;
+        const int N = 16;
+        [loop]
+        for (int i = 0; i < N; ++i)
+        {
+            // along the path, centred on the pixel (the shutter open around the frame's moment)
+            float2 suv = uv + m * ((i + 0.5) / N - 0.5);
+            float ds = DistanceAt(suv);
+            float ls = length(MotionAt(suv) * _NFX_PostBlur.x * _NFX_PostTargetSize.xy);
+            if (ds < d0 * 0.95 && ls < len * 0.5)
+                continue;
+            sum += SampleRT(_NFX_PostSource, suv).rgb;
+            w += 1.0;
+        }
+        return float4(sum / w, 1.0);
+    }
+
+    // a thin lens's circle of confusion for a surface this far (m), in target pixels
+    float CocPixels(float distance)
+    {
+        float f = _NFX_PostLens.x;
+        float focus = max(_NFX_PostLens.z * 1000.0, f * 1.05);
+        float d = max(distance * 1000.0, f * 1.05);
+        float coc = f * f / _NFX_PostLens.y * abs(d - focus) / (d * (focus - f));
+        return min(coc / _NFX_PostLens.w * _NFX_PostTargetSize.y, _NFX_PostBlur.w);
+    }
+
+    float4 DepthOfField(Varyings v) : SV_Target
+    {
+        float2 uv = TargetUV(v);
+        float3 c0 = SampleRT(_NFX_PostSource, uv).rgb;
+        float d0 = DistanceAt(uv);
+        float coc0 = CocPixels(d0);
+        // how far to look: this pixel's own blur, or a blurred nearer surface around it that reaches over it
+        float radius = coc0;
+        float widest = _NFX_PostBlur.w;
+        [unroll]
+        for (int k = 0; k < 8; ++k)
+        {
+            float a = k * 0.7853982;
+            float2 o = float2(cos(a), sin(a)) * widest * _NFX_PostTargetSize.zw;
+            float ds = DistanceAt(uv + o);
+            if (ds < d0)
+                radius = max(radius, CocPixels(ds));
+        }
+        if (radius < 0.75)
+            return float4(c0, 1.0);
+        float3 sum = 0.0;
+        float w = 0.0;
+        const int N = 40;
+        [loop]
+        for (int i = 0; i < N; ++i)
+        {
+            float r = sqrt((i + 0.5) / N) * radius;
+            float a = i * 2.3999632;
+            float2 suv = uv + float2(cos(a), sin(a)) * r * _NFX_PostTargetSize.zw;
+            float ds = DistanceAt(suv);
+            float cs = CocPixels(ds);
+            // a farther surface does not spread over a nearer, sharper one
+            if (ds > d0)
+                cs = min(cs, coc0);
+            float wi = saturate(cs - r + 1.0);
+            sum += SampleRT(_NFX_PostSource, suv).rgb * wi;
+            w += wi;
+        }
+        return w > 1e-3 ? float4(sum / w, 1.0) : float4(c0, 1.0);
+    }
+
     ENDHLSL
 
     SubShader
@@ -361,6 +472,14 @@ Shader "Hidden/NatureFX/Post"
         Pass { Name "Final" HLSLPROGRAM
             #pragma vertex Vert
             #pragma fragment Final
+            ENDHLSL }
+        Pass { Name "MotionBlur" HLSLPROGRAM
+            #pragma vertex Vert
+            #pragma fragment MotionBlur
+            ENDHLSL }
+        Pass { Name "DepthOfField" HLSLPROGRAM
+            #pragma vertex Vert
+            #pragma fragment DepthOfField
             ENDHLSL }
 
     }

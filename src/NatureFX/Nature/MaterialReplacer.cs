@@ -325,10 +325,8 @@ namespace NatureFX.Nature {
 				reason = "transparent (glass, water: stage 4)";
 				return null;
 			}
-			if (lower.Contains("unlit")) {
-				reason = "unlit (signs, screens: stage 4)";
-				return null;
-			}
+			// unlit (signs, screens): the generic surface glowing at a real luminance (GenericTranslator); transparent ones
+			// stayed above
 			return ProfileShader; // the generic NatureFX surface (GenericTranslator)
 		}
 
@@ -478,6 +476,9 @@ namespace NatureFX.Nature {
 			}
 			if (m.HasProperty("_MaskMap") && m.GetTexture("_MaskMap") != null) {
 				yield return "_MASKMAP";
+			}
+			if (m.HasProperty("_EmissiveColorMap") && m.GetTexture("_EmissiveColorMap") != null) {
+				yield return "_EMISSIVE_COLOR_MAP";
 			}
 		}
 

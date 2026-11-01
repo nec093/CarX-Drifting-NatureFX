@@ -4,12 +4,13 @@ using NatureFX.Nature;
 using UnityEngine;
 
 namespace NatureFX.Rendering {
-	// Roadmap E: the game's and the track's own particles (dust, spray, smoke, leaves of their own) drawn with
-	// NatureFX/Particle (mode 6, textured) instead of their shaders: lit by the own engine's sun or moon, sky and lamps
-	// (ParticleLighting) and fogged by its 3D fog, as NatureFX's particles are. Only alpha blended ones: additive and
-	// premultiplied particles (fire, sparks, glows, flares) are their own light and keep their shaders. Each replaced
-	// material is made once per source material (texture, colour, sheet animation via the particle's own uvs) and the
-	// originals come back when it is turned off.
+	// Roadmap E and the shader rebuild's stage 3: the game's and the track's own particles drawn with NatureFX/Particle
+	// instead of their shaders. Alpha blended ones (dust, spray, smoke, leaves of their own; mode 6, textured) are lit by
+	// the own engine's sun or moon, sky and lamps (ParticleLighting) and fogged by its 3D fog, as NatureFX's particles
+	// are. Additive ones (exhaust flames, sparks, glows; mode 7) are their own light: they glow at a real luminance
+	// (cd/m², as the own engine's lamps: the game's own were in the track's dim units and vanished in real daylight)
+	// and only dim in the fog. Each replaced material is made once per source material (texture, colour, sheet
+	// animation via the particle's own uvs) and the originals come back when it is turned off.
 	public class GameParticles {
 		private readonly Dictionary<ParticleSystemRenderer, Material> original_ = new();
 		private readonly Dictionary<Material, Material> made_ = new();
@@ -51,13 +52,14 @@ namespace NatureFX.Rendering {
 				if (m == null || m.shader == null || m.shader.name.StartsWith("NatureFX")) {
 					continue;
 				}
-				// mesh particles keep theirs (debris, pieces): the textured mode draws camera facing sprites
-				if (r.renderMode == ParticleSystemRenderMode.Mesh || !AlphaBlended(m)) {
+				// mesh particles keep theirs (debris, pieces): the textured modes draw camera facing sprites
+				bool glow = Additive(m);
+				if (r.renderMode == ParticleSystemRenderMode.Mesh || !glow && !AlphaBlended(m)) {
 					++skipped;
 					continue;
 				}
 				if (!made_.TryGetValue(m, out var replaced)) {
-					replaced = Make(m);
+					replaced = Make(m, glow);
 					made_[m] = replaced;
 				}
 				if (replaced == null) {
@@ -103,12 +105,46 @@ namespace NatureFX.Rendering {
 			return m.renderQueue >= 2450 || name.Contains("transparent") || name.Contains("alpha") || name.Contains("blend") || name.Contains("particle");
 		}
 
-		private Material Make(Material source) {
+		// additive: HDRP's _BlendMode 1, a One / One blend, or a shader or material named so (not premultiplied ones,
+		// which also darken what is behind them: they keep their shaders)
+		private static bool Additive(Material m) {
+			string name = (m.shader.name + " " + m.name).ToLowerInvariant();
+			if (name.Contains("premultipl")) {
+				return false;
+			}
+			if (m.HasProperty("_BlendMode") && Mathf.Approximately(m.GetFloat("_BlendMode"), 1.0f)) {
+				return true;
+			}
+			if (m.HasProperty("_DstBlend") && Mathf.Approximately(m.GetFloat("_DstBlend"), (float)UnityEngine.Rendering.BlendMode.One)) {
+				return true;
+			}
+			foreach (var word in new[] { "additive", "glow", "fire", "flame", "spark" }) {
+				if (name.Contains(word)) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		// how bright a game glow shines (cd/m²): sparks are white hot, flames a few thousand, the rest a soft glow
+		private static float GlowLuminance(Material m) {
+			string name = (m.shader.name + " " + m.name).ToLowerInvariant();
+			if (name.Contains("spark")) {
+				return 20000.0f;
+			}
+			if (name.Contains("fire") || name.Contains("flame") || name.Contains("exhaust")) {
+				return 5000.0f;
+			}
+			return 1500.0f;
+		}
+
+		private Material Make(Material source, bool glow) {
 			var tex = Texture(source);
 			if (tex == null) {
 				return null;
 			}
-			var m = ParticleAtlas.Material(bundle_, $"NatureFX.Game.{source.name}", ParticleAtlas.ModeTextured, new Vector2(0.0f, 0.0f), Tint(source));
+			var m = ParticleAtlas.Material(bundle_, $"NatureFX.Game.{source.name}", glow ? ParticleAtlas.ModeTexturedGlow : ParticleAtlas.ModeTextured,
+				new Vector2(0.0f, 0.0f), Tint(source), glow ? GlowLuminance(source) : 0.0f);
 			if (m == null) {
 				return null;
 			}

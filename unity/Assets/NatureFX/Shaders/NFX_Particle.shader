@@ -11,6 +11,8 @@
 //               5 smoke: NatureFX's tyre smoke (a noise puff)
 //               6 textured: the game's own particles (GameParticles.cs, roadmap E) with their own texture and colour,
 //                 lit as a soft ball of scattering particles and fogged like the rest
+//               7 textured glow: the game's own additive particles (exhaust flames, sparks, glows) with their own
+//                 texture and colour, glowing at _Emission cd/m² (real units, as the own engine's lamps), added
 //   _NFX_PTiles x: first tile, y: number of tiles to pick from
 Shader "NatureFX/Particle"
 {
@@ -170,7 +172,7 @@ Shader "NatureFX/Particle"
             float4 fog = NFX_Fog(uv, viewDepth, distance, i.positionRWS / max(distance, 1e-4));
             int mode = (int)(_NFX_PMode + 0.5);
             // glows add their light: only dimmed. The rest as HDRP fogs transparents: the colour seen through the air
-            c.rgb = mode == 3 ? c.rgb * fog.a : NFX_ApplyFog(c.rgb, fog);
+            c.rgb = mode == 3 || mode == 7 ? c.rgb * fog.a : NFX_ApplyFog(c.rgb, fog);
         }
         return c;
     }
@@ -267,6 +269,17 @@ Shader "NatureFX/Particle"
                        + _NFX_PSky.rgb * lerp(0.8, 1.1, smokeSun) + diffuse * 0.7 + behind * 1.2;
             float3 color = lit * albedo * INV_PI * exposure;
             return float4(color, density * _BaseColor.a * i.color.a * soft * fade);
+        }
+        if (mode == 7)
+        {
+            // the game's glow: its texture's light (an additive texture: its colour is how bright it is) times the
+            // particle's colour and fade, at a real luminance; soft against the scene
+            float sceneDepth = LinearEyeDepth(LOAD_TEXTURE2D_X(_CameraDepthTexture, (uint2)i.positionCS.xy).r, _ZBufferParams);
+            float ownDepth = -mul(UNITY_MATRIX_V, float4(i.positionRWS, 1.0)).z;
+            float soft = saturate((sceneDepth - ownDepth) / 0.3);
+            float coverage = _NFX_PTiles.z > 0.5 ? 1.0 : tex.a;
+            float3 color = tex.rgb * coverage * tint * i.color.a * _BaseColor.a * _Emission * soft * fade * exposure;
+            return float4(color, 1.0);
         }
         if (mode == 6)
         {

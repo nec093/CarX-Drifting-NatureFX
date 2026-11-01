@@ -28,6 +28,7 @@
 #pragma kernel FogIntegrate
 #pragma kernel PrepareDlss
 #pragma kernel UnpackDlss
+#pragma kernel PrepareMotion
 
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
 #include "Packages/com.unity.render-pipelines.high-definition/Runtime/ShaderLibrary/ShaderVariables.hlsl"
@@ -738,4 +739,31 @@ void UnpackDlss(uint3 id : SV_DispatchThreadID)
         return;
     uint4 p = _NFX_DlssBuffer[id.y * (uint)_NFX_TargetSize.x + id.x];
     _NFX_NativeTarget[COORD_TEXTURE2D_X(id.xy)] = float4(f16tof32(p.x), f16tof32(p.x >> 16), f16tof32(p.y), f16tof32(p.y >> 16));
+}
+
+// ------------------------------------------------------------------ motion blur's motion (PostPass)
+// The motion to the previous frame in uv (previous - current) at the render resolution: the DLSS buffer's (camera
+// without the jitter and the cars' own, in pixels) when DLSS ran this frame, else HDRP's motion vectors (none where
+// it has none: the sky).
+RW_TEXTURE2D_X(float2, _NFX_PostMotionOut);
+float _NFX_MotionFromDlss;
+
+[numthreads(8, 8, 1)]
+void PrepareMotion(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    float2 motion;
+    if (_NFX_MotionFromDlss > 0.5)
+    {
+        uint4 p = _NFX_DlssBuffer[id.y * (uint)_NFX_TargetSize.x + id.x];
+        motion = float2(f16tof32(p.z), f16tof32(p.z >> 16)) * _NFX_TargetSize.zw;
+    }
+    else
+    {
+        float4 m = LOAD_TEXTURE2D_X(_NFX_MotionVectors, id.xy);
+        motion = m.x > 1.0 ? 0.0 : -m.xy;
+    }
+    _NFX_PostMotionOut[COORD_TEXTURE2D_X(id.xy)] = motion;
 }

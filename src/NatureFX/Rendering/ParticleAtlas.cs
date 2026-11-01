@@ -23,7 +23,7 @@ namespace NatureFX.Rendering {
 		private static Texture2D atlas_;
 
 		// NFX_Particle.shader's modes
-		public const int ModeLeaf = 0, ModeRain = 1, ModeSnow = 2, ModeGlow = 3, ModeMote = 4, ModeSmoke = 5, ModeTextured = 6;
+		public const int ModeLeaf = 0, ModeRain = 1, ModeSnow = 2, ModeGlow = 3, ModeMote = 4, ModeSmoke = 5, ModeTextured = 6, ModeTexturedGlow = 7;
 
 		// a material of NFX_Particle.shader (null when the bundle is older than it); tiles: first and count
 		public static Material Material(NatureFX.Nature.ShaderBundle bundle, string name, int mode, Vector2 tiles, Color tint, float emission = 0.0f) {
@@ -39,7 +39,7 @@ namespace NatureFX.Rendering {
 			m.SetFloat("_Emission", emission);
 			m.SetFloat("_Cutoff", 0.5f);
 			bool cut = mode == ModeLeaf;
-			bool add = mode == ModeGlow;
+			bool add = mode == ModeGlow || mode == ModeTexturedGlow;
 			m.SetFloat("_SrcBlend", (float)(cut || add ? UnityEngine.Rendering.BlendMode.One : UnityEngine.Rendering.BlendMode.SrcAlpha));
 			m.SetFloat("_DstBlend", (float)(cut ? UnityEngine.Rendering.BlendMode.Zero : add ? UnityEngine.Rendering.BlendMode.One : UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha));
 			m.SetFloat("_ZWrite", cut ? 1.0f : 0.0f);

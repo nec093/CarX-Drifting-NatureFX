@@ -54,6 +54,25 @@ namespace NatureFX.Rendering {
 		private NightVisionPass night_;
 		private Material nightMaterial_;
 		private float focus_ = 10.0f;
+		// the distance the lens is focused at (m): the car nearest the camera
+		public static float FocusDistance { get; private set; } = 10.0f;
+
+		// focus on the car nearest the camera (smoothly, like a focus puller)
+		private void UpdateFocus(Vector3 camera) {
+			float target = 10.0f;
+			float best = float.MaxValue;
+			foreach (var b in TrackMap.Bodies) {
+				if (b != null) {
+					float d = Vector3.Distance(b.position, camera);
+					if (d < best) {
+						best = d;
+						target = d;
+					}
+				}
+			}
+			focus_ = Mathf.Lerp(focus_, target, 1.0f - Mathf.Exp(-Time.unscaledDeltaTime * 3.0f));
+			FocusDistance = focus_;
+		}
 		// the lens flare's strength now (night, rain), for the own post-processing's flare (PostProcess)
 		public static float FlareGhosts { get; private set; }
 		public static float FlareStreaks { get; private set; }
@@ -129,7 +148,11 @@ namespace NatureFX.Rendering {
 			if (PostProcess.Active) {
 				flare = false;
 			}
-			bool dof = on && s.DepthOfField;
+			// with the own post-processing the depth of field is its own (PostPass, focused on FocusDistance)
+			bool dof = on && s.DepthOfField && !PostProcess.Active;
+			if (on && s.DepthOfField && PostProcess.Active) {
+				UpdateFocus(camera);
+			}
 			volume_.enabled = flare || dof;
 			if (!volume_.enabled) {
 				return;
@@ -153,19 +176,7 @@ namespace NatureFX.Rendering {
 
 			dof_.active = dof;
 			if (dof) {
-				// focus on the car nearest the camera (smoothly, like a focus puller)
-				float target = 10.0f;
-				float best = float.MaxValue;
-				foreach (var b in TrackMap.Bodies) {
-					if (b != null) {
-						float d = Vector3.Distance(b.position, camera);
-						if (d < best) {
-							best = d;
-							target = d;
-						}
-					}
-				}
-				focus_ = Mathf.Lerp(focus_, target, 1.0f - Mathf.Exp(-Time.unscaledDeltaTime * 3.0f));
+				UpdateFocus(camera);
 				dof_.focusMode.Override(DepthOfFieldMode.Manual);
 				dof_.nearFocusStart.Override(0.0f);
 				dof_.nearFocusEnd.Override(focus_ * 0.45f);

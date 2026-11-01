@@ -855,6 +855,16 @@ namespace NatureFX {
 			Widgets.Slider("Light streaks", S.LensStreaks, 0, 1, v => S.LensStreaks = v);
 			Widgets.EndDependent();
 			Widgets.Switch("Depth of field", S.DepthOfField, v => S.DepthOfField = v);
+			Widgets.BeginDependent(S.DepthOfField && S.NativePost);
+			Other(Widgets.Slider("Aperture", S.DofFStop, 1.4f, 16, v => S.DofFStop = v, "0.0", " (f-number)"));
+			Widgets.Info("A real lens focused on the car nearest the camera: a low f-number blurs the background more (f/1.4 to f/2.8 a portrait look, f/8 and up nearly everything sharp).");
+			Widgets.EndDependent();
+			Widgets.BeginDependent(S.NativePost);
+			Other(Widgets.Slider("Motion blur", S.MotionBlur, 0, 1, v => S.MotionBlur = v, "0.00", " frame"));
+			Widgets.Info("How long the shutter stays open, as a share of a frame: 0.5 is a film camera's 180° shutter, 0 off. The chased car stays sharp, the road streams past.");
+			Widgets.EndDependent();
+			Widgets.Info(S.NativePost ? "Depth of field and motion blur are the own post-processing's (HDRP's are off)."
+				: "With Own post-processing off (Exposure & tone), HDRP's depth of field and the game's motion blur are used.");
 			Widgets.EndCard();
 		}
 
@@ -1087,7 +1097,7 @@ namespace NatureFX {
 			Widgets.Switch("Lamp shadows (REBLUR)", NativeEngine.DevNrdLamps, v => NativeEngine.DevNrdLamps = v);
 			Widgets.Switch("Reflections (REBLUR)", NativeEngine.DevNrdReflections, v => NativeEngine.DevNrdReflections = v);
 			Widgets.Switch("Cars' motion vector pass", NativeEngine.DevCarMotionVectors, v => NativeEngine.DevCarMotionVectors = v,
-				"NRD follows a moving car's pixels by its motion vectors; the game draws cars without that pass.");
+				"NRD and DLSS follow a moving car's pixels by its motion vectors; the game draws cars without them.");
 			Widgets.EndCard();
 			Widgets.BeginCard("DLSS tests", "What DLSS is handed, to find what makes the picture worse than TAA. Not saved.");
 			int sign = Rendering.Dlaa.DevJitterSign;

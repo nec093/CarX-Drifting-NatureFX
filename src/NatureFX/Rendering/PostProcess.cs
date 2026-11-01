@@ -16,7 +16,7 @@ namespace NatureFX.Rendering {
 	// adaptation here turns it into an EV100 and hands it to HDRP as its fixed exposure, so everything HDRP and the own
 	// engine draw is exposed by it.
 	public class PostPass : CustomPass {
-		private const int PassMeter = 0, PassDownFirst = 1, PassDown = 2, PassUp = 3, PassFinal = 4;
+		private const int PassMeter = 0, PassDownFirst = 1, PassDown = 2, PassUp = 3, PassFinal = 4, PassMotionBlur = 5, PassDepthOfField = 6;
 		public const int MeterW = 64, MeterH = 36, BloomLevels = 6;
 
 		private static readonly int SourceId = Shader.PropertyToID("_NFX_PostSource");
@@ -30,6 +30,9 @@ namespace NatureFX.Rendering {
 		private static readonly int FlareTexId = Shader.PropertyToID("_NFX_PostFlareTex");
 		private static readonly int PlainId = Shader.PropertyToID("_NFX_PostPlain");
 		private static readonly int UpscaledFinalId = Shader.PropertyToID("_NFX_UpscaledFinal");
+		private static readonly int MotionId = Shader.PropertyToID("_NFX_PostMotion");
+		private static readonly int BlurId = Shader.PropertyToID("_NFX_PostBlur");
+		private static readonly int LensId = Shader.PropertyToID("_NFX_PostLens");
 
 		public Material Material;
 		public float Bloom = 0.04f;        // the share of the light scattered by the lens and the eye
@@ -37,6 +40,9 @@ namespace NatureFX.Rendering {
 		public float Contrast, Saturation; // -1 .. 1
 		public int Tonemap;                // 0 ACES, 1 Neutral, 2 AgX, 3 none
 		public float FlareGhosts, FlareStreaks; // the lens flare (0: none), as LensEffects weighs it
+		public float MotionBlur;           // the shutter's share of a frame (0: none)
+		public bool DepthOfField;
+		public float FStop = 2.8f, Focus = 10.0f; // the lens's f-number, the focus distance (m)
 
 		// the meter's last reading: log2 luminance per cell, and when it came
 		public readonly float[] Meter = new float[MeterW * MeterH];
@@ -47,7 +53,9 @@ namespace NatureFX.Rendering {
 		private RenderTexture meter_;
 		// DLSS upscaling (Dlaa): the display resolution's own textures (not scaled by HDRP's dynamic resolution): the
 		// upscaled colour, the bloom chain and the finished picture HDRP's TAAU pass draws (NFX_Upscaled)
-		private RTHandle fullSource_, fullFinal_;
+		private RTHandle fullSource_, fullFinal_, fullWork_;
+		// motion blur and depth of field: the motion at the render resolution, a second colour target
+		private RTHandle motion_, work_;
 		private readonly RTHandle[] fullDown_ = new RTHandle[BloomLevels], fullUp_ = new RTHandle[BloomLevels];
 		private int fullWidth_, fullHeight_;
 		private bool pending_;
@@ -65,6 +73,10 @@ namespace NatureFX.Rendering {
 				up_[i] = RTHandles.Alloc(scale, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.B10G11R11_UFloatPack32,
 					useDynamicScale: true, name: $"NFX_Post_Up{i}");
 			}
+			motion_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.R16G16_SFloat,
+				enableRandomWrite: true, useDynamicScale: true, name: "NFX_Post_Motion");
+			work_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.R16G16B16A16_SFloat,
+				useDynamicScale: true, name: "NFX_Post_Work");
 			meter_ = new RenderTexture(MeterW, MeterH, 0, GraphicsFormat.R32_SFloat) { name = "NFX_Post_Meter", hideFlags = HideFlags.DontSave };
 			meter_.Create();
 		}
@@ -72,7 +84,8 @@ namespace NatureFX.Rendering {
 		private void ReleaseFull() {
 			fullSource_?.Release();
 			fullFinal_?.Release();
-			fullSource_ = fullFinal_ = null;
+			fullWork_?.Release();
+			fullSource_ = fullFinal_ = fullWork_ = null;
 			for (int i = 0; i < BloomLevels; ++i) {
 				fullDown_[i]?.Release();
 				fullUp_[i]?.Release();
@@ -92,6 +105,8 @@ namespace NatureFX.Rendering {
 				enableRandomWrite: true, name: "NFX_Post_FullSource");
 			fullFinal_ = RTHandles.Alloc(width, height, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.R16G16B16A16_SFloat,
 				name: "NFX_Post_FullFinal");
+			fullWork_ = RTHandles.Alloc(width, height, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.R16G16B16A16_SFloat,
+				name: "NFX_Post_FullWork");
 			for (int i = 0; i < BloomLevels; ++i) {
 				int w = Mathf.Max(1, width >> (i + 1)), h = Mathf.Max(1, height >> (i + 1));
 				fullDown_[i] = RTHandles.Alloc(w, h, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.B10G11R11_UFloatPack32,
@@ -103,6 +118,8 @@ namespace NatureFX.Rendering {
 
 		protected override void Cleanup() {
 			ReleaseFull();
+			motion_?.Release();
+			work_?.Release();
 			source_?.Release();
 			for (int i = 0; i < BloomLevels; ++i) {
 				down_[i]?.Release();
@@ -149,6 +166,34 @@ namespace NatureFX.Rendering {
 			int width = upscaled ? displayWidth : renderWidth, height = upscaled ? displayHeight : renderHeight;
 			props_.Clear();
 			props_.SetFloat(PlainId, upscaled ? 1.0f : 0.0f);
+
+			// motion blur, then depth of field, on the scene's light (before the meter and the bloom), between source and a
+			// second target; what they end in is the source for the rest
+			bool blur = MotionBlur > 0.001f, dof = DepthOfField;
+			if (blur || dof) {
+				var work = upscaled ? fullWork_ : work_;
+				var current = source;
+				if (blur) {
+					NativeEngine.PrepareMotion(cmd, NativeEngine.Bridge, ctx, motion_, renderWidth, renderHeight, Dlaa.RanThisFrame);
+					props_.SetTexture(MotionId, motion_);
+				}
+				// a 24 mm high (full frame) sensor: the field of view gives the focal length
+				float focal = 12.0f / Mathf.Tan(Mathf.Max(1.0f, cam.fieldOfView) * 0.5f * Mathf.Deg2Rad);
+				props_.SetVector(LensId, new Vector4(focal, Mathf.Max(0.7f, FStop), Mathf.Max(0.1f, Focus), 24.0f));
+				props_.SetVector(BlurId, new Vector4(Mathf.Clamp01(MotionBlur), 0.05f * height, 0.0f, 0.02f * height));
+				if (blur) {
+					props_.SetTexture(SourceId, current);
+					Draw(cmd, work, PassMotionBlur, Size(width, height));
+					current = work;
+				}
+				if (dof) {
+					var target2 = current == source ? work : source;
+					props_.SetTexture(SourceId, current);
+					Draw(cmd, target2, PassDepthOfField, Size(width, height));
+					current = target2;
+				}
+				source = current;
+			}
 
 			// meter
 			props_.SetTexture(SourceId, source);
@@ -315,6 +360,7 @@ namespace NatureFX.Rendering {
 				pass_.enabled = active;
 			}
 			if (!active) {
+				HdrpBlur(false);
 				Dlaa.Wanted = false;
 				ev_ = float.NaN;
 				Status = pass_ == null ? "not in the shader bundle (HDRP's post-processing)" : "off (HDRP's post-processing)";
@@ -328,6 +374,11 @@ namespace NatureFX.Rendering {
 			pass_.Tonemap = s.AcesTonemapping ? Mathf.Clamp(s.TonemapMode, 0, 3) : 0;
 			pass_.FlareGhosts = LensEffects.FlareGhosts;
 			pass_.FlareStreaks = LensEffects.FlareStreaks;
+			pass_.MotionBlur = s.MotionBlur;
+			pass_.DepthOfField = s.DepthOfField;
+			pass_.FStop = s.DofFStop > 0.0f ? s.DofFStop : 2.8f;
+			pass_.Focus = LensEffects.FocusDistance;
+			HdrpBlur(true);
 			Dlaa.Wanted = s.Dlaa;
 			Dlaa.Quality = s.DlssQuality;
 			Dlaa.RayReconstructionWanted = s.DlssRayReconstruction;
@@ -355,6 +406,46 @@ namespace NatureFX.Rendering {
 			Status = s.ExposureMode == 1
 				? FormattableString.Invariant($"own: exposure {ev_:0.00} EV100, eye adaptation, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
 				: FormattableString.Invariant($"own: the game's exposure, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}");
+		}
+
+		// HDRP's motion blur and depth of field off on the game's camera while the own ones run (its frame settings,
+		// overridden per camera), put back as they were when the own post-processing is off
+		private HDAdditionalCameraData blurCamera_;
+		private bool blurCustom_, blurMaskMotion_, blurMaskDof_, blurMotion_, blurDof_;
+
+		private void HdrpBlur(bool own) {
+			var cam = Camera.main;
+			var data = cam != null ? cam.GetComponent<HDAdditionalCameraData>() : null;
+			if (blurCamera_ != null && (blurCamera_ != data || !own)) {
+				var mask = blurCamera_.renderingPathCustomFrameSettingsOverrideMask;
+				mask.mask[(uint)FrameSettingsField.MotionBlur] = blurMaskMotion_;
+				mask.mask[(uint)FrameSettingsField.DepthOfField] = blurMaskDof_;
+				blurCamera_.renderingPathCustomFrameSettingsOverrideMask = mask;
+				var fs = blurCamera_.renderingPathCustomFrameSettings;
+				fs.SetEnabled(FrameSettingsField.MotionBlur, blurMotion_);
+				fs.SetEnabled(FrameSettingsField.DepthOfField, blurDof_);
+				blurCamera_.renderingPathCustomFrameSettings = fs;
+				blurCamera_.customRenderingSettings = blurCustom_;
+				blurCamera_ = null;
+			}
+			if (!own || data == null || blurCamera_ == data) {
+				return;
+			}
+			blurCamera_ = data;
+			blurCustom_ = data.customRenderingSettings;
+			var m = data.renderingPathCustomFrameSettingsOverrideMask;
+			blurMaskMotion_ = m.mask[(uint)FrameSettingsField.MotionBlur];
+			blurMaskDof_ = m.mask[(uint)FrameSettingsField.DepthOfField];
+			m.mask[(uint)FrameSettingsField.MotionBlur] = true;
+			m.mask[(uint)FrameSettingsField.DepthOfField] = true;
+			data.renderingPathCustomFrameSettingsOverrideMask = m;
+			var f = data.renderingPathCustomFrameSettings;
+			blurMotion_ = f.IsEnabled(FrameSettingsField.MotionBlur);
+			blurDof_ = f.IsEnabled(FrameSettingsField.DepthOfField);
+			f.SetEnabled(FrameSettingsField.MotionBlur, false);
+			f.SetEnabled(FrameSettingsField.DepthOfField, false);
+			data.renderingPathCustomFrameSettings = f;
+			data.customRenderingSettings = true;
 		}
 
 		// the meter's cells as EV100 (K = 12.5): the brightness weighted to the centre, the darkest 30 % and the

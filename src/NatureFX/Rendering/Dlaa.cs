@@ -82,6 +82,9 @@ namespace NatureFX.Rendering {
 		private static readonly FieldInfo SettingsField = typeof(HDRenderPipelineAsset).GetField("m_RenderPipelineSettings", BindingFlags.NonPublic | BindingFlags.Instance);
 		private static readonly FieldInfo TaaMaterialField = typeof(HDRenderPipeline).GetField("m_TemporalAAMaterial", BindingFlags.NonPublic | BindingFlags.Instance);
 
+		// DLSS ran on this frame (NativeEngine.DlssBuffer holds its motion and depth)
+		public static bool RanThisFrame => ranFrame_ == Time.frameCount;
+
 		public static bool Active => Wanted && !failed_ && NativeEngine.Ready && NativeEngine.Bridge != null && NativeEngine.Supports("dlss") && Settled;
 
 		// DLSS started while the game was still starting up (its first scenes loading) left parts of the menu UI and

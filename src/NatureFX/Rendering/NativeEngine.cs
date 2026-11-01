@@ -1055,6 +1055,31 @@ namespace NatureFX.Rendering {
 			return true;
 		}
 
+		// Motion blur's motion (NFX_NativeBridge PrepareMotion): the DLSS buffer's when DLSS ran this frame (without the
+		// jitter), else HDRP's motion vectors; uv, previous - current, into target at the render resolution
+		private static readonly int PostMotionOutId = Shader.PropertyToID("_NFX_PostMotionOut");
+		private static readonly int MotionFromDlssId = Shader.PropertyToID("_NFX_MotionFromDlss");
+
+		public static void PrepareMotion(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle target, int width, int height, bool fromDlss) {
+			if (bridge == null) {
+				return;
+			}
+			bool dlss = fromDlss && dlssBuffer_ != null && dlssPixels_ == width * height;
+			int kernel = bridge.FindKernel("PrepareMotion");
+			cmd.SetComputeVectorParam(bridge, TargetSizeId, new Vector4(width, height, 1.0f / width, 1.0f / height));
+			cmd.SetComputeFloatParam(bridge, MotionFromDlssId, dlss ? 1.0f : 0.0f);
+			cmd.SetComputeTextureParam(bridge, kernel, MotionVectorsId, ctx.cameraMotionVectorsBuffer);
+			if (dlss) {
+				cmd.SetComputeBufferParam(bridge, kernel, DlssBufferId, dlssBuffer_);
+			} else {
+				// bound all the same (the kernel declares it)
+				DlssBuffer(ref dlssBuffer_, ref dlssBufferPtr_, ref dlssPixels_, Math.Max(dlssPixels_, 1), "NFX_DlssBuffer");
+				cmd.SetComputeBufferParam(bridge, kernel, DlssBufferId, dlssBuffer_);
+			}
+			cmd.SetComputeTextureParam(bridge, kernel, PostMotionOutId, target);
+			cmd.DispatchCompute(bridge, kernel, (width + 7) / 8, (height + 7) / 8, TextureXR.slices);
+		}
+
 		// The surfaces the ambient light and the local light shadows trace from (they share the resolution); the
 		// result buffer of the kind given is reset to its default on the way
 		private static TraceBuffers PrepareAmbient(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, Vector4 size,
