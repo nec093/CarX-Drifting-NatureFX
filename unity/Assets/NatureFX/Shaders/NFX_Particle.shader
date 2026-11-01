@@ -54,6 +54,7 @@ Shader "NatureFX/Particle"
     float4 _NFX_PLightColors[8]; // rgb: intensity (cd), w: cosine of the outer cone (-2 for a point light)
     float4 _NFX_PLightDirs[8];   // xyz: the spot's direction, w: cosine of the inner cone
     float _NFX_PLightCount;
+    float4 _NFX_PLightBeams[8];  // x: a headlight's beam (1 low, 2 high: NFX_BeamPattern), y its roll (radians)
 
     // the sky's light from the own engine's sky (phase 1c probe, y of the fog's flags) in place of ParticleLighting's
     // estimate; under the 3D fog the air's dimming is in the fog, not in the distance fade
@@ -78,6 +79,7 @@ Shader "NatureFX/Particle"
         float3 normalOS : NORMAL;
         float4 color : COLOR;
         float4 uv : TEXCOORD0; // xy: uv, z: stable random (ParticleSystemVertexStream.StableRandomX), w: smoke: 1 = in a shadow (Custom1.x)
+        float uv1 : TEXCOORD1; // smoke: the share of the sun its own cloud takes away at the particle (Custom1.y)
     };
 
     struct Varyings
@@ -89,6 +91,7 @@ Shader "NatureFX/Particle"
         float3 positionRWS : TEXCOORD2;
         float2 uvLocal : TEXCOORD3;
         float sunShadow : TEXCOORD4; // smoke: the share of the sun blocked at the particle (TireSmoke.UpdateShadows)
+        float smokeShadow : TEXCOORD5; // smoke: the share its own cloud blocks (TireSmoke.UpdateSmokeShadow)
     };
 
     Varyings Vert(Attributes a)
@@ -107,6 +110,7 @@ Shader "NatureFX/Particle"
             o.uvTile.xy = a.uv.xy;
         o.uvLocal = a.uv.xy;
         o.sunShadow = _NFX_PMode > 4.5 && _NFX_PMode < 5.5 ? saturate(a.uv.w) : 0.0;
+        o.smokeShadow = _NFX_PMode > 4.5 && _NFX_PMode < 5.5 ? saturate(a.uv1) : 0.0;
         return o;
     }
 
@@ -133,8 +137,10 @@ Shader "NatureFX/Particle"
             if (_NFX_PLightColors[i].w > -1.5)
             {
                 float c = dot(-L, _NFX_PLightDirs[i].xyz);
-                spot = smoothstep(_NFX_PLightColors[i].w, _NFX_PLightDirs[i].w, c);
+                spot = smoothstep(_NFX_PLightColors[i].w, _NFX_PLightDirs[i].w, c) * NFX_BeamPattern(_NFX_PLightBeams[i].x, _NFX_PLightDirs[i].xyz, -L, _NFX_PLightBeams[i].y);
             }
+            // through the smoke on the way (a puff in a cloud of smoke sees the lamp dimmed)
+            spot *= NFX_SmokeLampTransmittance(positionAWS, _NFX_PLights[i].xyz);
             float3 E = _NFX_PLightColors[i].rgb / dist2 * window * spot;
             float nl = dot(n, L);
             facing += E;
@@ -254,7 +260,11 @@ Shader "NatureFX/Particle"
             LampLight(i.positionRWS, V, n, true, facing, diffuse, behind);
             float3 albedo = tint;
             // the sun's light where it reaches the particle (in a building's or a car's shadow only the sky lights it)
-            float3 lit = _NFX_PSun.rgb * (1.0 - i.sunShadow) * (0.25 + 0.75 * front * front + sunBehind * 1.5) + _NFX_PSky.rgb * 1.1 + diffuse * 0.7 + behind * 1.2;
+            // and the smoke itself: what of the cloud lies between this puff and the sun (its far side is darker), one
+            // value for the whole puff (looked up per pixel of the billboard it drew the map's cells as streaks)
+            float smokeSun = 1.0 - i.smokeShadow;
+            float3 lit = _NFX_PSun.rgb * (1.0 - i.sunShadow) * smokeSun * (0.25 + 0.75 * front * front + sunBehind * 1.5)
+                       + _NFX_PSky.rgb * lerp(0.8, 1.1, smokeSun) + diffuse * 0.7 + behind * 1.2;
             float3 color = lit * albedo * INV_PI * exposure;
             return float4(color, density * _BaseColor.a * i.color.a * soft * fade);
         }
@@ -276,7 +286,11 @@ Shader "NatureFX/Particle"
             float ownDepth = -mul(UNITY_MATRIX_V, float4(i.positionRWS, 1.0)).z;
             float soft = saturate((sceneDepth - ownDepth) / 0.5);
             float3 color = lit * tex.rgb * tint * INV_PI * exposure;
-            return float4(color, tex.a * _BaseColor.a * i.color.a * soft * fade);
+            // a texture without alpha (_NFX_PTiles.z = 1): its brightness is the coverage (a soft white dot on black)
+            float coverage = _NFX_PTiles.z > 0.5 ? saturate(max(tex.r, max(tex.g, tex.b))) : tex.a;
+            if (_NFX_PTiles.z > 0.5)
+                color = lit * tint * INV_PI * exposure;
+            return float4(color, coverage * _BaseColor.a * i.color.a * soft * fade);
         }
         // mote: dust or pollen; small and bright where the light is behind it (a sunbeam)
         float3 facing, diffuse, behind;

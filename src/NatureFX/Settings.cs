@@ -70,7 +70,10 @@ namespace NatureFX {
 		public int WeatherPreset { get; set; }        // see WeatherController.Presets
 		public float WeatherCycleMinutes { get; set; }
 		public bool Moonlight { get; set; }
+		public float MoonBrightness { get; set; }           // the moon's light against its physical strength (1 = real)
 		public float HeadlightShafts { get; set; }
+		public int HeadlightType { get; set; }              // 0 the game's own, 1 halogen, 2 HID, 3 LED (a real low beam)
+		public float HeadlightAim { get; set; }             // the low beam's axis below level (°)
 		public float SurfaceDetail { get; set; }
 
 		// tire marks / car rain
@@ -264,7 +267,10 @@ namespace NatureFX {
 		public int WeatherPreset { get; set; }        // see WeatherController.Presets
 		public float WeatherCycleMinutes { get; set; }
 		public bool Moonlight { get; set; }
+		public float MoonBrightness { get; set; }           // the moon's light against its physical strength (1 = real)
 		public float HeadlightShafts { get; set; }
+		public int HeadlightType { get; set; }              // 0 the game's own, 1 halogen, 2 HID, 3 LED (a real low beam)
+		public float HeadlightAim { get; set; }             // the low beam's axis below level (°)
 		public float SurfaceDetail { get; set; }
 
 		// tire marks / car rain
@@ -696,6 +702,32 @@ namespace NatureFX {
 				// the game's street lights at NatureFX's night
 				d.SyncGameNight = true;
 				d.ConfigVersion = 51;
+			}
+			if (d.ConfigVersion < 52) {
+				// a moonlit night a little brighter than the real one by default (user: adjustable)
+				d.MoonBrightness = 1.5f;
+				d.ConfigVersion = 52;
+			}
+			if (d.ConfigVersion < 53) {
+				// a real low beam (the game's round spot was too bright and lit everything above the road)
+				d.HeadlightType = 3;
+				d.ConfigVersion = 53;
+			}
+			if (d.ConfigVersion < 54) {
+				// the low beam aimed by the car's body, 0.6° down (the regulations' 1 %)
+				d.HeadlightAim = 0.6f;
+				d.ConfigVersion = 54;
+			}
+			if (d.ConfigVersion < 55) {
+				// the eye adaptation's limits are real-world EVs now (Units): a moonlit night at about -2, a sunny day about 15
+				d.AutoExposureMin = -2.0f;
+				d.AutoExposureMax = 16.0f;
+				d.ConfigVersion = 55;
+			}
+			if (d.ConfigVersion < 56) {
+				// the moon's strength from 0.001 to 0.1 (user): 0.1 about a real full moon, now that the sun is real (Units)
+				d.MoonBrightness = 0.1f;
+				d.ConfigVersion = 56;
 			}
 		}
 

@@ -6,7 +6,12 @@
 //   Bloom: the light a real lens and eye scatter around bright things: a mip chain of the image (13 tap down, tent up;
 //   the first down averages by brightness so single bright pixels do not flicker), blended in as a small share of all
 //   the light (energy kept, no threshold: a lamp spreads its own light, a grey wall almost none).
-//   Final: bloom, the exposure compensation, the tone curve (ACES fitted, Khronos PBR Neutral, AgX, none), then contrast
+//   Flare (in Final): the lens's ghosts of the bright lights in view, the sun or the moon and the nearest lamps
+//   (ParticleLighting's list): each a few faint, nearly neutral images of the lens's aperture (mostly round and soft,
+//   one hexagon, their rims split by dispersion) along the line from the light through the picture's centre, as bright
+//   as the light shows on screen (hidden behind a wall: none) and fewer towards the picture's edge (vignetting); a soft
+//   glow close round the light, and short soft diffraction rays.
+//   Final: bloom, the flare, the exposure compensation, the tone curve (ACES fitted, Khronos PBR Neutral, AgX, none), then contrast
 //   and saturation on the display picture.
 Shader "Hidden/NatureFX/Post"
 {
@@ -95,6 +100,8 @@ Shader "Hidden/NatureFX/Post"
     }
 
     // --- bloom up: this level's down result plus the smaller level's, through a 3 x 3 tent
+    static const float BloomFalloff = 0.55; // each wider level's share against the one inside it
+
     float4 Up(Varyings v) : SV_Target
     {
         float2 uv = TargetUV(v);
@@ -104,7 +111,150 @@ Shader "Hidden/NatureFX/Post"
                  + 2.0 * (SampleRT(_NFX_PostLow, uv + t * float2(0, -1)).rgb + SampleRT(_NFX_PostLow, uv + t * float2(-1, 0)).rgb
                         + SampleRT(_NFX_PostLow, uv + t * float2(1, 0)).rgb + SampleRT(_NFX_PostLow, uv + t * float2(0, 1)).rgb)
                  + 4.0 * SampleRT(_NFX_PostLow, uv).rgb;
-        return float4(SampleRT(_NFX_PostSource, uv).rgb + s / 16.0, 1.0);
+        // the wider levels count for less: a lens's and an eye's scatter falls off fast away from a light (summed evenly,
+        // a neon sign at night spread a cloud over half the picture)
+        return float4(SampleRT(_NFX_PostSource, uv).rgb + s / 16.0 * BloomFalloff, 1.0);
+    }
+
+    // --- lens flare
+    TEXTURE2D_X(_NFX_PostFlareTex); // the bloom's quarter resolution level: how bright a light shows on screen
+    float4 _NFX_PostFlare;          // x ghosts, y spikes, z threshold (exposed), w 1 = on
+    // the lights (ParticleLighting): xyz absolute position, the sun's direction
+    float4 _NFX_PLights[8];
+    float4 _NFX_PLightColors[8]; // w: cosine of a spot's outer cone (-2 a point light)
+    float4 _NFX_PLightDirs[8];   // xyz: a spot's direction, w: cosine of its inner cone
+    float4 _NFX_PLightBeams[8];  // x: a headlight's beam (1 low, 2 high), y its roll
+    float _NFX_PLightCount;
+    float4 _NFX_PSunDir;
+
+    // a headlight's beam (NFX_FogCommon's, the same pattern): how much of its light comes the camera's way
+    float FlareBeam(float kind, float3 forward, float3 dir, float roll)
+    {
+        if (kind < 0.5)
+            return 1.0;
+        float3 level = abs(forward.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(0.0, 0.0, 1.0);
+        float3 right0 = normalize(cross(level, forward));
+        float3 up0 = cross(forward, right0);
+        float3 up = up0 * cos(roll) - right0 * sin(roll);
+        float3 right = cross(up, forward);
+        float z = max(dot(dir, forward), 1e-3);
+        float h = degrees(atan2(dot(dir, right), z));
+        float a = degrees(atan2(dot(dir, up), z));
+        if (kind > 1.5)
+            return min(1.0, exp(-(h / 5.0) * (h / 5.0) - (a / 2.5) * (a / 2.5)) + exp(-(h / 20.0) * (h / 20.0) - (a / 7.0) * (a / 7.0)) * 0.25);
+        float cut = -0.6 + (h < 0.0 ? min(-h * 0.267949, 1.6) : 0.0);
+        float below = cut - a;
+        float edge = saturate(below / 0.35 + 0.5);
+        float hotSpot = exp(-(h / 9.0) * (h / 9.0) - ((a + 2.0) / 2.5) * ((a + 2.0) / 2.5));
+        float fill = exp(-(h / 28.0) * (h / 28.0)) * exp(-max(0.0, below - 1.0) / 9.0) * 0.35;
+        return lerp(0.015, min(1.0, hotSpot + fill), edge);
+    }
+
+
+
+    // signed distance to a regular hexagon of inradius r (negative inside)
+    float Hexagon(float2 p, float r)
+    {
+        const float3 k = float3(-0.866025404, 0.5, 0.577350269);
+        p = abs(p);
+        p -= 2.0 * min(dot(k.xy, p), 0.0) * k.xy;
+        p -= float2(clamp(p.x, -k.z * r, k.z * r), r);
+        return length(p) * sign(p.y);
+    }
+
+    // a ghost: the aperture's image out of focus. Most are round with a soft edge (the blades' polygon blurs away
+    // that far out of focus), one keeps the hexagon; a faint brighter rim, as real ghosts show
+    float GhostShape(float2 d, float r, bool hexagon)
+    {
+        float dist = hexagon ? Hexagon(d, r) : length(d) - r;
+        float inside = saturate(-dist / max(r * 0.3, 1e-4) + 0.5);
+        float rim = 0.75 + 0.25 * saturate((dist + r * 0.3) / (r * 0.3));
+        return inside * rim;
+    }
+
+    float3 FlareFrom(float2 q, float2 lightUV, float aspect, float facing)
+    {
+        if (facing <= 0.01)
+            return 0.0;
+        float3 src = SampleRT(_NFX_PostFlareTex, lightUV).rgb;
+        float l = dot(src, float3(0.2126, 0.7152, 0.0722));
+        float bright = max(l - _NFX_PostFlare.z, 0.0);
+        if (bright <= 0.0)
+            return 0.0;
+        float3 colour = src / max(l, 1e-4) * bright * facing;
+        float2 lq = (lightUV - 0.5) * float2(aspect, 1.0);
+        // the lens's vignetting: a light near the edge of the picture sends fewer ghosts through
+        float vignette = saturate(1.0 - length(lq) / 0.95);
+        vignette *= vignette;
+        const float scales[5] = { -0.3, -0.62, 0.38, -1.05, 0.72 };
+        const float radii[5] = { 0.016, 0.04, 0.022, 0.075, 0.03 };
+        // nearly neutral: the coatings tint ghosts only faintly (amber, violet, green)
+        const float3 tints[5] = { float3(1.0, 0.9, 0.8), float3(0.85, 0.85, 1.0), float3(0.9, 1.0, 0.92),
+                                  float3(0.92, 0.9, 1.0), float3(1.0, 0.95, 0.85) };
+        float3 sum = 0.0;
+        [unroll]
+        for (int i = 0; i < 5; ++i)
+        {
+            float2 d = q - lq * scales[i];
+            float r = radii[i];
+            bool hexagon = i == 1;
+            // dispersion splits the rim only: red a touch bigger than blue
+            float3 shape = float3(GhostShape(d, r * 1.02, hexagon), GhostShape(d, r, hexagon), GhostShape(d, r * 0.98, hexagon));
+            // a lens's coatings leave about a twenty thousandth of the light in each ghost, spread over its area
+            sum += shape * tints[i] * (6e-5 * Sq(0.02 / r));
+        }
+        sum *= _NFX_PostFlare.x * vignette;
+        float2 d0 = q - lq;
+        float len = length(d0);
+        // the glow round a bright light: the lens's and the eye's own scatter, close in and soft
+        sum += float3(1.0, 0.95, 0.9) * 6e-5 / (1.0 + Sq(len / 0.006)) * _NFX_PostFlare.x;
+        if (_NFX_PostFlare.y > 0.0)
+        {
+            // diffraction: six soft rays of a little different lengths (the blades are not perfect), short
+            float angle = atan2(d0.y, d0.x);
+            float ray = pow(abs(cos(3.0 * angle)), 40.0);
+            float reach = 0.06 * (0.75 + 0.25 * cos(angle * 7.0 + 1.3));
+            sum += ray * 1.2e-4 / (1.0 + Sq(len / 0.008)) * saturate(1.0 - len / reach) * _NFX_PostFlare.y;
+        }
+        return colour * sum;
+    }
+
+    float3 LensFlare(float2 uv)
+    {
+        float aspect = _ScreenSize.x * _ScreenSize.w;
+        float2 q = (uv - 0.5) * float2(aspect, 1.0);
+        float3 sum = 0.0;
+        // the sun (or the moon) far along its direction
+        float3 camFwd = -UNITY_MATRIX_V[2].xyz;
+        if (dot(_NFX_PSunDir.xyz, camFwd) > 0.05)
+        {
+            float2 sunUV = ComputeNormalizedDeviceCoordinates(_NFX_PSunDir.xyz * 5000.0, UNITY_MATRIX_VP);
+            if (all(sunUV > 0.0) && all(sunUV < 1.0))
+                sum += FlareFrom(q, sunUV, aspect, 1.0);
+        }
+        int count = min((int)_NFX_PLightCount, 8);
+        [loop]
+        for (int i = 0; i < count; ++i)
+        {
+            float3 rws = GetCameraRelativePositionWS(_NFX_PLights[i].xyz);
+            if (dot(rws, camFwd) <= 0.3)
+                continue;
+            float2 luv = ComputeNormalizedDeviceCoordinates(rws, UNITY_MATRIX_VP);
+            if (any(luv <= 0.0) || any(luv >= 1.0))
+                continue;
+            // only as much as the lamp sends the camera's way: a headlight seen from the side or behind makes no
+            // flare (its beam goes ahead), whatever is bright round it
+            float facing = 1.0;
+            if (_NFX_PLightColors[i].w > -1.5)
+            {
+                float3 toCamera = -normalize(rws);
+                float c = dot(toCamera, _NFX_PLightDirs[i].xyz);
+                facing = smoothstep(_NFX_PLightColors[i].w, _NFX_PLightDirs[i].w, c)
+                       * FlareBeam(_NFX_PLightBeams[i].x, _NFX_PLightDirs[i].xyz, toCamera, _NFX_PLightBeams[i].y);
+            }
+            sum += FlareFrom(q, luv, aspect, facing);
+        }
+        return sum;
     }
 
     // --- tone curves (scene linear, exposed -> display linear 0..1)
@@ -164,10 +314,14 @@ Shader "Hidden/NatureFX/Post"
         float3 c = LOAD_TEXTURE2D_X(_NFX_PostSource, pixel).rgb;
         if (_NFX_PostParams.x > 0.0)
         {
-            // the bloom chain sums its levels: their mean is the blurred picture
-            float3 bloom = SampleRT(_NFX_PostBloom, uv).rgb / max(_NFX_PostMode.y, 1.0);
+            // the bloom chain sums its levels, each wider one at BloomFalloff of the last: over their total weight it is
+            // the blurred picture
+            float levels = max(_NFX_PostMode.y, 1.0);
+            float3 bloom = SampleRT(_NFX_PostBloom, uv).rgb * (1.0 - BloomFalloff) / (1.0 - pow(BloomFalloff, levels));
             c = lerp(c, bloom, _NFX_PostParams.x);
         }
+        if (_NFX_PostFlare.w > 0.5)
+            c += LensFlare(uv);
         c = max(c, 0.0) * exp2(_NFX_PostParams.y);
         int mode = (int)_NFX_PostMode.x;
         float3 d = mode == 0 ? AcesFitted(c) : mode == 1 ? PbrNeutral(c) : mode == 2 ? AgX(c) : saturate(c);
@@ -206,6 +360,7 @@ Shader "Hidden/NatureFX/Post"
             #pragma vertex Vert
             #pragma fragment Final
             ENDHLSL }
+
     }
     Fallback Off
 }

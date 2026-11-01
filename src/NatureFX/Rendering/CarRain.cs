@@ -12,7 +12,8 @@ namespace NatureFX.Rendering {
 		private static readonly int ColorTex = Shader.PropertyToID("_NFX_ColorTex");
 
 		public Material Material;
-		public readonly List<(Renderer Renderer, int Submesh)> Renderers = new();
+		public readonly List<(Renderer Renderer, int Submesh, Rigidbody Car)> Renderers = new();
+		private static readonly int AirId = Shader.PropertyToID("_NFX_CarAir");
 
 		private RTHandle color_;
 
@@ -30,9 +31,16 @@ namespace NatureFX.Rendering {
 			ctx.cmd.SetGlobalTexture(ColorTex, color_);
 			CoreUtils.SetRenderTarget(ctx.cmd, ctx.cameraColorBuffer, ctx.cameraDepthBuffer, ClearFlag.None);
 
-			foreach (var (r, submesh) in Renderers) {
+			Rigidbody last = null;
+			foreach (var (r, submesh, car) in Renderers) {
 				if (r == null || !r.enabled || !r.isVisible) {
 					continue;
+				}
+				// the air each car drives through (its drops run with it)
+				if (car != last) {
+					last = car;
+					var v = car != null ? car.velocity : Vector3.zero;
+					ctx.cmd.SetGlobalVector(AirId, new Vector4(v.x, v.y, v.z, 0.0f));
 				}
 				ctx.cmd.DrawRenderer(r, Material, submesh, 0);
 			}
@@ -80,7 +88,9 @@ namespace NatureFX.Rendering {
 			Object.DontDestroyOnLoad(root_);
 			var volume = root_.AddComponent<CustomPassVolume>();
 			volume.isGlobal = true;
-			volume.injectionPoint = CustomPassInjectionPoint.BeforeTransparent;
+			// after the own engine's glass (its drops sit on the outside of the pane), before the post-processing
+			volume.injectionPoint = CustomPassInjectionPoint.BeforePostProcess;
+			volume.priority = -100.0f;
 			pass_ = new CarRainPass { name = "NatureFX Car Rain", Material = material_, enabled = false };
 			volume.customPasses.Add(pass_);
 		}
@@ -243,12 +253,13 @@ namespace NatureFX.Rendering {
 						LogSkipped(r, path, $"reaches beyond the car ({b.size.x:0.0} x {b.size.y:0.0} x {b.size.z:0.0} m)");
 						continue;
 					}
-					var materials = r.sharedMaterials;
+					// the glass the own engine draws is hidden from HDRP (OwnGlass): its beads go by what was there
+					var materials = OwnGlass.Originals(r) ?? r.sharedMaterials;
 					for (int i = 0; i < materials.Length; ++i) {
 						if (IsLightEffect(materials[i])) {
 							LogSkipped(r, path, $"light effect material '{materials[i]?.name}' ({materials[i]?.shader?.name}, queue {materials[i]?.renderQueue})");
 						} else {
-							pass_.Renderers.Add((r, i));
+							pass_.Renderers.Add((r, i, rb));
 						}
 					}
 				}

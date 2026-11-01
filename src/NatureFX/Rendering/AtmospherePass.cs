@@ -306,7 +306,7 @@ namespace NatureFX.Rendering {
 				var fogParams = new Vector4(fog.x, fog.y, fog.z, Mathf.Clamp(Anisotropy, 0.0f, 0.9f));
 				int boxes = GatherBoxes(camPos);
 				NativeEngine.TraceFogVolume(cmd, bridge, fogParams, fogHistoryA_, fogHistoryB_, fogVolume_, camPos - lastCamera_,
-					fogHistoryValid_ && !reset ? (boxes > 0 ? 0.3f : 0.1f) : 1.0f, boxes_, boxes);
+					fogHistoryValid_ && !reset ? (boxes > 0 ? 0.3f : 0.1f) : 1.0f, boxes_, boxes, TireSmoke.FogSmoke);
 				(fogHistoryA_, fogHistoryB_) = (fogHistoryB_, fogHistoryA_);
 				fogHistoryValid_ = true;
 				cmd.SetGlobalTexture(FogVolumeId, fogVolume_);

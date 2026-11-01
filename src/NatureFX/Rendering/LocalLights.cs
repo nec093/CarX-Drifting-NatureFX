@@ -109,7 +109,9 @@ namespace NatureFX.Rendering {
 					float scale = 1.0f / Mathf.Max(0.001f, cosInner - cosOuter);
 					var forward = t.forward;
 					dir_[Count] = new Vector4(forward.x, forward.y, forward.z, scale);
-					spot_[Count] = new Vector4(-cosOuter * scale, Shape(light), 0.0f, 0.0f);
+					// a headlight's beam pattern (its cookie, which the engine does not see)
+					float beam = HeadlightController.Beams.TryGetValue(light, out int kind) ? kind : 0.0f;
+					spot_[Count] = new Vector4(-cosOuter * scale, Shape(light), beam, beam > 0.0f ? HeadlightController.Roll(light) : 0.0f);
 				} else {
 					dir_[Count] = Vector4.zero;
 					spot_[Count] = new Vector4(0.0f, Shape(light), 0.0f, 0.0f);

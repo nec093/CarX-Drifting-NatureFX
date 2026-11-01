@@ -348,8 +348,8 @@ namespace NatureFX.Rendering {
 			lampProps_.SetTexture(LampMaskId, lampMask_);
 			lampProps_.SetTexture(LampMaskHistoryId, historyIn);
 			lampProps_.SetVector(LampMaskSizeId, maskSize);
-			// one ray a lamp a frame: about ten frames of history
-			lampProps_.SetVector(LampMaskParamsId, new Vector4(reset || !lampHistoryValid_ ? 1.0f : 0.12f, 1.0f, 0.0f, 0.0f));
+			// one ray a lamp a frame: about five frames of history, held to what the neighbourhood sees now (NFX_SunExact)
+			lampProps_.SetVector(LampMaskParamsId, new Vector4(reset || !lampHistoryValid_ ? 1.0f : 0.2f, 1.0f, 0.0f, 0.0f));
 			if (Lights != null && Lights.Count > 0) {
 				lampProps_.SetVectorArray(LampPosId, Lights.Positions);
 			}

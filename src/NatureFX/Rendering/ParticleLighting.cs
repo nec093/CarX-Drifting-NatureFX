@@ -20,6 +20,8 @@ namespace NatureFX.Rendering {
 		private static readonly int ColorsId = Shader.PropertyToID("_NFX_PLightColors");
 		private static readonly int DirsId = Shader.PropertyToID("_NFX_PLightDirs");
 		private static readonly int CountId = Shader.PropertyToID("_NFX_PLightCount");
+		private static readonly int BeamsId = Shader.PropertyToID("_NFX_PLightBeams");
+		private static readonly Vector4[] beams_ = new Vector4[MaxLights];
 
 		private static readonly List<Light> directional_ = new();
 		private static readonly List<Light> punctual_ = new();
@@ -89,6 +91,8 @@ namespace NatureFX.Rendering {
 				var p = l.transform.position;
 				var c = Linear(l) * l.intensity;
 				positions_[i] = new Vector4(p.x, p.y, p.z, l.range);
+				bool isBeam = HeadlightController.Beams.TryGetValue(l, out int beam);
+				beams_[i] = new Vector4(isBeam ? beam : 0.0f, isBeam ? HeadlightController.Roll(l) : 0.0f, 0.0f, 0.0f);
 				if (l.type == LightType.Spot) {
 					float outer = Mathf.Cos(l.spotAngle * 0.5f * Mathf.Deg2Rad);
 					float inner = Mathf.Cos(Mathf.Min(l.innerSpotAngle, l.spotAngle - 1.0f) * 0.5f * Mathf.Deg2Rad);
@@ -103,6 +107,7 @@ namespace NatureFX.Rendering {
 			Shader.SetGlobalVectorArray(LightsId, positions_);
 			Shader.SetGlobalVectorArray(ColorsId, colors_);
 			Shader.SetGlobalVectorArray(DirsId, dirs_);
+			Shader.SetGlobalVectorArray(BeamsId, beams_);
 			Shader.SetGlobalFloat(CountId, count);
 		}
 

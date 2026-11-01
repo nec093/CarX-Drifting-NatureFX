@@ -98,10 +98,224 @@ namespace NatureFX.Rendering {
 		private int shadowCursor_;
 		public int ShadowedParticles { get; private set; }
 
+		// the smoke's shadow map (NFX_FogCommon NFX_SmokeTransmittance): 128 x 128 cells of 0.4 m across the sun
+		private const int SmokeCells = 128;
+		private const float SmokeCell = 0.4f;
+		private readonly float[] smokeTau_ = new float[SmokeCells * SmokeCells];
+		private readonly float[] smokeNear_ = new float[SmokeCells * SmokeCells];
+		private readonly float[] smokeFar_ = new float[SmokeCells * SmokeCells];
+		private readonly Color[] smokePixels_ = new Color[SmokeCells * SmokeCells];
+		private Texture2D smokeShadow_;
+		private static readonly int SmokeTexId = Shader.PropertyToID("_NFX_SmokeShadowTex");
+		private static readonly int SmokeCenterId = Shader.PropertyToID("_NFX_SmokeShadowCenter");
+		private static readonly int SmokeUId = Shader.PropertyToID("_NFX_SmokeShadowU");
+		private static readonly int SmokeVId = Shader.PropertyToID("_NFX_SmokeShadowV");
+		private static readonly int SmokeSId = Shader.PropertyToID("_NFX_SmokeShadowS");
+
+		private Vector3 smokeCenter_, smokeU_, smokeV_, smokeS_;
+		private bool smokeValid_;
+
+		// what of the smoke lies between a point and the sun (NFX_FogCommon NFX_SmokeTransmittance, the same bilinear lookup)
+		private float SmokeTransmittance(Vector3 p) {
+			if (!smokeValid_) {
+				return 1.0f;
+			}
+			var d = p - smokeCenter_;
+			float inv = 1.0f / SmokeCell;
+			float cx = Vector3.Dot(d, smokeU_) * inv + SmokeCells * 0.5f - 0.5f, cy = Vector3.Dot(d, smokeV_) * inv + SmokeCells * 0.5f - 0.5f;
+			if (cx < 0.0f || cy < 0.0f || cx >= SmokeCells - 1 || cy >= SmokeCells - 1) {
+				return 1.0f;
+			}
+			float depth = Vector3.Dot(d, smokeS_);
+			int bx = (int)cx, by = (int)cy;
+			float fx = cx - bx, fy = cy - by;
+			float sum = 0.0f;
+			for (int i = 0; i < 4; ++i) {
+				int ox = i & 1, oy = i >> 1;
+				int k = (by + oy) * SmokeCells + bx + ox;
+				float tau = smokeTau_[k];
+				float between = tau > 0.0f ? Mathf.Clamp01((smokeFar_[k] - depth) / Mathf.Max(smokeFar_[k] - smokeNear_[k], 0.3f)) : 0.0f;
+				float w = (ox == 1 ? fx : 1.0f - fx) * (oy == 1 ? fy : 1.0f - fy);
+				sum += w * Mathf.Exp(-tau * between);
+			}
+			return sum;
+		}
+
+		// the smoke's density in 3D for the lamps' light (NFX_FogCommon NFX_SmokeLampTransmittance)
+		private const int VolX = 48, VolY = 24, VolZ = 48;
+		private const float VolCell = 1.0f;
+		private readonly float[] volume_ = new float[VolX * VolY * VolZ];
+		private Texture3D smokeVolume_;
+		private static readonly int VolumeTexId = Shader.PropertyToID("_NFX_SmokeVolume");
+		private static readonly int VolumeOriginId = Shader.PropertyToID("_NFX_SmokeVolumeOrigin");
+		private static readonly int VolumeSizeId = Shader.PropertyToID("_NFX_SmokeVolumeSize");
+		private static readonly int BoundsMinId = Shader.PropertyToID("_NFX_SmokeBoundsMin");
+		private static readonly int BoundsMaxId = Shader.PropertyToID("_NFX_SmokeBoundsMax");
+
+		// the same grid for the own engine's 3D fog (NativeEngine.TraceFogVolume): 3 float4 of header, then the cells
+		// four to a float4; null while there is no smoke
+		public static Vector4[] FogSmoke { get; private set; }
+		private readonly Vector4[] fogSmoke_ = new Vector4[3 + VolX * VolY * VolZ / 4];
+
+		private void SmokeVolumeOff() {
+			Shader.SetGlobalVector(VolumeSizeId, Vector4.zero);
+			FogSmoke = null;
+		}
+
+		private void UpdateSmokeVolume(int count) {
+			var cam = Camera.main;
+			if (cam == null || count == 0) {
+				SmokeVolumeOff();
+				return;
+			}
+			if (smokeVolume_ == null) {
+				smokeVolume_ = new Texture3D(VolX, VolY, VolZ, TextureFormat.RFloat, false) {
+					name = "NatureFX.SmokeVolume", filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp, hideFlags = HideFlags.DontSave
+				};
+			}
+			var c = cam.transform.position;
+			// the camera's cell, the grid reaching 8 m below and 16 m above it
+			var origin = new Vector3(Mathf.Floor(c.x / VolCell) * VolCell - VolX * VolCell * 0.5f, Mathf.Floor(c.y / VolCell) * VolCell - 8.0f,
+			                         Mathf.Floor(c.z / VolCell) * VolCell - VolZ * VolCell * 0.5f);
+			System.Array.Clear(volume_, 0, volume_.Length);
+			var lo = new Vector3(1e9f, 1e9f, 1e9f);
+			var hi = new Vector3(-1e9f, -1e9f, -1e9f);
+			float inv = 1.0f / VolCell;
+			for (int i = 0; i < count; ++i) {
+				var p = buffer_[i];
+				float alpha = p.GetCurrentColor(particles_).a / 255.0f;
+				if (alpha < 0.02f) {
+					continue;
+				}
+				float r = Mathf.Max(p.GetCurrentSize(particles_) * 0.4f, VolCell * 0.6f);
+				// the puff's optical depth through it (about 1.4 x its alpha) spread over its width
+				float sigma = 1.4f * alpha / (2.0f * r);
+				var q = (p.position - origin) * inv;
+				int rc = Mathf.CeilToInt(r * inv);
+				int x0 = Mathf.Max(0, (int)q.x - rc), x1 = Mathf.Min(VolX - 1, (int)q.x + rc);
+				int y0 = Mathf.Max(0, (int)q.y - rc), y1 = Mathf.Min(VolY - 1, (int)q.y + rc);
+				int z0 = Mathf.Max(0, (int)q.z - rc), z1 = Mathf.Min(VolZ - 1, (int)q.z + rc);
+				if (x0 > x1 || y0 > y1 || z0 > z1) {
+					continue;
+				}
+				float r2 = r * r * inv * inv;
+				for (int z = z0; z <= z1; ++z) {
+					for (int y = y0; y <= y1; ++y) {
+						for (int x = x0; x <= x1; ++x) {
+							float dx = x + 0.5f - q.x, dy = y + 0.5f - q.y, dz = z + 0.5f - q.z;
+							float w = 1.0f - (dx * dx + dy * dy + dz * dz) / r2;
+							if (w > 0.0f) {
+								volume_[(z * VolY + y) * VolX + x] += sigma * w * 1.5f;
+							}
+						}
+					}
+				}
+				lo = Vector3.Min(lo, p.position - Vector3.one * r);
+				hi = Vector3.Max(hi, p.position + Vector3.one * r);
+			}
+			if (lo.x > hi.x) {
+				SmokeVolumeOff();
+				return;
+			}
+			smokeVolume_.SetPixelData(volume_, 0);
+			smokeVolume_.Apply(false, false);
+			Shader.SetGlobalTexture(VolumeTexId, smokeVolume_);
+			Shader.SetGlobalVector(VolumeOriginId, new Vector4(origin.x, origin.y, origin.z, inv));
+			Shader.SetGlobalVector(VolumeSizeId, new Vector4(VolX, VolY, VolZ, 1.0f));
+			Shader.SetGlobalVector(BoundsMinId, lo);
+			Shader.SetGlobalVector(BoundsMaxId, hi);
+			fogSmoke_[0] = new Vector4(origin.x, origin.y, origin.z, inv);
+			fogSmoke_[1] = lo;
+			fogSmoke_[2] = hi;
+			for (int i = 0; i < volume_.Length / 4; ++i) {
+				fogSmoke_[3 + i] = new Vector4(volume_[i * 4], volume_[i * 4 + 1], volume_[i * 4 + 2], volume_[i * 4 + 3]);
+			}
+			FogSmoke = fogSmoke_;
+		}
+
+		private void SmokeShadowOff() {
+			smokeValid_ = false;
+			Shader.SetGlobalVector(SmokeSId, Vector4.zero);
+		}
+
+		private void UpdateSmokeShadow(int count, Vector3 sunDir) {
+			var cam = Camera.main;
+			if (cam == null || count == 0) {
+				SmokeShadowOff();
+				return;
+			}
+			if (smokeShadow_ == null) {
+				smokeShadow_ = new Texture2D(SmokeCells, SmokeCells, TextureFormat.RGBAFloat, false, true) {
+					name = "NatureFX.SmokeShadow", filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp, hideFlags = HideFlags.DontSave
+				};
+			}
+			var s = sunDir;
+			var u = Vector3.Cross(s, Mathf.Abs(s.y) < 0.95f ? Vector3.up : Vector3.forward).normalized;
+			var v = Vector3.Cross(u, s);
+			// centred on the camera, snapped to whole cells (the shadow would swim with it otherwise)
+			var c = cam.transform.position;
+			float cu = Mathf.Round(Vector3.Dot(c, u) / SmokeCell) * SmokeCell, cv = Mathf.Round(Vector3.Dot(c, v) / SmokeCell) * SmokeCell;
+			float cs = Vector3.Dot(c, s);
+			var center = u * cu + v * cv + s * cs;
+			System.Array.Clear(smokeTau_, 0, smokeTau_.Length);
+			for (int i = 0; i < smokeNear_.Length; ++i) {
+				smokeNear_[i] = 1e6f;
+				smokeFar_[i] = -1e6f;
+			}
+			float inv = 1.0f / SmokeCell;
+			for (int i = 0; i < count; ++i) {
+				var p = buffer_[i];
+				float alpha = p.GetCurrentColor(particles_).a / 255.0f;
+				if (alpha < 0.02f) {
+					continue;
+				}
+				var d = p.position - center;
+				float r = Mathf.Max(p.GetCurrentSize(particles_) * 0.4f, SmokeCell);
+				float px = Vector3.Dot(d, u) * inv + SmokeCells * 0.5f, py = Vector3.Dot(d, v) * inv + SmokeCells * 0.5f;
+				float depth = Vector3.Dot(d, s);
+				// the puff's optical depth through its centre (its alpha as the shader draws it, about this much)
+				float tau = 1.4f * alpha;
+				int rc = Mathf.CeilToInt(r * inv);
+				int x0 = Mathf.Max(0, (int)px - rc), x1 = Mathf.Min(SmokeCells - 1, (int)px + rc);
+				int y0 = Mathf.Max(0, (int)py - rc), y1 = Mathf.Min(SmokeCells - 1, (int)py + rc);
+				float r2 = r * r * inv * inv;
+				for (int y = y0; y <= y1; ++y) {
+					for (int x = x0; x <= x1; ++x) {
+						float dx = x + 0.5f - px, dy = y + 0.5f - py;
+						float q = 1.0f - (dx * dx + dy * dy) / r2;
+						if (q <= 0.0f) {
+							continue;
+						}
+						int k = y * SmokeCells + x;
+						smokeTau_[k] += tau * q * q;
+						smokeNear_[k] = Mathf.Min(smokeNear_[k], depth - r * 0.5f);
+						smokeFar_[k] = Mathf.Max(smokeFar_[k], depth + r * 0.5f);
+					}
+				}
+			}
+			for (int k = 0; k < smokePixels_.Length; ++k) {
+				smokePixels_[k] = smokeTau_[k] > 0.0f ? new Color(smokeTau_[k], smokeNear_[k], smokeFar_[k], 0.0f) : Color.clear;
+			}
+			smokeShadow_.SetPixels(smokePixels_);
+			smokeShadow_.Apply(false, false);
+			Shader.SetGlobalTexture(SmokeTexId, smokeShadow_);
+			Shader.SetGlobalVector(SmokeCenterId, new Vector4(center.x, center.y, center.z, inv));
+			Shader.SetGlobalVector(SmokeUId, new Vector4(u.x, u.y, u.z, SmokeCells));
+			Shader.SetGlobalVector(SmokeVId, new Vector4(v.x, v.y, v.z, 0.0f));
+			Shader.SetGlobalVector(SmokeSId, new Vector4(s.x, s.y, s.z, 1.0f));
+			smokeCenter_ = center;
+			smokeU_ = u;
+			smokeV_ = v;
+			smokeS_ = s;
+			smokeValid_ = true;
+		}
+
 		private void UpdateShadows() {
 			int count = particles_.particleCount;
 			if (count == 0) {
 				ShadowedParticles = 0;
+				SmokeShadowOff();
+				SmokeVolumeOff();
 				return;
 			}
 			if (buffer_.Length < count) {
@@ -109,11 +323,20 @@ namespace NatureFX.Rendering {
 			}
 			count = particles_.GetParticles(buffer_, count);
 			particles_.GetCustomParticleData(custom_, ParticleSystemCustomData.Custom1);
+			// the lamps' smoke grid every other frame (the sun's map on the frames between)
+			if ((Time.frameCount & 1) == 1) {
+				UpdateSmokeVolume(count);
+			}
 			var sunDir = (Vector3)Shader.GetGlobalVector("_NFX_PSunDir");
 			if (sunDir.sqrMagnitude < 0.5f || sunDir.y < -0.05f) {
+				SmokeShadowOff();
 				return;
 			}
 			sunDir.Normalize();
+			// every other frame: the smoke moves slowly against its own size
+			if ((Time.frameCount & 1) == 0) {
+				UpdateSmokeShadow(count, sunDir);
+			}
 			int rays = Mathf.Min(count, ShadowRaysPerFrame);
 			var commands = new NativeArray<RaycastCommand>(rays, Allocator.TempJob);
 			var hits = new NativeArray<RaycastHit>(rays, Allocator.TempJob);
@@ -124,6 +347,12 @@ namespace NatureFX.Rendering {
 				commands[k] = new RaycastCommand(buffer_[i].position + sunDir * 0.3f, sunDir, query, 300.0f);
 			}
 			RaycastCommand.ScheduleBatch(commands, hits, 64, 1).Complete();
+			// the smoke's own shadow on every particle, at its centre
+			for (int i = 0; i < count && i < custom_.Count; ++i) {
+				var c = custom_[i];
+				c.y = Mathf.Lerp(c.y, 1.0f - SmokeTransmittance(buffer_[i].position), 0.5f);
+				custom_[i] = c;
+			}
 			int shadowed = 0;
 			for (int k = 0; k < rays; ++k) {
 				int i = (start + k) % count;
@@ -175,7 +404,10 @@ namespace NatureFX.Rendering {
 			color.enabled = true;
 			var g = new Gradient();
 			g.SetKeys(new[] { new GradientColorKey(Color.white, 0.0f), new GradientColorKey(Color.white, 1.0f) },
-				new[] { new GradientAlphaKey(0.0f, 0.0f), new GradientAlphaKey(1.0f, 0.06f), new GradientAlphaKey(0.55f, 0.45f), new GradientAlphaKey(0.0f, 1.0f) });
+				// a puff keeps its soot as it grows: spread over a larger area it thins out (about 1 / size², the size
+				// curve below), and it is gone as it mixes into the air
+				new[] { new GradientAlphaKey(0.0f, 0.0f), new GradientAlphaKey(1.0f, 0.04f), new GradientAlphaKey(0.6f, 0.15f), new GradientAlphaKey(0.32f, 0.3f),
+				        new GradientAlphaKey(0.16f, 0.6f), new GradientAlphaKey(0.0f, 1.0f) });
 			color.color = g;
 			// the air's drag: linear in the velocity relative to the air (the soot is fine enough to be carried by it).
 			// With the force k x wind (Update) a puff settles at the wind's velocity in about 1 / k seconds, the jet off
@@ -229,7 +461,7 @@ namespace NatureFX.Rendering {
 			renderer.maxParticleSize = 4.0f;
 			renderer.SetActiveVertexStreams(new List<ParticleSystemVertexStream> {
 				ParticleSystemVertexStream.Position, ParticleSystemVertexStream.Normal, ParticleSystemVertexStream.Color,
-				ParticleSystemVertexStream.UV, ParticleSystemVertexStream.StableRandomX, ParticleSystemVertexStream.Custom1X
+				ParticleSystemVertexStream.UV, ParticleSystemVertexStream.StableRandomX, ParticleSystemVertexStream.Custom1XY
 			});
 			particles_ = ps;
 		}

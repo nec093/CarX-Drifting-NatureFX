@@ -26,12 +26,15 @@ namespace NatureFX.Rendering {
 		private static readonly int TargetSizeId = Shader.PropertyToID("_NFX_PostTargetSize");
 		private static readonly int ParamsId = Shader.PropertyToID("_NFX_PostParams");
 		private static readonly int ModeId = Shader.PropertyToID("_NFX_PostMode");
+		private static readonly int FlareId = Shader.PropertyToID("_NFX_PostFlare");
+		private static readonly int FlareTexId = Shader.PropertyToID("_NFX_PostFlareTex");
 
 		public Material Material;
 		public float Bloom = 0.04f;        // the share of the light scattered by the lens and the eye
 		public float Compensation;         // EV
 		public float Contrast, Saturation; // -1 .. 1
 		public int Tonemap;                // 0 ACES, 1 Neutral, 2 AgX, 3 none
+		public float FlareGhosts, FlareStreaks; // the lens flare (0: none), as LensEffects weighs it
 
 		// the meter's last reading: log2 luminance per cell, and when it came
 		public readonly float[] Meter = new float[MeterW * MeterH];
@@ -126,8 +129,15 @@ namespace NatureFX.Rendering {
 				Draw(cmd, up_[i], PassUp, Size(w, h));
 			}
 
+			// the lens flare (drawn in the final pass): how bright each light shows, from the bloom's quarter resolution level;
+			// the threshold far above the scene's mid grey (about 0.1 exposed): lamps, headlights, the sun
+			bool flare = levels >= 2 && (FlareGhosts > 0.0f || FlareStreaks > 0.0f);
+			var flareParams = new Vector4(FlareGhosts, FlareStreaks, 4.0f, flare ? 1.0f : 0.0f);
+
 			// the finished picture
 			props_.SetTexture(SourceId, source_);
+			props_.SetTexture(FlareTexId, flare ? down_[1] : source_);
+			props_.SetVector(FlareId, flareParams);
 			props_.SetTexture(BloomId, levels > 0 ? (levels > 1 ? up_[0] : down_[0]) : source_);
 			props_.SetVector(ParamsId, new Vector4(levels > 0 ? Bloom : 0.0f, Compensation, Contrast, Saturation));
 			props_.SetVector(ModeId, new Vector4(Tonemap, levels, 0.0f, 0.0f));
@@ -157,6 +167,8 @@ namespace NatureFX.Rendering {
 
 		public string Status { get; private set; } = "off";
 		public float EV100 => ev_;
+		// running this frame: LensEffects then leaves the flare to it (HDRP's would come on top)
+		public static bool Active { get; private set; }
 
 		public void Create(ShaderBundle bundle) {
 			if (root_ != null) {
@@ -229,6 +241,7 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			bool active = on && s.NativePost && pass_ != null;
+			Active = active;
 			volume_.enabled = active;
 			if (pass_ != null) {
 				pass_.enabled = active;
@@ -244,11 +257,14 @@ namespace NatureFX.Rendering {
 			pass_.Saturation = s.Saturation / 100.0f;
 			// the settings' "Filmic (GT)" is AgX here
 			pass_.Tonemap = s.AcesTonemapping ? Mathf.Clamp(s.TonemapMode, 0, 3) : 0;
+			pass_.FlareGhosts = LensEffects.FlareGhosts;
+			pass_.FlareStreaks = LensEffects.FlareStreaks;
 
 			// eye adaptation (with the game's exposure chosen, HDRP keeps it)
 			exposure_.active = s.ExposureMode == 1;
 			if (s.ExposureMode == 1 && pass_.MeterFrame != lastMeter_ && pass_.MeterFrame >= 0) {
 				lastMeter_ = pass_.MeterFrame;
+				// real-world EVs (the sun is raised to real sunshine, Units): a moonlit night and a sunny day where they are
 				float target = Mathf.Clamp(MeteredEV(pass_.Meter), s.AutoExposureMin, Mathf.Max(s.AutoExposureMin + 0.5f, s.AutoExposureMax));
 				if (float.IsNaN(ev_)) {
 					ev_ = target;
@@ -265,7 +281,7 @@ namespace NatureFX.Rendering {
 			}
 			string[] curves = { "ACES", "Neutral", "AgX", "none" };
 			Status = s.ExposureMode == 1
-				? FormattableString.Invariant($"own: exposure {ev_:0.00} EV100 (eye adaptation), bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
+				? FormattableString.Invariant($"own: exposure {ev_:0.00} EV100, eye adaptation, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
 				: FormattableString.Invariant($"own: the game's exposure, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}");
 		}
 

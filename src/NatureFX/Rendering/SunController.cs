@@ -54,6 +54,8 @@ namespace NatureFX.Rendering {
 				AngularDiameter = hdSun_ != null ? hdSun_.angularDiameter : 0.5f,
 				Color = sun_.color
 			};
+			// the track's units, before the map's lamps are made from real values (MapLights, after this on a rescan)
+			Units.FromSun(original_.Intensity);
 		}
 
 		public void Update(ISettings s) {
@@ -70,12 +72,17 @@ namespace NatureFX.Rendering {
 				sizeApplied_ = false;
 			}
 
-			TopOfAtmosphereLux = (original_.Intensity > 0.0f ? original_.Intensity : sun_.intensity) * (s.SunOverride ? s.SunIntensityScale : 1.0f);
+			// the track's sun raised to real sunshine (Units): the lamps are in real units already
+			Units.FromSun(original_.Intensity > 0.0f ? original_.Intensity : sun_.intensity);
+			physical_ = s.Enabled ? Units.PhysicalScale : 1.0f;
+			TopOfAtmosphereLux = (original_.Intensity > 0.0f ? original_.Intensity : sun_.intensity) * physical_ * (s.SunOverride ? s.SunIntensityScale : 1.0f);
 			float cloud = Weather.Current.Cloud;
 			// under the own engine's cloud shadows the clouds darken the sun where they are, not all of it
 			float cloudDim = CloudController.NativeShadowsActive ? 1.0f : 1.0f - 0.75f * cloud;
 			if (!s.Enabled || (!s.SunOverride && cloud < 0.01f)) {
 				RestoreTimeOfDay();
+				// the track's sun as it is, at real strength while NatureFX is on (Units)
+				sun_.intensity = original_.Intensity * physical_;
 				UpdateSkyLight(cloud);
 				return;
 			}
@@ -90,7 +97,7 @@ namespace NatureFX.Rendering {
 					hdSun_.volumetricDimmer = original_.VolumetricDimmer;
 				}
 				sun_.transform.rotation = original_.Rotation;
-				sun_.intensity = original_.Intensity * cloudDim;
+				sun_.intensity = original_.Intensity * physical_ * cloudDim;
 				sun_.colorTemperature = original_.Temperature;
 				sun_.color = original_.Color;
 				sun_.useColorTemperature = original_.UseTemperature;
@@ -109,7 +116,7 @@ namespace NatureFX.Rendering {
 			float daylight = Mathf.SmoothStep(0.0f, 1.0f, Mathf.InverseLerp(-2.0f, 10.0f, elevation));
 			// below the horizon the sun gives no light (a directional light ignores the horizon and lit the scene from
 			// under the ground at night)
-			sun_.intensity = original_.Intensity * s.SunIntensityScale * daylight * cloudDim;
+			sun_.intensity = original_.Intensity * physical_ * s.SunIntensityScale * daylight * cloudDim;
 			sun_.useColorTemperature = true;
 			sun_.colorTemperature = Mathf.Lerp(2200.0f, s.SunTemperature, Mathf.InverseLerp(0.0f, 30.0f, elevation));
 			if (s.NativeSky) {
@@ -131,7 +138,8 @@ namespace NatureFX.Rendering {
 			// physically based sky goes dark; only one directional light casts shadows, so they swap.
 			float night = s.Moonlight ? Mathf.InverseLerp(-2.0f, -12.0f, elevation) : 0.0f;
 			// moonlight in the air is faint: the eye's adaptation would otherwise turn a night sky into a bright haze
-			UpdateMoon(night, Mathf.Clamp(-elevation * 0.8f, 20.0f, 65.0f), heading + 180.0f, s.SunIntensityScale * cloudDim, s.LightShafts * 0.15f);
+			// the moon's strength: physical at 1, brighter for those who want to see more at night
+			UpdateMoon(night, Mathf.Clamp(-elevation * 0.8f, 20.0f, 65.0f), heading + 180.0f, s.SunIntensityScale * cloudDim * Mathf.Clamp(s.MoonBrightness, 0.001f, 0.1f), s.LightShafts * 0.15f);
 			SetSunShadows(night < 0.5f);
 
 			if (hdSun_ != null) {
@@ -176,6 +184,9 @@ namespace NatureFX.Rendering {
 		private HDAdditionalLightData hdMoon_;
 		private bool sunShadowsOff_;
 
+		// the sun raised to real sunshine while NatureFX is on (Units), the track's own when it is off
+		private float physical_ = 1.0f;
+
 		private void UpdateMoon(float amount, float elevation, float heading, float scale, float shafts) {
 			if (amount <= 0.0f) {
 				if (moon_ != null) {
@@ -198,7 +209,7 @@ namespace NatureFX.Rendering {
 			// a bright moonlit night: about 2 lux against the track's daylight sun (about 100 000 lux); shapes show,
 			// colours and detail mostly come from the lamps and headlights. (0.4 % of the sun lit the night like an
 			// overcast day.)
-			moon_.intensity = original_.Intensity * 0.00002f * scale * amount;
+			moon_.intensity = original_.Intensity * physical_ * 0.00002f * scale * amount;
 			moon_.useColorTemperature = true;
 			moon_.colorTemperature = 7800.0f;
 			if (hdMoon_ != null) {
@@ -221,7 +232,13 @@ namespace NatureFX.Rendering {
 				hdSun_.angularDiameter = original_.AngularDiameter;
 				sizeApplied_ = false;
 			}
+			physical_ = 1.0f;
 			RestoreTimeOfDay();
+			// the track's own strength in any case: the real sunshine NatureFX raised it to must not be read back as the
+			// track's (Refresh takes the sun's intensity as its original: it grew 30 000 times on every rescan)
+			if (sun_ != null && original_.Intensity > 0.0f) {
+				sun_.intensity = original_.Intensity;
+			}
 		}
 
 		// Undoes only the time of day override (rotation, intensity, colour, volumetric dimmer).
@@ -236,7 +253,7 @@ namespace NatureFX.Rendering {
 			}
 			SetSunShadows(true);
 			sun_.transform.rotation = original_.Rotation;
-			sun_.intensity = original_.Intensity;
+			sun_.intensity = original_.Intensity * physical_;
 			sun_.colorTemperature = original_.Temperature;
 			sun_.color = original_.Color;
 			sun_.useColorTemperature = original_.UseTemperature;

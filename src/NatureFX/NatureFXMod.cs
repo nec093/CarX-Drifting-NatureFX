@@ -116,6 +116,7 @@ namespace NatureFX {
 			NatureFX.Tools.ShaderVariantRecorder.Recording = Settings.Data.RecordShaderVariants;
 			NatureFX.Tools.HdrpSettingsDump.Write();
 			Kino.Input.Bind(KeyCode.F8, () => window_.Toggle(), "NatureFX window");
+			Kino.Input.Bind(KeyCode.F7, () => Headlights.ToggleHighBeam(), "NatureFX high beam");
 			Kino.Input.Bind(KeyCode.F9, () => {
 				PhotoMode.Toggle();
 				MarkDirty(); // the ray traced effects take the photo quality (RayTracingEffects.Apply)
@@ -216,7 +217,7 @@ namespace NatureFX {
 			Accumulation.UpdateRoad(rebuiltSurface ? s.RoadWear : 0.0f);
 			Sun.Update(s);
 			// the game's own night lighting (its street lights) at NatureFX's night
-			GameNight.Update(s.Enabled && s.SunOverride && s.SyncGameNight, Sun.Sun);
+			GameNight.Update(s.Enabled && s.SunOverride && s.SyncGameNight, Sun);
 			Headlights.Update(s, s.Enabled && s.UseMapProfile);
 			bool mapOn = s.Enabled && s.UseMapProfile;
 			Lights.Update(mapOn, Sun.Sun, camPos, s.HeadlightShafts, RT.LampShadowsTraced);
@@ -381,7 +382,8 @@ namespace NatureFX {
 			if (mode == LoadSceneMode.Single) {
 				NatureFX.Tools.MapDataProbe.Reset();
 			}
-			ScheduleRescan(2.0f);
+			// a track loads several scenes in a row (2 s for them all); the game's day / night lighting is one small scene
+			ScheduleRescan(mode == LoadSceneMode.Additive && GameDayNight.Switching ? 0.3f : 2.0f);
 		}
 
 		// Tracks load several additive scenes in a row; restart the timer so they share one rescan.

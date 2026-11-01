@@ -113,6 +113,10 @@ namespace NatureFX.Rendering {
 				return null;
 			}
 			m.SetTexture("_MainTex", tex);
+			// no alpha in the texture (drawn additive or by brightness in its own shader): its brightness is the coverage,
+			// else the whole quad drew as a square
+			bool alpha = tex is Texture2D t2 && UnityEngine.Experimental.Rendering.GraphicsFormatUtility.HasAlphaChannel(t2.graphicsFormat);
+			m.SetVector("_NFX_PTiles", new Vector4(0.0f, 0.0f, alpha ? 0.0f : 1.0f, 0.0f));
 			m.SetTextureScale("_MainTex", source.mainTextureScale);
 			m.SetTextureOffset("_MainTex", source.mainTextureOffset);
 			m.renderQueue = source.renderQueue;

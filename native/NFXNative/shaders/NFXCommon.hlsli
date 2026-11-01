@@ -39,7 +39,8 @@ cbuffer Frame : register(b0)
     float4 LightColor[NFX_MAX_LOCAL_LIGHTS];  // rgb intensity (cd), w 1 = ray traced shadows, 2 = also added (a light HDRP
                                               // does not have: an emissive surface standing in as a lamp)
     float4 LightDir[NFX_MAX_LOCAL_LIGHTS];    // xyz spot direction, w angle scale (0: point light)
-    float4 LightSpot[NFX_MAX_LOCAL_LIGHTS];   // x angle offset, y radius of the light's shape (m: soft shadows)
+    float4 LightSpot[NFX_MAX_LOCAL_LIGHTS];   // x angle offset, y radius of the light's shape (m: soft shadows),
+                                              // z a headlight's beam (1 low, 2 high: NFX_BeamPattern), w its roll
 };
 
 static const float PI = 3.14159265359;
@@ -599,6 +600,38 @@ float LampWeight(float3 n, float3 toLight, float3 toView, bool shine)
     return ndl + PI * 0.04 * D / (4.0 * nv);
 }
 
+// A headlight's beam as HeadlightController's cookies draw it (relative to its peak), for what does not see HDRP's
+// cookies: kind 1 the low beam (the cut-off 0.6° below the axis, rising 15° on the left to 1° up, the hot spot under
+// it, a wide fill, 1.5 % above), 2 the high beam (gathered on the axis). forward: the lamp's axis; dir: from the lamp
+// to the point; roll: the lamp's turn about its axis from level (radians: a car leaning in a drift or on a bank).
+float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
+{
+    if (kind < 0.5)
+        return 1.0;
+    float3 level = abs(forward.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(0.0, 0.0, 1.0);
+    float3 right0 = normalize(cross(level, forward));
+    float3 up0 = cross(forward, right0);
+    float cr = cos(roll), sr = sin(roll);
+    float3 up = up0 * cr - right0 * sr;
+    float3 right = cross(up, forward);
+    float z = max(dot(dir, forward), 1e-3);
+    float h = degrees(atan2(dot(dir, right), z));
+    float a = degrees(atan2(dot(dir, up), z));
+    if (kind > 1.5)
+    {
+        float hot = exp(-(h / 5.0) * (h / 5.0) - (a / 2.5) * (a / 2.5));
+        float glow = exp(-(h / 20.0) * (h / 20.0) - (a / 7.0) * (a / 7.0)) * 0.25;
+        float nearRoad = a < -2.0 ? exp(-(h / 28.0) * (h / 28.0)) * 0.12 : 0.0;
+        return min(1.0, hot + glow + nearRoad);
+    }
+    float cut = -0.6 + (h < 0.0 ? min(-h * 0.267949, 1.6) : 0.0);
+    float below = cut - a;
+    float edge = saturate(below / 0.35 + 0.5);
+    float hotSpot = exp(-(h / 9.0) * (h / 9.0) - ((a + 2.0) / 2.5) * ((a + 2.0) / 2.5));
+    float fill = exp(-(h / 28.0) * (h / 28.0)) * exp(-max(0.0, below - 1.0) / 9.0) * 0.35;
+    return lerp(0.015, min(1.0, hotSpot + fill), edge);
+}
+
 float3 LocalLightIlluminance(int i, float3 pointAWS, out float3 toLight, out float dist)
 {
     float3 d = LightPos[i].xyz - pointAWS;
@@ -612,7 +645,7 @@ float3 LocalLightIlluminance(int i, float3 pointAWS, out float3 toLight, out flo
     if (scale > 0.0)
     {
         float cone = saturate(dot(-toLight, LightDir[i].xyz) * scale + LightSpot[i].x);
-        attenuation *= cone * cone;
+        attenuation *= cone * cone * NFX_BeamPattern(LightSpot[i].z, LightDir[i].xyz, -toLight, LightSpot[i].w);
     }
     return LightColor[i].rgb * attenuation;
 }

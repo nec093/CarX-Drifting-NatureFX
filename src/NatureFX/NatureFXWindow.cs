@@ -512,6 +512,13 @@ namespace NatureFX {
 			Widgets.EndDependent();
 			Widgets.EndDependent();
 			Other(Widgets.Switch("Moonlight at night", S.Moonlight, v => S.Moonlight = v));
+			Widgets.BeginDependent(S.Moonlight);
+			// 0.001 to 0.1 on a log scale (a hundredfold: every step as fine at the dark end as at the bright one)
+			float moonLog = Mathf.Log10(Mathf.Clamp(S.MoonBrightness, 0.001f, 0.1f));
+			Other(Widgets.Slider("Moon brightness", moonLog, -3, -1, v => S.MoonBrightness = Mathf.Pow(10.0f, v), "0.00", " (log10)"));
+			Widgets.Info(FormattableString.Invariant($"{S.MoonBrightness:0.####}x: the moon lights the ground with about {S.MoonBrightness * 2.0f:0.####} lux. ") +
+			             "About 0.1x is a real full moon (0.2 to 0.3 lux), 0.01x a half moon, 0.001x hardly more than the stars.");
+			Widgets.EndDependent();
 			Widgets.EndCard();
 
 			Widgets.BeginCard("HDRP only", "These apply to HDRP's own fog and shadows: with Native fog and Native lighting on (Sky & light) the own engine does both, and they are greyed out.");
@@ -687,6 +694,23 @@ namespace NatureFX {
 			Widgets.Info($"Glass: {mod_.RT.GlassStatus}");
 			Widgets.EndCard();
 
+			Widgets.BeginCard("Headlights", "A real low beam in place of the game's round spot: the lamp's colour and strength, and the beam's sharp cut-off " +
+			                                "just below the horizon (rising on the kerb side, left: driving on the left), so the road is lit and the eyes above it are not.");
+			int lamp = Mathf.Clamp(S.HeadlightType, 0, 3);
+			if (Widgets.Chips(ref lamp, new[] { "Game", "Halogen", "HID", "LED" })) {
+				S.HeadlightType = lamp;
+				Other(true);
+			}
+			Widgets.Info("Halogen: warm 3200 K, 18 000 cd a lamp. HID (xenon): 4300 K, 36 000 cd, a faint blue edge at the cut-off. LED: 5800 K, 30 000 cd.");
+			Widgets.BeginDependent(S.HeadlightType != 0);
+			Other(Widgets.Slider("Beam aim", S.HeadlightAim, -1, 3, v => S.HeadlightAim = v, "0.0", "° down"));
+			Widgets.Info("The low beam's axis below level, from the car's body: 0.6° is the usual setting (1 %); more lights the road closer, less reaches further and dazzles.");
+			Widgets.Switch("High beam (F7)", mod_.Headlights.HighBeam, v => mod_.Headlights.HighBeam = v,
+				"Your car's high beam: no cut-off, the light gathered far ahead, 2.5 times the low beam. Not saved.");
+			Widgets.EndDependent();
+			Widgets.Info($"Now: {mod_.Headlights.Status}");
+			Widgets.EndCard();
+
 			Widgets.BeginCard("Car finish", "Paint reflects like real car paint: a clear varnish mirror over the coloured base. DX12 ray tracing.");
 			Other(Widgets.Switch("Chrome rims", S.CarChromeRims, v => S.CarChromeRims = v,
 				"Metal rims, chrome paint included, polished to a mirror instead of brushed aluminium. Painted rims stay as they are."));
@@ -774,14 +798,16 @@ namespace NatureFX {
 				Other(true);
 			}
 			Widgets.BeginDependent(mode == 1);
-			Other(Widgets.Slider("Darkest scene", S.AutoExposureMin, -2, 16, v => S.AutoExposureMin = v, "0.0", " EV"));
+			Other(Widgets.Slider("Darkest scene", S.AutoExposureMin, -6, 16, v => S.AutoExposureMin = v, "0.0", " EV"));
 			Other(Widgets.Slider("Brightest scene", S.AutoExposureMax, -2, 18, v => S.AutoExposureMax = v, "0.0", " EV"));
+			Widgets.Info("Real-world EV: a sunny day is about 15, a lit street at night about 3, a moonlit night about -2. " +
+			             "Darkest scene is how far the eye opens up at night: lower lets a moonlit night show.");
 			Other(Widgets.Slider("Adaptation speed", S.AdaptationSpeed, 0.1f, 5, v => S.AdaptationSpeed = v));
 			Widgets.EndDependent();
 			Other(Widgets.Slider("Exposure compensation", S.Exposure, -3, 3, v => S.Exposure = v, "0.00", " EV"));
 			var probe = mod_.Exposure;
 			Widgets.Info(probe.Valid
-				? FormattableString.Invariant($"Current exposure: {probe.EV100:0.00} EV100 (x{probe.Multiplier:0.#####})")
+				? FormattableString.Invariant($"Current exposure: {probe.EV100:0.00} EV100 (x{probe.Multiplier:0.#####}; the track's sun raised {Rendering.Units.PhysicalScale:0} times to real sunshine)")
 				: "Current exposure: not available");
 			Widgets.EndCard();
 

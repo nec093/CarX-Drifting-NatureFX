@@ -14,6 +14,63 @@
 // negative: -(1 + transmission rgb at 5 bits each + 32768 x whole metres to the glass).
 #include "NFXReflect.hlsli"
 
+// One pane of the own glass (NFX_FLAG_OWN_GLASS): what it sends towards the camera (its mirrored light and the sun's
+// glint, pre-exposed) and what it lets through (1 - Fresnel, tinted by its colour as far as it is opaque). trace: the
+// mirror ray is traced (the nearest pane); else the sky's light stands for it
+void GlassPane(Hit glass, float3 viewDir, uint2 pixel, float exposure, bool trace, out float3 light, out float3 through)
+{
+    HitSurface g = SurfaceAt(glass, viewDir, 0.0);
+    float3 n = g.normal; // facing the camera
+    float nv = saturate(dot(n, -viewDir));
+    float smoothness = saturate(g.smoothness);
+    float fresnel = 0.04 + (max(smoothness, 0.04) - 0.04) * pow(1.0 - nv, 5.0);
+    float opacity = GlassOpacity(glass);
+    through = (1.0 - fresnel) * lerp(1.0, g.albedo, opacity);
+    float3 dir = reflect(viewDir, n);
+    float3 glassAWS = Camera + viewDir * glass.t;
+    float3 origin = glassAWS + n * 0.02;
+    // what it mirrors: the traced ray on smooth glass, else (and past the ray's reach) the sky's light
+    float3 mirrored = SampleSH9(dir) * exposure;
+    if (trace && smoothness > 0.5)
+    {
+        Hit hit;
+        if (Closest(origin, dir, ReflParams.x, false, hit))
+        {
+            float3 hitAWS = origin + dir * hit.t;
+            HitSurface s = SurfaceAt(hit, dir, -1.0);
+            float3 screenColor;
+            float onScreen = ScreenVisibility(hitAWS, screenColor);
+            onScreen *= 1.0 - smoothstep(0.4, 0.6, s.smoothness);
+            float3 radiance = screenColor;
+            if (onScreen < 0.999)
+            {
+                float hitSky;
+                float3 shaded = max(ShadeReflectedHit(s, hitAWS, dir, Hash22(pixel, FrameIndex, 5), hitSky), 0.0);
+                if (any(!isfinite(shaded)))
+                    shaded = 0.0;
+                radiance = lerp(shaded * exposure, screenColor, onScreen);
+            }
+            float reach = 1.0 - smoothstep(0.7, 1.0, hit.t / ReflParams.x);
+            mirrored = lerp(mirrored, radiance, reach);
+        }
+    }
+    // the sun's glint (GGX, the sun disc's size as the least roughness)
+    float3 glint = 0.0;
+    float nl = dot(n, SunDir);
+    if (SunUp != 0 && nl > 0.0 && SunVisible(origin))
+    {
+        float alpha = max((1.0 - smoothness) * (1.0 - smoothness), 0.02);
+        float a2 = alpha * alpha;
+        float3 h = normalize(SunDir - viewDir);
+        float nh = saturate(dot(n, h));
+        float t = nh * nh * (a2 - 1.0) + 1.0;
+        float D = a2 / (PI * t * t);
+        float sunFresnel = 0.04 + 0.96 * pow(1.0 - saturate(dot(h, -viewDir)), 5.0);
+        glint = min(sunFresnel * D / (4.0 * max(nv, 0.05)), 200.0) * SunColor * exposure;
+    }
+    light = mirrored * fresnel + glint;
+}
+
 NFX_ENTRY(id)
 {
     if (id.x >= Width || id.y >= Height)
@@ -37,53 +94,39 @@ NFX_ENTRY(id)
         float nv = saturate(dot(n, -viewDir));
         if (own)
         {
-            float smoothness = saturate(g.smoothness);
-            float fresnel = 0.04 + (max(smoothness, 0.04) - 0.04) * pow(1.0 - nv, 5.0);
-            float opacity = GlassOpacity(glass);
-            transmission = (1.0 - fresnel) * lerp(1.0, g.albedo, opacity);
-            float3 dir = reflect(viewDir, n);
-            float3 glassAWS = Camera + viewDir * glass.t;
-            float3 origin = glassAWS + n * 0.02;
-            // what it mirrors: the traced ray on smooth glass, else (and past the ray's reach) the sky's light
-            float3 mirrored = SampleSH9(dir) * exposure;
-            if (smoothness > 0.5)
+            // the nearest pane, then up to two more seen through it (the far side of a car, a shop window behind a
+            // bus shelter), each with its reflection traced, each letting through what the ones behind it send
+            float3 paneLight, paneThrough;
+            GlassPane(glass, viewDir, pixel, exposure, true, paneLight, paneThrough);
+            float3 light = paneLight;
+            transmission = paneThrough;
+            Hit pane = glass;
+            float travelled = glass.t;
+            [loop]
+            for (int layer = 0; layer < 2; ++layer)
             {
-                Hit hit;
-                if (Closest(origin, dir, ReflParams.x, false, hit))
+                // past this pane (and its other face: a pane modelled with thickness is one pane)
+                float3 from = Camera + viewDir * (travelled + 0.01);
+                Hit next;
+                if (!ClosestGlass(from, viewDir, max(a.w - travelled - 0.02, 0.0), next))
+                    break;
+                bool sameFace = next.instance == pane.instance && next.t < 0.1;
+                travelled += 0.01 + next.t;
+                pane = next;
+                if (sameFace)
                 {
-                    float3 hitAWS = origin + dir * hit.t;
-                    HitSurface s = SurfaceAt(hit, dir, -1.0);
-                    float3 screenColor;
-                    float onScreen = ScreenVisibility(hitAWS, screenColor);
-                    onScreen *= 1.0 - smoothstep(0.4, 0.6, s.smoothness);
-                    float3 radiance = screenColor;
-                    if (onScreen < 0.999)
-                    {
-                        float hitSky;
-                        float3 shaded = max(ShadeReflectedHit(s, hitAWS, dir, Hash22(pixel, FrameIndex, 5), hitSky), 0.0);
-                        if (any(!isfinite(shaded)))
-                            shaded = 0.0;
-                        radiance = lerp(shaded * exposure, screenColor, onScreen);
-                    }
-                    float reach = 1.0 - smoothstep(0.7, 1.0, hit.t / ReflParams.x);
-                    mirrored = lerp(mirrored, radiance, reach);
+                    --layer;
+                    if (travelled > a.w)
+                        break;
+                    continue;
                 }
+                pane.t = travelled;
+                // its reflection traced too (the far side of a car mirrors the street behind it, not the sky)
+                GlassPane(pane, viewDir, pixel, exposure, true, paneLight, paneThrough);
+                light += transmission * paneLight;
+                transmission *= paneThrough;
             }
-            // the sun's glint (GGX, the sun disc's size as the least roughness)
-            float3 glint = 0.0;
-            float nl = dot(n, SunDir);
-            if (SunUp != 0 && nl > 0.0 && SunVisible(origin))
-            {
-                float alpha = max((1.0 - smoothness) * (1.0 - smoothness), 0.02);
-                float a2 = alpha * alpha;
-                float3 h = normalize(SunDir - viewDir);
-                float nh = saturate(dot(n, h));
-                float t = nh * nh * (a2 - 1.0) + 1.0;
-                float D = a2 / (PI * t * t);
-                float sunFresnel = 0.04 + 0.96 * pow(1.0 - saturate(dot(h, -viewDir)), 5.0);
-                glint = min(sunFresnel * D / (4.0 * max(nv, 0.05)), 200.0) * SunColor * exposure;
-            }
-            result = float4(mirrored * fresnel + glint, 0.0);
+            result = float4(light, 0.0);
         }
         else
         {

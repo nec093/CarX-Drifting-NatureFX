@@ -152,6 +152,7 @@ Shader "Hidden/NatureFX/SunExact"
             #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Lighting/LightLoop/LightLoop.hlsl"
 
             float4 _NFX_RTSunDir; // xyz: direction towards the sun (picks HDRP's light), w: 1 when the sun is up
+            #include "Assets/NatureFX/ShaderLibrary/NFX_FogCommon.hlsl"
 
             struct Attributes
             {
@@ -218,7 +219,25 @@ Shader "Hidden/NatureFX/SunExact"
 
                 // this frame's masks, and the history where the pixel was
                 float2 uv = (pixel + 0.5) * _ScreenSize.zw;
-                uint2 maskPixel = min((uint2)(uv * _NFX_LampMaskSize.xy), (uint2)_NFX_LampMaskSize.xy - 1);
+                // of the four trace pixels around, the one on this surface: the nearest in depth. The nearest one alone
+                // gave an object's edge the background's mask (lit where the background was: white outlines)
+                float viewDepth = LinearEyeDepth(depth, _ZBufferParams);
+                float2 maskPos = uv * _NFX_LampMaskSize.xy - 0.5;
+                int2 maskBase = (int2)floor(maskPos);
+                uint2 maskPixel = 0;
+                float bestDiff = 1e9;
+                [unroll]
+                for (int c = 0; c < 4; ++c)
+                {
+                    int2 cand = clamp(maskBase + int2(c & 1, c >> 1), 0, (int2)_NFX_LampMaskSize.xy - 1);
+                    uint2 at = min((uint2)((cand + 0.5) / _NFX_LampMaskSize.xy * _ScreenSize.xy), (uint2)_ScreenSize.xy - 1);
+                    float diff = abs(LinearEyeDepth(LoadCameraDepth(at), _ZBufferParams) - viewDepth);
+                    if (diff < bestDiff)
+                    {
+                        bestDiff = diff;
+                        maskPixel = (uint2)cand;
+                    }
+                }
                 float4 m = LOAD_TEXTURE2D_X(_NFX_LampMask, maskPixel);
                 // all zero (lamp 0 twice) is no mask: the buffer as an engine without LampMask leaves it
                 if (m.x == 0.0 && m.y == 0.0)
@@ -243,6 +262,38 @@ Shader "Hidden/NatureFX/SunExact"
                     UnpackPair(h.z, 12, hVis[0], hVis[1]);
                     UnpackPair(h.w, 12, hVis[2], hVis[3]);
                 }
+                // the range each lamp's visibility has around here this frame (3 x 3 trace pixels): the history is held
+                // inside it, so a lit patch that moved on (a headlight with its car) leaves no trail behind
+                float lo[4] = { 1.0, 1.0, 1.0, 1.0 };
+                float hi[4] = { 0.0, 0.0, 0.0, 0.0 };
+                [unroll]
+                for (int ny = -1; ny <= 1; ++ny)
+                {
+                    [unroll]
+                    for (int nx = -1; nx <= 1; ++nx)
+                    {
+                        uint2 np = (uint2)clamp((int2)maskPixel + int2(nx, ny), 0, (int2)_NFX_LampMaskSize.xy - 1);
+                        float4 nm = LOAD_TEXTURE2D_X(_NFX_LampMask, np);
+                        uint nl[4], nv[4];
+                        UnpackPair(nm.x, 8, nl[0], nl[1]);
+                        UnpackPair(nm.y, 8, nl[2], nl[3]);
+                        UnpackPair(nm.z, 8, nv[0], nv[1]);
+                        UnpackPair(nm.w, 8, nv[2], nv[3]);
+                        [unroll]
+                        for (int a = 0; a < 4; ++a)
+                        {
+                            [unroll]
+                            for (int b = 0; b < 4; ++b)
+                            {
+                                if (nl[b] == lamp[a] && lamp[a] != 255u)
+                                {
+                                    lo[a] = min(lo[a], nv[b] / 255.0);
+                                    hi[a] = max(hi[a], nv[b] / 255.0);
+                                }
+                            }
+                        }
+                    }
+                }
                 float vis[4];
                 [unroll]
                 for (int k = 0; k < 4; ++k)
@@ -258,7 +309,7 @@ Shader "Hidden/NatureFX/SunExact"
                     for (int j = 0; j < 4; ++j)
                     {
                         if (hLamp[j] == lamp[k])
-                            vis[k] = lerp(hVis[j] / 4095.0, current, _NFX_LampMaskParams.x);
+                            vis[k] = lerp(clamp(hVis[j] / 4095.0, lo[k], hi[k]), current, _NFX_LampMaskParams.x);
                     }
                 }
                 uint q[4];
@@ -292,7 +343,7 @@ Shader "Hidden/NatureFX/SunExact"
                     LightData light = _LightDatas[i];
                     // the engine's lamp of this light: the same position (LocalLights takes it from the same Light)
                     float3 at = GetAbsolutePositionWS(light.positionRWS);
-                    float blocked = 0.0;
+                    float visible = 1.0;
                     [unroll]
                     for (int s = 0; s < 4; ++s)
                     {
@@ -300,9 +351,12 @@ Shader "Hidden/NatureFX/SunExact"
                         {
                             float3 d = _NFX_LampPos[lamp[s]].xyz - at;
                             if (dot(d, d) < 0.04)
-                                blocked = 1.0 - vis[s];
+                                visible = vis[s];
                         }
                     }
+                    // and the tyre smoke on the way to the lamp
+                    visible *= NFX_SmokeLampTransmittance(GetAbsolutePositionWS(posInput.positionWS), at);
+                    float blocked = 1.0 - visible;
                     light.shadowIndex = -1;
                     light.contactShadowMask = 0;
                     DirectLighting lighting = ShadeSurface_Punctual(context, posInput, builtinData, preLightData, light, bsdfData, V);

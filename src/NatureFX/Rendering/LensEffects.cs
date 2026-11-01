@@ -54,6 +54,9 @@ namespace NatureFX.Rendering {
 		private NightVisionPass night_;
 		private Material nightMaterial_;
 		private float focus_ = 10.0f;
+		// the lens flare's strength now (night, rain), for the own post-processing's flare (PostProcess)
+		public static float FlareGhosts { get; private set; }
+		public static float FlareStreaks { get; private set; }
 
 		public void Create(ShaderBundle bundle) {
 			if (root_ != null) {
@@ -118,6 +121,14 @@ namespace NatureFX.Rendering {
 			}
 
 			bool flare = on && s.LensFlare > 0.0f;
+			// a wide open eye at night sees the flares much more; rain on the lens spreads them
+			float strength = s.LensFlare * (0.4f + 0.6f * night) * (1.0f + Weather.Current.Rain * 0.5f);
+			FlareGhosts = flare ? strength : 0.0f;
+			FlareStreaks = flare ? s.LensStreaks * (0.5f + night * 0.5f) : 0.0f;
+			// with the own post-processing the flare is its own (on the HDR picture, before the tone curve)
+			if (PostProcess.Active) {
+				flare = false;
+			}
 			bool dof = on && s.DepthOfField;
 			volume_.enabled = flare || dof;
 			if (!volume_.enabled) {

@@ -1178,17 +1178,21 @@ namespace NatureFX.Rendering {
 		private static readonly int FogCamDeltaId = Shader.PropertyToID("_NFX_FogCamDelta");
 		// boxes: the local fog boxes (5 float4 each, FogVolume.hlsl BoxesSigma), boxCount of them
 		public static void TraceFogVolume(CommandBuffer cmd, ComputeShader bridge, Vector4 fog, RTHandle historyIn, RTHandle historyOut, RTHandle integrated,
-		                                  Vector3 cameraDelta, float share, Vector4[] boxes = null, int boxCount = 0) {
+		                                  Vector3 cameraDelta, float share, Vector4[] boxes = null, int boxCount = 0, Vector4[] smoke = null) {
 			var b = Buffers(TraceFogVolume_, FogW * FogH * FogD, 1, 16);
 			if (boxes != null && boxCount > 0) {
 				cmd.SetBufferData(b.Surface, boxes, 0, FogW * FogH * 3, boxCount * 5);
 			} // surface: 3 float4 per column (fits)
+			// the tyre smoke's grid after the 64 boxes' room (FogVolume.hlsl SmokeTransmittance)
+			if (smoke != null) {
+				cmd.SetBufferData(b.Surface, smoke, 0, FogW * FogH * 3 + 64 * 5, smoke.Length);
+			}
 			int prepare = bridge.FindKernel("PrepareFogVolume");
 			cmd.SetComputeBufferParam(bridge, prepare, NativeSurfaceId, b.Surface);
 			cmd.DispatchCompute(bridge, prepare, (FogW + 7) / 8, (FogH + 7) / 8, 1);
 			kindParams_ = true;
 			kindA_ = fog;
-			kindB_ = new Vector4(boxCount, Time.time, 0.0f, 0.0f);
+			kindB_ = new Vector4(boxCount, Time.time, smoke != null ? 1.0f : 0.0f, 0.0f);
 			// Screen: the sky data (the boxes' noise)
 			Issue(cmd, TraceFogVolume_, b.SurfacePtr, b.ResultPtr, FogW, FogH * FogD, skyTransmittance_ != null ? skyTransmittance_.ResultPtr : IntPtr.Zero);
 			kindParams_ = false;

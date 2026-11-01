@@ -17,6 +17,108 @@ float4 _NFX_FogSun;                  // rgb the sun's illuminance at the ground 
 float4 _NFX_FogSunDir;               // xyz towards the sun
 StructuredBuffer<float4> _NFX_SkyLight; // the engine's sky probe (7 float4) and [7] the sky's mean radiance
 
+// The tyre smoke's shadow (TireSmoke.UpdateSmokeShadow): the smoke's particles splatted along the sun onto a grid
+// across it (128 x 128 cells around the camera); per cell the optical depth of all the smoke in that column, and the
+// nearest and farthest smoke along the sun. A point lies under the share of the column that is between it and the
+// sun (the smoke spread evenly over its depth): the ground and the cars under a cloud of smoke, and the smoke's own far
+// side, get that much less sun.
+TEXTURE2D(_NFX_SmokeShadowTex);      // r optical depth, g nearest smoke along the sun (m, from the centre), b farthest
+float4 _NFX_SmokeShadowCenter;       // xyz the grid's centre (absolute), w 1 / cell size (1/m)
+float4 _NFX_SmokeShadowU;            // xyz across the sun (grid x), w cells across
+float4 _NFX_SmokeShadowV;            // xyz across the sun (grid y)
+float4 _NFX_SmokeShadowS;            // xyz towards the sun, w 1 = on
+
+float NFX_SmokeTransmittance(float3 positionAWS)
+{
+    if (_NFX_SmokeShadowS.w < 0.5)
+        return 1.0;
+    float3 d = positionAWS - _NFX_SmokeShadowCenter.xyz;
+    float n = _NFX_SmokeShadowU.w;
+    float2 cell = float2(dot(d, _NFX_SmokeShadowU.xyz), dot(d, _NFX_SmokeShadowV.xyz)) * _NFX_SmokeShadowCenter.w + n * 0.5 - 0.5;
+    if (any(cell < 0.0) || any(cell >= n - 1.0))
+        return 1.0;
+    float depth = dot(d, _NFX_SmokeShadowS.xyz);
+    int2 base = (int2)floor(cell);
+    float2 f = cell - base;
+    float sum = 0.0;
+    [unroll]
+    for (int i = 0; i < 4; ++i)
+    {
+        int2 o = int2(i & 1, i >> 1);
+        float4 m = LOAD_TEXTURE2D(_NFX_SmokeShadowTex, (uint2)(base + o));
+        float between = m.r > 0.0 ? saturate((m.b - depth) / max(m.b - m.g, 0.3)) : 0.0;
+        float w = (o.x ? f.x : 1.0 - f.x) * (o.y ? f.y : 1.0 - f.y);
+        sum += w * exp(-m.r * between);
+    }
+    return sum;
+}
+
+// A headlight's beam as HeadlightController's cookies draw it (relative to its peak), for what does not see HDRP's
+// cookies: kind 1 the low beam (the cut-off 0.6° below the axis, rising 15° on the left to 1° up, the hot spot under
+// it, a wide fill, 1.5 % above), 2 the high beam (gathered on the axis). forward: the lamp's axis; dir: from the lamp
+// to the point; roll: the lamp's turn about its axis from level (radians: a car leaning in a drift or on a bank).
+float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
+{
+    if (kind < 0.5)
+        return 1.0;
+    float3 level = abs(forward.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(0.0, 0.0, 1.0);
+    float3 right0 = normalize(cross(level, forward));
+    float3 up0 = cross(forward, right0);
+    float cr = cos(roll), sr = sin(roll);
+    float3 up = up0 * cr - right0 * sr;
+    float3 right = cross(up, forward);
+    float z = max(dot(dir, forward), 1e-3);
+    float h = degrees(atan2(dot(dir, right), z));
+    float a = degrees(atan2(dot(dir, up), z));
+    if (kind > 1.5)
+    {
+        float hot = exp(-(h / 5.0) * (h / 5.0) - (a / 2.5) * (a / 2.5));
+        float glow = exp(-(h / 20.0) * (h / 20.0) - (a / 7.0) * (a / 7.0)) * 0.25;
+        float nearRoad = a < -2.0 ? exp(-(h / 28.0) * (h / 28.0)) * 0.12 : 0.0;
+        return min(1.0, hot + glow + nearRoad);
+    }
+    float cut = -0.6 + (h < 0.0 ? min(-h * 0.267949, 1.6) : 0.0);
+    float below = cut - a;
+    float edge = saturate(below / 0.35 + 0.5);
+    float hotSpot = exp(-(h / 9.0) * (h / 9.0) - ((a + 2.0) / 2.5) * ((a + 2.0) / 2.5));
+    float fill = exp(-(h / 28.0) * (h / 28.0)) * exp(-max(0.0, below - 1.0) / 9.0) * 0.35;
+    return lerp(0.015, min(1.0, hotSpot + fill), edge);
+}
+
+// The tyre smoke's density in 3D (TireSmoke.UpdateSmokeVolume): extinction (1/m) on a 48 x 24 x 48 grid of 1 m cells
+// round the camera, and the box the smoke fills. The light of a lamp or a headlight reaching a point through the smoke:
+// a few steps along the way from the point to the lamp, skipped where the way misses the smoke's box.
+TEXTURE3D(_NFX_SmokeVolume);
+SAMPLER(sampler_NFX_SmokeVolume);
+float4 _NFX_SmokeVolumeOrigin;  // xyz the grid's lowest corner (absolute), w 1 / cell size
+float4 _NFX_SmokeVolumeSize;    // xyz cells, w 1 = on
+float4 _NFX_SmokeBoundsMin;     // xyz the smoke's box (absolute)
+float4 _NFX_SmokeBoundsMax;
+
+float NFX_SmokeLampTransmittance(float3 fromAWS, float3 lampAWS)
+{
+    if (_NFX_SmokeVolumeSize.w < 0.5)
+        return 1.0;
+    // the way against the smoke's box (slabs)
+    float3 dir = lampAWS - fromAWS;
+    float3 inv = 1.0 / (abs(dir) > 1e-5 ? dir : 1e-5);
+    float3 t0 = (_NFX_SmokeBoundsMin.xyz - fromAWS) * inv, t1 = (_NFX_SmokeBoundsMax.xyz - fromAWS) * inv;
+    float3 lo = min(t0, t1), hi = max(t0, t1);
+    float enter = saturate(max(max(lo.x, lo.y), lo.z)), leave = saturate(min(min(hi.x, hi.y), hi.z));
+    if (leave <= enter)
+        return 1.0;
+    float len = length(dir) * (leave - enter);
+    float tau = 0.0;
+    [unroll]
+    for (int k = 0; k < 6; ++k)
+    {
+        float3 p = fromAWS + dir * lerp(enter, leave, (k + 0.5) / 6.0);
+        float3 uvw = (p - _NFX_SmokeVolumeOrigin.xyz) * _NFX_SmokeVolumeOrigin.w / _NFX_SmokeVolumeSize.xyz;
+        tau += SAMPLE_TEXTURE3D_LOD(_NFX_SmokeVolume, sampler_NFX_SmokeVolume, uvw, 0).r;
+    }
+    return exp(-tau * len / 6.0);
+}
+
 float NFX_FogPhase(float c, float g)
 {
     float g2 = g * g;

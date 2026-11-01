@@ -313,7 +313,9 @@ Shader "Hidden/NatureFX/RTShadow"
             sum += value * w;
             wsum += w;
         }
-        return max(sum / wsum, 0.0);
+        // the lamp shadows (3) carry the light NatureFX's own lights add as a negative blocked share: clamped at zero,
+        // a neon tube never lit the floor
+        return which == 3 ? sum / wsum : max(sum / wsum, 0.0);
     }
 
     float4 CompositeSurface(Varyings v);
@@ -505,6 +507,12 @@ Shader "Hidden/NatureFX/RTShadow"
             PositionInputs cp = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
             sunVisible *= CloudShadowAt(GetAbsolutePositionWS(cp.positionWS));
         }
+        if (_NFX_SmokeShadowS.w > 0.5 && _NFX_RTSunDir.w > 0.0)
+        {
+            // the tyre smoke between the surface and the sun
+            PositionInputs sp = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
+            sunVisible *= NFX_SmokeTransmittance(GetAbsolutePositionWS(sp.positionWS));
+        }
         // the ambient texture: one bounce ambient light, rgb relative to HDRP's; or the own engine's GI
         // (_NFX_LeafParams.w > 0, its strength): rgb the light bounced in, a the share of the sky seen. HDRP's
         // ambient light is then only darkened by the sky's share, and the bounced light added on the surface's colour.
@@ -588,8 +596,14 @@ Shader "Hidden/NatureFX/RTShadow"
             float3 sunAll = max(exact.rgb, 0.0);
             float3 restLight = max(hdrpColor - g3 - sunAll - lampsAll, 0.0);
             float sunShade = 1.0 - (1.0 - sunVisible) * shadowStrength;
-            float3 relit = glow + bake * ambientFactor + skyDelta + sunAll * sunShade + lampsLit + nativeAdded
-                         + restLight * (_NFX_LeafParams.w > 0.0 && ambientStrength > 0.0 ? 1.0 : ambientFactor) + bounceLight;
+            // the sky's light from the sky as it is now (HDRP's probe is the own engine's sky, A3), not what the G-buffer
+            // baked: a track's lightmaps were baked under its own weak sun (Units) and left the shade black
+            float3 skyLight = albedoD * ProbeSH9(n) * GetCurrentExposureMultiplier() * ambientFactor;
+            float3 relit = glow + skyLight + skyDelta + sunAll * sunShade + lampsLit + nativeAdded
+                         // the rest is mostly HDRP's reflection of the sky, which it mirrors under any roof (its probes
+                         // know no garage): only as much as the sky is seen from here (with the sun at full strength
+                         // a covered floor shone with the blue sky)
+                         + restLight * ambientFactor + bounceLight;
             return float4(max(relit, 0.0) + LeafGlow(pixel, depth, sunLit, surfaceW, ndl, L, surface, sunVisible), 1.0);
         }
 

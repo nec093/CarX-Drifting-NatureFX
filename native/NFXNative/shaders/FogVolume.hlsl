@@ -56,6 +56,45 @@ float BoxesSigma(float3 p, out float3 tint)
     return sum;
 }
 
+// The tyre smoke's grid (TireSmoke.UpdateSmokeVolume, after the boxes, ReflParams.z = 1): 3 float4 of header (the
+// grid's lowest corner and 1 / cell size; the smoke's box, its min and max), then the 48 x 24 x 48 cells' extinction
+// (1/m), four to a float4. The light of the sun and the lamps through it on its way to the mist: four steps along the
+// way, where it crosses the smoke's box.
+static const uint SmokeX = 48, SmokeY = 24, SmokeZ = 48;
+
+float SmokeAt(uint base, float3 p, float4 origin)
+{
+    int3 cell = (int3)floor((p - origin.xyz) * origin.w);
+    if (any(cell < 0) || cell.x >= (int)SmokeX || cell.y >= (int)SmokeY || cell.z >= (int)SmokeZ)
+        return 0.0;
+    uint i = ((uint)cell.z * SmokeY + (uint)cell.y) * SmokeX + (uint)cell.x;
+    float4 v = asfloat(Surface.Load4((base + 3 + i / 4) * 16));
+    uint k = i & 3u;
+    return k == 0 ? v.x : k == 1 ? v.y : k == 2 ? v.z : v.w;
+}
+
+float SmokeTransmittance(float3 from, float3 to)
+{
+    if (ReflParams.z < 0.5)
+        return 1.0;
+    uint base = FogW * FogH * 3 + 64 * 5;
+    float4 origin = asfloat(Surface.Load4(base * 16));
+    float3 lo = asfloat(Surface.Load3((base + 1) * 16));
+    float3 hi = asfloat(Surface.Load3((base + 2) * 16));
+    float3 dir = to - from;
+    float3 inv = 1.0 / select(abs(dir) > 1e-5, dir, (float3)1e-5);
+    float3 t0 = (lo - from) * inv, t1 = (hi - from) * inv;
+    float3 a = min(t0, t1), b = max(t0, t1);
+    float enter = saturate(max(max(a.x, a.y), a.z)), leave = saturate(min(min(b.x, b.y), b.z));
+    if (leave <= enter)
+        return 1.0;
+    float tau = 0.0;
+    [unroll]
+    for (int k = 0; k < 4; ++k)
+        tau += SmokeAt(base, from + dir * lerp(enter, leave, (k + 0.5) / 4.0), origin);
+    return exp(-tau * length(dir) * (leave - enter) / 4.0);
+}
+
 float FogPhase(float c, float g)
 {
     float g2 = g * g;
@@ -100,7 +139,7 @@ NFX_ENTRY(id)
         {
             float3 toSun = SampleSunCone(SunDir, SunRadius, Hash22(uint2(x, y + s * FogH), FrameIndex, 31));
             if (!Blocked(p, toSun, 2000.0, distance > CoarseDistance))
-                light += SunColor * FogPhaseMix(dot(SunDir, view));
+                light += SunColor * FogPhaseMix(dot(SunDir, view)) * SmokeTransmittance(p, p + toSun * 30.0);
         }
         light += 0.5 * (SampleSH9(float3(0.0, 1.0, 0.0)) + SampleSH9(float3(0.0, -1.0, 0.0)));
         // lamps and headlights: their beams in the mist (HDRP's punctual light falloff, the spot's cone)
@@ -123,8 +162,11 @@ NFX_ENTRY(id)
             if (LightDir[i].w > 0.0)
             {
                 float a = saturate(dot(-L, LightDir[i].xyz) * LightDir[i].w + LightSpot[i].x);
-                spot = a * a;
+                // a headlight's cut-off in the mist too (its beam does not light the air above the road)
+                spot = a * a * NFX_BeamPattern(LightSpot[i].z, LightDir[i].xyz, -L, LightSpot[i].w);
             }
+            // the tyre smoke between the mist and the lamp: the headlights' beams cut by a cloud of smoke
+            spot *= SmokeTransmittance(p, LightPos[i].xyz);
             light += LightColor[i].rgb / d2 * window * window * spot * FogPhaseMix(dot(L, view));
         }
         result = float4(min(light * sigma * albedo, 1e7), sigma);
