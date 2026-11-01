@@ -127,6 +127,7 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			var cmd = ctx.cmd;
+			Dlaa.NotePost(ctx.hdCamera.camera);
 			int renderWidth = ctx.hdCamera.actualWidth, renderHeight = ctx.hdCamera.actualHeight;
 			CustomPassUtils.Copy(ctx, ctx.cameraColorBuffer, source_);
 			// DLSS (in place of HDRP's TAA) on the HDR colour before everything here, so the meter, the bloom and the

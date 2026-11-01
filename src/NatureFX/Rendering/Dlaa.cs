@@ -59,6 +59,20 @@ namespace NatureFX.Rendering {
 		private static Vector3 position_;
 		private static int matricesFrame_ = -10;
 		private static string failure_;
+		private static int contextsLogged_, mainChanges_, missedLogged_, otherLogged_;
+		private static string lastContext_;
+		private static Camera lastMain_;
+		private static int postFrame_ = -1;
+
+		// PostPass ran for this camera (diagnostics: post-processing on a camera other than the main one)
+		public static void NotePost(Camera cam) {
+			if (cam == camera_) {
+				postFrame_ = Time.frameCount;
+			} else if (otherLogged_ < 6) {
+				++otherLogged_;
+				Kino.Log.Info($"[NatureFX] DLSS diagnostics: frame {Time.frameCount} own post-processing on {cam.name} (not the main camera {(camera_ != null ? camera_.name : "-")})");
+			}
+		}
 		// upscaling: HDRP's dynamic resolution settings as they were, its TAA material and shader
 		private static Shader upscaledShader_;
 		private static bool drsChanged_;
@@ -68,7 +82,33 @@ namespace NatureFX.Rendering {
 		private static readonly FieldInfo SettingsField = typeof(HDRenderPipelineAsset).GetField("m_RenderPipelineSettings", BindingFlags.NonPublic | BindingFlags.Instance);
 		private static readonly FieldInfo TaaMaterialField = typeof(HDRenderPipeline).GetField("m_TemporalAAMaterial", BindingFlags.NonPublic | BindingFlags.Instance);
 
-		public static bool Active => Wanted && !failed_ && NativeEngine.Ready && NativeEngine.Bridge != null && NativeEngine.Supports("dlss");
+		public static bool Active => Wanted && !failed_ && NativeEngine.Ready && NativeEngine.Bridge != null && NativeEngine.Supports("dlss") && Settled;
+
+		// DLSS started while the game was still starting up (its first scenes loading) left parts of the menu UI and
+		// of the models flickering black or in other colours for the rest of the session (turning DLSS off did not
+		// mend it); switched on later it never did. The first start waits until the own engine has traced a scene
+		// for a while; once started, it may come and go.
+		private const float SettleSeconds = 10.0f;
+		private static float sunReadySince_ = -1.0f;
+		private static bool settled_;
+		private static bool Settled {
+			get {
+				if (settled_) {
+					return true;
+				}
+				// without a traced scene (ray tracing off) a minute after start-up will do
+				if (!NativeEngine.SunReady) {
+					sunReadySince_ = -1.0f;
+					settled_ = Time.realtimeSinceStartup >= 60.0f;
+					return settled_;
+				}
+				if (sunReadySince_ < 0.0f) {
+					sunReadySince_ = Time.realtimeSinceStartup;
+				}
+				settled_ = Time.realtimeSinceStartup - sunReadySince_ >= SettleSeconds;
+				return settled_;
+			}
+		}
 		// this frame HDRP renders at the lower resolution and PostPass upscales (Begin)
 		public static bool Upscaling { get; private set; }
 		// PostPass upscales with DLSS this frame (not HDRP's TAAU, Developer)
@@ -83,7 +123,14 @@ namespace NatureFX.Rendering {
 					return "off (HDRP's TAA)";
 				}
 				if (!Active) {
-					return NativeEngine.Ready && !NativeEngine.Supports("dlss") ? "waiting for the engine's new DLL (HDRP's TAA)" : "waiting for the own engine (HDRP's TAA)";
+					if (NativeEngine.Ready && !NativeEngine.Supports("dlss")) {
+						return "waiting for the engine's new DLL (HDRP's TAA)";
+					}
+					if (NativeEngine.Ready && !settled_) {
+						return sunReadySince_ < 0.0f ? "waiting for the game to finish starting (HDRP's TAA)"
+							: $"starting in {Mathf.CeilToInt(SettleSeconds - (Time.realtimeSinceStartup - sunReadySince_))} s, after the game's start-up (HDRP's TAA)";
+					}
+					return "waiting for the own engine (HDRP's TAA)";
 				}
 				if (RayReconstructionWanted && Quality > 0 && !DevRayReconstructionUpscaling) {
 					return $"{NativeEngine.DlssStatus} (Ray Reconstruction with DLAA only for now)";
@@ -131,6 +178,26 @@ namespace NatureFX.Rendering {
 		// culling, never the picture)
 		private static void Begin(ScriptableRenderContext context, List<Camera> cameras) {
 			var cam = Camera.main;
+			// diagnostics (the menu UI and models flickered with DLSS on): the cameras each context renders, and a
+			// main camera that changes from frame to frame
+			if (contextsLogged_ < 12 && cameras.Count > 0) {
+				var names = new List<string>();
+				foreach (var c in cameras) {
+					names.Add($"{(c != null ? c.name : "null")} ({(c != null ? c.cameraType.ToString() : "-")}{(c != null && c.targetTexture != null ? ", to a texture" : "")}{(c == cam ? ", main" : "")})");
+				}
+				string line = string.Join(", ", names);
+				if (line != lastContext_) {
+					lastContext_ = line;
+					++contextsLogged_;
+					Kino.Log.Info($"[NatureFX] DLSS diagnostics: frame {Time.frameCount} context renders {line}");
+				}
+			}
+			if (cam != null && cam != lastMain_) {
+				if (lastMain_ != null && mainChanges_++ < 12) {
+					Kino.Log.Info($"[NatureFX] DLSS diagnostics: frame {Time.frameCount} main camera {lastMain_.name} -> {cam.name}");
+				}
+				lastMain_ = cam;
+			}
 			if (cam == null || cam.cameraType != CameraType.Game || !cameras.Contains(cam)) {
 				return;
 			}
@@ -195,6 +262,11 @@ namespace NatureFX.Rendering {
 		}
 
 		private static void End(ScriptableRenderContext context, List<Camera> cameras) {
+			// a frame jittered without DLSS run on it: the raw jittered picture went to the screen
+			if (jittered_ != null && ranFrame_ != Time.frameCount && missedLogged_ < 12) {
+				++missedLogged_;
+				Kino.Log.Info($"[NatureFX] DLSS diagnostics: frame {Time.frameCount} {jittered_.name} jittered but DLSS did not run (post pass for it: frame {postFrame_})");
+			}
 			if (jittered_ != null) {
 				jittered_.ResetProjectionMatrix();
 				jittered_ = null;

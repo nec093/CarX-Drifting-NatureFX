@@ -11,6 +11,7 @@
 // colour (RTShadowPass, RTReflectionPass) and its guides: a second buffer (diffuse and specular albedo, the world
 // normal) that DlssPackGuides.hlsl spreads over textures of its own, the roughness in the colour's alpha, the camera's
 // matrices. nvngx_dlss.dll is looked for next to NFXNative.dll (the mod folder).
+#include <share.h>
 #include "nvsdk_ngx_helpers.h"
 #include "nvsdk_ngx_helpers_dlssd_d3d.h"
 #include "DlssPackGuides.h"  // g_DlssPackGuides: shaders/DlssPackGuides.hlsl
@@ -98,7 +99,8 @@ bool DlssInit() {
 	{
 		std::lock_guard<std::mutex> lock(g_dlssLogMutex);
 		if (g_dlssLog == nullptr) {
-			_wfopen_s(&g_dlssLog, (folder + L"\\NFX_ngx.log").c_str(), L"w");
+			// readable while the game runs (shared for reading)
+			g_dlssLog = _wfsopen((folder + L"\\NFX_ngx.log").c_str(), L"w", _SH_DENYWR);
 		}
 	}
 	info.LoggingInfo.LoggingCallback = &DlssLog;
