@@ -95,7 +95,10 @@ for asset in sorted(os.listdir(model_root)):
             if not os.path.exists(alpha_src):
                 alpha_src = os.path.join(folder, 'textures', f'{asset}_alpha_2k.png')
             elif entry['cutoff'] is None:
-                entry['cutoff'] = 0.5  # fir_sapling's twigs come as OPAQUE in the glTF, with the alpha beside them
+                # fir_sapling's twigs come as OPAQUE in the glTF, the chain-link fence's wire as BLEND, with the alpha
+                # beside them: cut out (a blended wire would cast no traced shadow and sort badly)
+                entry['cutoff'] = 0.5
+                entry['transparent'] = False
             target = os.path.join(out, os.path.splitext(os.path.basename(base_uri))[0] + '.png')
             if entry['cutoff'] is not None and os.path.exists(alpha_src):
                 rgb = Image.open(base_src).convert('RGB')

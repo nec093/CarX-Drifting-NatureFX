@@ -22,18 +22,19 @@ namespace NatureFX.Rendering {
 		public float Refraction = 0.35f;   // how far the bend of the glass is followed (0: none, 1: one surface of full glass)
 
 		public string Status { get; private set; } = "not run yet";
+		public int LastRun { get; private set; } = -1000; // the frame it last drew the glass (OwnGlass hides HDRP's only then)
 
 		private readonly MaterialPropertyBlock props_ = new();
 		private RTHandle color_, glass_;
 
 		protected override void Setup(ScriptableRenderContext renderContext, CommandBuffer cmd) {
 			color_ = Alloc("NFX_RTGlass_Color");
-			glass_ = Alloc("NFX_RTGlass_Trace");
+			glass_ = Alloc("NFX_RTGlass_Trace", GraphicsFormat.R32G32B32A32_SFloat); // w packs the glass's distance (Glass.hlsl)
 		}
 
-		private static RTHandle Alloc(string name) {
+		private static RTHandle Alloc(string name, GraphicsFormat format = GraphicsFormat.R16G16B16A16_SFloat) {
 			return RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension,
-				colorFormat: GraphicsFormat.R16G16B16A16_SFloat, enableRandomWrite: true, useDynamicScale: true, name: name);
+				colorFormat: format, enableRandomWrite: true, useDynamicScale: true, name: name);
 		}
 
 		protected override void Execute(CustomPassContext ctx) {
@@ -73,7 +74,8 @@ namespace NatureFX.Rendering {
 			props_.SetVector(GlassCompose, new Vector4(Intensity, 0.0f, 0.0f, 0.0f));
 			CoreUtils.SetRenderTarget(cmd, ctx.cameraColorBuffer, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, CompositeMaterial, props_, PassGlassComposite);
-			Status = $"own engine (DXR 1.1): {Scene.GlassCount} glass surfaces, {width}x{height}";
+			LastRun = Time.frameCount;
+			Status = $"own engine (DXR 1.1): {Scene.GlassCount} glass surfaces, {width}x{height}" + (OwnGlass.Active ? $", drawn whole ({OwnGlass.Hidden} renderers' glass hidden from HDRP)" : "");
 		}
 
 		protected override void Cleanup() {

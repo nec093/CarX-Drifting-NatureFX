@@ -60,7 +60,7 @@ namespace NatureFX.Nature {
 			new() { Rain = 0.0f, Wetness = 0.4f, Snow = 0.0f, Leaves = 0.1f, Dust = 0.0f, Cloud = 0.7f, FogScale = 0.15f, WindScale = 0.3f }
 		};
 
-		private const float TransitionSeconds = 90.0f;
+		private const float DefaultTransitionSeconds = 30.0f; // Settings.WeatherChangeTime
 
 		private WeatherState from_;
 		private int target_ = -1;
@@ -95,7 +95,7 @@ namespace NatureFX.Nature {
 			}
 			target_ = wanted;
 
-			blend_ = Mathf.MoveTowards(blend_, 1.0f, Time.unscaledDeltaTime / TransitionSeconds);
+			blend_ = Mathf.MoveTowards(blend_, 1.0f, Time.unscaledDeltaTime / (s.WeatherChangeTime > 0.0f ? s.WeatherChangeTime : DefaultTransitionSeconds));
 			var goal = target_ <= 0 ? Manual(s) : Presets[target_];
 			Weather.Current = WeatherState.Lerp(from_, goal, Mathf.SmoothStep(0.0f, 1.0f, blend_));
 		}

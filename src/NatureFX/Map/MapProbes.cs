@@ -35,6 +35,11 @@ namespace NatureFX.Map {
 		private WeatherState lastWeather_;
 		private int nextRenderFrame_;
 		private bool on_;
+		// the sky HDRP renders the probes with: the own engine's (Rendering.AtmospherePass.SkyCube, A3) changes all the
+		// time (clouds, the light): a probe made while it was still black, or an hour of sky ago, is made again
+		private Texture lastSky_;
+		private float nextSkyRefresh_;
+		private const float SkyRefreshSeconds = 20.0f;
 
 		public int Count => probes_.Count;
 
@@ -145,6 +150,15 @@ namespace NatureFX.Map {
 			// the time of day or the weather moved on: everything again, nearest first
 			float elevation = sun != null ? Mathf.Asin(Mathf.Clamp(-sun.transform.forward.y, -1.0f, 1.0f)) * Mathf.Rad2Deg : 45.0f;
 			var w = Weather.Current;
+			var sky = NatureFX.Rendering.AtmospherePass.SkyCube;
+			if (sky != lastSky_) {
+				// a new sky: give HDRP a moment to draw it into its own sky before the probes see it
+				lastSky_ = sky;
+				nextSkyRefresh_ = Time.unscaledTime + 2.0f;
+			} else if (sky != null && Time.unscaledTime >= nextSkyRefresh_) {
+				nextSkyRefresh_ = Time.unscaledTime + SkyRefreshSeconds;
+				version_++;
+			}
 			if (float.IsNaN(lastElevation_) || Mathf.Abs(elevation - lastElevation_) > 2.0f || Mathf.Abs(w.Cloud - lastWeather_.Cloud) > 0.1f
 			    || Mathf.Abs(w.Snow - lastWeather_.Snow) > 0.1f || Mathf.Abs(w.Wetness - lastWeather_.Wetness) > 0.15f) {
 				lastElevation_ = elevation;

@@ -38,6 +38,7 @@ namespace NatureFX {
 		internal readonly MapFog Fog = new();
 		internal readonly MapLights Lights = new();
 		internal readonly MapProbes Probes = new();
+		internal readonly Rendering.SceneProbes TrackProbes = new();
 		internal readonly GrassRenderer Grass = new();
 		internal readonly MapDecals Decals = new();
 		internal readonly MapWater Water = new();
@@ -52,6 +53,9 @@ namespace NatureFX {
 		internal readonly CameraVolumetrics CameraFog = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.Volumetrics, "the local fog and the tyre smoke");
 		internal readonly CameraVolumetrics CameraClouds = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.VolumetricClouds, "the sky's clouds");
 		internal readonly LensEffects Lens = new();
+		internal readonly PostProcess Post = new();
+		internal readonly GameParticles GameFx = new();
+		internal readonly GameDayNight GameNight = new();
 
 		private SettingsUI ui_;
 		private NatureFXWindow window_;
@@ -87,6 +91,12 @@ namespace NatureFX {
 			Bundle.Load();
 			Lens.Create(Bundle);
 			Bundle.Reloaded += () => Lens.Reload(Bundle);
+			Post.Create(Bundle);
+			Bundle.Reloaded += () => Post.Reload(Bundle);
+			GameFx.Create(Bundle);
+			OwnGlass.Create(Bundle);
+			Bundle.Reloaded += () => OwnGlass.Create(Bundle);
+			Bundle.Reloaded += () => GameFx.Reload(Bundle);
 			PhotoMode.Create(Bundle);
 			Bundle.Reloaded += () => PhotoMode.Reload(Bundle);
 			Wind.Create();
@@ -99,7 +109,8 @@ namespace NatureFX {
 			Tracks.Create(Bundle);
 			CarRainFx.Create(Bundle);
 			Rain.Create(Bundle);
-			Bundle.Reloaded += () => { Rain.Destroy(); Rain.Create(Bundle); Particles.Reload(Bundle); };
+			Smoke.CreateParticles(Bundle);
+			Bundle.Reloaded += () => { Rain.Destroy(); Rain.Create(Bundle); Particles.Reload(Bundle); Smoke.DestroyParticles(); Smoke.CreateParticles(Bundle); };
 
 			SceneManager.sceneLoaded += OnSceneLoaded;
 			NatureFX.Tools.ShaderVariantRecorder.Recording = Settings.Data.RecordShaderVariants;
@@ -139,9 +150,13 @@ namespace NatureFX {
 			Rain.Destroy();
 			Glow.Destroy();
 			Lens.Destroy();
+			Post.Destroy();
+			GameFx.Restore();
+			OwnGlass.Restore();
 			PhotoMode.Destroy();
 			Lights.Destroy();
 			Probes.Destroy();
+			TrackProbes.Restore();
 			Grass.Destroy();
 			Decals.Destroy();
 			Water.Destroy();
@@ -165,10 +180,14 @@ namespace NatureFX {
 			MapWeather.Update(s, Zones, camPos, s.UseMapProfile && Map.Loaded);
 			WeatherCtl.Update(s);
 			Seasons.Update(s, WeatherCtl.ActivePreset, s.UseMapProfile && Map.Loaded ? MapWeather.Season : null, s.Enabled);
-			Fog.Update(s.Enabled, camPos, Volumes.AnyVisible || Smoke.AnyVisible, s.AerialHaze);
-			CameraFog.Update(cam, s.Enabled && (Volumes.AnyVisible || Smoke.AnyVisible));
+			// roadmap C: with the own engine's fog the local fog and the tyre smoke are its boxes (AtmospherePass), not
+			// HDRP's volumetric fog
+			bool nativeFog = s.NativeFog && s.NativeSky;
+			bool hdrpVolumetric = !nativeFog && (Volumes.AnyVisible || Smoke.AnyVisible);
+			Fog.Update(s.Enabled, camPos, hdrpVolumetric, s.AerialHaze, nativeFog);
+			CameraFog.Update(cam, s.Enabled && hdrpVolumetric);
 			CameraClouds.Update(cam, s.Enabled && s.Clouds && !s.NativeSky);
-			Volume.UpdateSky(Sun.Sun, s.Enabled && s.SunOverride);
+			Volume.UpdateSky(Sun.Sun, s.Enabled && s.SunOverride, s.Enabled && s.NativeSky);
 			Weather.UpdateIce(s.Enabled && s.Accumulation, Sun.Sun);
 			PhotoMode.Update(cam);
 			Clouds.Update(s.Enabled, s, Sun.Sun, s.UseMapProfile && Map.Loaded && MapValues.TryFloat(Map.Get("clouds", "sea"), out float sea) ? sea : float.NaN);
@@ -196,10 +215,16 @@ namespace NatureFX {
 			Accumulation.Update(s);
 			Accumulation.UpdateRoad(rebuiltSurface ? s.RoadWear : 0.0f);
 			Sun.Update(s);
+			// the game's own night lighting (its street lights) at NatureFX's night
+			GameNight.Update(s.Enabled && s.SunOverride && s.SyncGameNight, Sun.Sun);
 			Headlights.Update(s, s.Enabled && s.UseMapProfile);
 			bool mapOn = s.Enabled && s.UseMapProfile;
 			Lights.Update(mapOn, Sun.Sun, camPos, s.HeadlightShafts, RT.LampShadowsTraced);
-			Probes.Update(mapOn && s.MapProbes, Sun.Sun, camPos);
+			// with the own engine's sky HDRP's sky reflection is that sky (A3) and the traced reflections show what is near:
+			// the probes, rendered by HDRP without the engine's sky, fog and light, kept a stale day sky into the night
+			Probes.Update(mapOn && s.MapProbes && !s.NativeSky, Sun.Sun, camPos);
+			// and the track's own probes, rendered once at load under whatever sky HDRP had then
+			TrackProbes.Update(s.Enabled && s.NativeSky);
 			// the 3D grass belongs to the shader rebuild (it draws with NatureFX/Foliage), the rest to map effects
 			Grass.Update(mapOn && rebuiltSurface, s, camPos);
 			Forest.Update(mapOn, camPos);
@@ -217,10 +242,12 @@ namespace NatureFX {
 			Rain.Update(s, cam);
 			Glow.Update(s.Enabled && s.CarGlow, camPos);
 			Lens.Update(s.Enabled, s, Sun.Sun, camPos);
+			Post.Update(s.Enabled, s);
+			GameFx.Update(s.Enabled && s.NativeParticles);
 			MaterialProfiles.UpdateGlobals(Sun.Sun);
 			RT.UpdateRayTracing(Sun.Sun);
 			// the game's painted shadow planes go while the ray traced sun shadows run
-			PaintedShadows.Update(s.Enabled && s.RTShadows && s.RTHideFakeShadows && RT.SunShadowsRunning);
+			PaintedShadows.Update(s.Enabled && Rendering.EngineLighting.Shadows(s) && s.RTHideFakeShadows && RT.SunShadowsRunning);
 			Finish.ChromeRims = s.CarChromeRims;
 			// the ray tracing scene takes the rims' new finish (renderer blocks are read when instances are added)
 			if (Finish.Update(s.Enabled) && Time.unscaledTime >= nextFinishRebuild_) {

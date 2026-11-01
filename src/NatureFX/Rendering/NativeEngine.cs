@@ -146,6 +146,13 @@ namespace NatureFX.Rendering {
 
 		// NFX_FLAG_* of NFXCommon.hlsli: sun shadows through glass dimmed
 		public static bool GlassShadows;
+		// NFX_FLAG_LAMP_MASK: HDRP's lamps shadowed one by one (TraceLampMask, roadmap A4); LocalShadows only the
+		// lights NatureFX adds
+		public static bool LampMask;
+		// NFX_FLAG_OWN_GLASS: Glass.hlsl draws the glass whole (OwnGlass hides HDRP's)
+		public static bool OwnGlass;
+		// what the loaded DLL can do (NFX_Native_Info's "features:"): a mod newer than its DLL must not hide HDRP's glass
+		public static bool Supports(string feature) => Info != null && Info.Contains(feature);
 
 		// Emissive surfaces of the static scene that are bright enough to light their surroundings: LocalLights hands
 		// the nearest ones to the traces as lamps HDRP does not have (light added where it gets through)
@@ -535,7 +542,7 @@ namespace NatureFX.Rendering {
 			public IntPtr SurfacePtr, ResultPtr;
 			public int Pixels;
 		}
-		private static readonly TraceBuffers[] buffers_ = { new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new() };
+		private static readonly TraceBuffers[] buffers_ = { new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new(), new() };
 		private static GraphicsBuffer screen_;
 		private static IntPtr screenPtr_;
 		private static int screenPixels_;
@@ -583,6 +590,7 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			beganFrame_ = Time.frameCount;
+			skyProbePtrFrame_ = IntPtr.Zero; // HDRP's probe until TraceSky makes this frame's own
 			// camera relative world to clip, as HDRP's UNITY_MATRIX_VP (no translation in the view: HDRP renders
 			// relative to the camera)
 			var view = cameraObject.worldToCameraMatrix;
@@ -642,7 +650,7 @@ namespace NatureFX.Rendering {
 			c[4] = sunColor_.x; c[5] = sunColor_.y; c[6] = sunColor_.z; c[7] = CoarseShadowDistance;
 			c[8] = camera_.x; c[9] = camera_.y; c[10] = camera_.z; c[11] = Bits((uint)frame_);
 			c[12] = Bits((uint)width); c[13] = Bits((uint)height); c[14] = Bits(sunDirection_.w > 0.0f ? 1u : 0u);
-			c[15] = Bits(GlassShadows ? 1u : 0u);
+			c[15] = Bits((GlassShadows ? 1u : 0u) | (LampMask ? 2u : 0u) | (OwnGlass ? 4u : 0u));
 			c[16] = ambientParams_.x; c[17] = ambientParams_.y; c[18] = ambientParams_.z; c[19] = ambientParams_.w;
 			Put(c, 20, skyParams_);
 			c[25] = aerosols_; c[26] = 1.0f; // LightCount.y aerosols, .z ozone (Sky.hlsli)
@@ -676,7 +684,7 @@ namespace NatureFX.Rendering {
 			var slot = eventData_ + EventSlotSize * (eventSlot_++ % EventSlots);
 			Marshal.WriteIntPtr(slot, 0, surface);
 			Marshal.WriteIntPtr(slot, 8, result);
-			Marshal.WriteIntPtr(slot, 16, probe != IntPtr.Zero ? probe : probePtr_);
+			Marshal.WriteIntPtr(slot, 16, probe != IntPtr.Zero ? probe : skyProbePtrFrame_ != IntPtr.Zero ? skyProbePtrFrame_ : probePtr_);
 			Marshal.WriteIntPtr(slot, 24, screen);
 			Marshal.WriteInt32(slot, 32, kind);
 			Marshal.WriteInt32(slot, 36, width);
@@ -706,7 +714,15 @@ namespace NatureFX.Rendering {
 		private static TraceBuffers skyTransmittance_, skyMultiScatter_, skyView_;
 		// the transmittance table, then the clouds' noise and type map (Sky.hlsli: SkyDataBytes / 16)
 		private const int SkyDataFloat4s = 155648;
-		public const int TraceCloudNoise_ = 12, TraceClouds_ = 13;
+		public const int TraceCloudNoise_ = 12, TraceClouds_ = 13, TraceCloudShadow_ = 14, TraceSkyAmbient_ = 15;
+		public const int CloudShadowSize = 512;
+		public const float CloudShadowArea = 16000.0f; // CloudShadow.hlsl
+		// phase 1c: the sky's light (clouds included) as an ambient probe, in HDRP's packing (7 float4): every trace
+		// after TraceSky in a frame reads it instead of HDRP's probe, and the composite puts it in place of HDRP's
+		public static GraphicsBuffer SkyProbe { get; private set; }
+		private static IntPtr skyProbePtr_, skyProbePtrFrame_;
+		private static readonly int SkySamplesId = Shader.PropertyToID("_NFX_SkySamples");
+		private static readonly int SkyProbeId = Shader.PropertyToID("_NFX_SkyProbe");
 		private static bool cloudNoiseMade_;
 		private static bool kindParams_;
 		private static Vector4 kindA_, kindB_;
@@ -733,7 +749,8 @@ namespace NatureFX.Rendering {
 		// clouds: their target (null: none) and size, cover (x cumulus, y altostratus, z cumulonimbus, w density) and
 		// motion (xy wind offset, z age, w the haze distance), CloudController.Native*
 		public static void TraceSky(CommandBuffer cmd, ComputeShader bridge, RTHandle view, RTHandle transmittance, float sunLux, float height, float aerosols,
-		                            RTHandle clouds, Vector4 cloudSize, Vector4 cover, Vector4 motion) {
+		                            RTHandle clouds, Vector4 cloudSize, Vector4 cover, Vector4 motion, RTHandle cloudShadow, bool ambient,
+		                            RenderTexture skyCube = null) {
 			var t = SkyBuffer(ref skyTransmittance_, SkyDataFloat4s, "NFX_SkyData");
 			var m = SkyBuffer(ref skyMultiScatter_, MultiScatterSize * MultiScatterSize, "NFX_SkyMultiScatter");
 			var v = SkyBuffer(ref skyView_, SkyViewW * SkyViewH, "NFX_SkyView");
@@ -766,6 +783,34 @@ namespace NatureFX.Rendering {
 				Issue(cmd, TraceClouds_, b.SurfacePtr, b.ResultPtr, width, height2, t.ResultPtr, v.ResultPtr);
 				kindParams_ = false;
 				Unpack4(cmd, bridge, b, clouds, cloudSize);
+				if (cloudShadow != null) {
+					var sb = Buffers(TraceCloudShadow_, CloudShadowSize * CloudShadowSize, 1, 16);
+					kindParams_ = true;
+					Issue(cmd, TraceCloudShadow_, m.ResultPtr, sb.ResultPtr, CloudShadowSize, CloudShadowSize, t.ResultPtr);
+					kindParams_ = false;
+					Unpack4(cmd, bridge, sb, cloudShadow, new Vector4(CloudShadowSize, CloudShadowSize, 1.0f / CloudShadowSize, 1.0f / CloudShadowSize));
+				}
+			}
+			if (ambient) {
+				var a = Buffers(TraceSkyAmbient_, 512, 1, 16);
+				kindParams_ = true;
+				kindA_ = clouds != null ? cover : Vector4.zero;
+				kindB_ = motion;
+				Issue(cmd, TraceSkyAmbient_, m.ResultPtr, a.ResultPtr, 32, 16, t.ResultPtr, v.ResultPtr);
+				kindParams_ = false;
+				if (SkyProbe == null) {
+					// 7 float4 of HDRP's packing, and [7] the sky's mean radiance (the fog's sky light)
+					SkyProbe = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 8, 16) { name = "NFX_SkyProbe" };
+					skyProbePtr_ = SkyProbe.GetNativeBufferPtr();
+				}
+				int project = bridge.FindKernel("SkyAmbientSH");
+				cmd.SetComputeBufferParam(bridge, project, SkySamplesId, a.Result);
+				cmd.SetComputeBufferParam(bridge, project, SkyProbeId, SkyProbe);
+				cmd.DispatchCompute(bridge, project, 1, 1, 1);
+				skyProbePtrFrame_ = skyProbePtr_;
+			}
+			if (skyCube != null) {
+				TraceSkyCube(cmd, bridge, skyCube, clouds != null ? cover : Vector4.zero, motion); // with this frame's sky values
 			}
 			skyParams_ = Vector4.zero; // the other kinds see zeros, as before
 		}
@@ -938,6 +983,22 @@ namespace NatureFX.Rendering {
 			Unpack4(cmd, bridge, result, target, size);
 		}
 
+		// Roadmap A4: each of the four heaviest lamps' own visibility per half resolution pixel (LampMask.hlsl), into
+		// target (R32G32B32A32 float: the packed small integers must stay exact), on the surface TraceLocal prepared
+		// this frame (else its own)
+		public const int TraceLampMask_ = 19;
+
+		public static void TraceLampMask(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, RTHandle target, Vector4 size) {
+			int width = (int)size.x, height = (int)size.y;
+			var result = Buffers(TraceLampMask_, width * height, 1, 16);
+			var ambient = buffers_[TraceAmbient_];
+			TraceBuffers surface = ambientPreparedFrame_ == Time.frameCount && ambient.Surface != null && ambient.Pixels == width * height
+				? ambient
+				: PrepareAmbient(cmd, bridge, ctx, surfaceNormal, size, result, Vector4.zero);
+			Issue(cmd, TraceLampMask_, surface.SurfacePtr, result.ResultPtr, width, height);
+			Unpack4(cmd, bridge, result, target, size);
+		}
+
 		private static readonly int NativeTarget2Id = Shader.PropertyToID("_NFX_NativeTarget2");
 		private static readonly int NativeScreenId = Shader.PropertyToID("_NFX_NativeScreen");
 		private static readonly int ColorTexId = Shader.PropertyToID("_NFX_ColorTex");
@@ -1053,6 +1114,94 @@ namespace NatureFX.Rendering {
 			cmd.DispatchCompute(bridge, prepare, (width + 7) / 8, (height + 7) / 8, TextureXR.slices);
 			Issue(cmd, TraceShafts_, b.SurfacePtr, b.ResultPtr, width, height);
 			Unpack4(cmd, bridge, b, target, size);
+		}
+
+		// Phase 2: the fog and haze (Fog.hlsl) into the shafts' texture; shaftParams.z how far over the sky, fog as
+		// MapFog.NativeParams (w the anisotropy)
+		public const int TraceFog_ = 16;
+		public static void TraceFog(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle target, Vector4 size, Vector4 shaftParams, Vector4 fog) {
+			int width = (int)size.x, height = (int)size.y;
+			var b = Buffers(TraceFog_, width * height, 1, 16);
+			int prepare = bridge.FindKernel("PrepareFog");
+			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
+			cmd.SetComputeVectorParam(bridge, ShaftParamsId, shaftParams);
+			cmd.SetComputeTextureParam(bridge, prepare, CameraDepthId, ctx.cameraDepthBuffer);
+			cmd.SetComputeBufferParam(bridge, prepare, NativeSurfaceId, b.Surface);
+			cmd.SetComputeBufferParam(bridge, prepare, NativeResultId, b.Result);
+			cmd.DispatchCompute(bridge, prepare, (width + 7) / 8, (height + 7) / 8, TextureXR.slices);
+			kindParams_ = true;
+			kindA_ = fog;
+			kindB_ = reflParams_;
+			Issue(cmd, TraceFog_, b.SurfacePtr, b.ResultPtr, width, height);
+			kindParams_ = false;
+			Unpack4(cmd, bridge, b, target, size);
+		}
+
+		// Phase 2b: the 3D fog (FogVolume.hlsl), FogW x FogH x FogD froxels: the engine's scattering per cell, blended
+		// with last frame's (FogReproject: history ping-pong), integrated along each column (FogIntegrate) into
+		// integrated, which RTShadowPass makes global (_NFX_FogVolume, NFX_FogCommon.hlsl)
+		public const int TraceFogVolume_ = 17;
+		// A3: the engine's sky as HDRP's sky (SkyCube.hlsl): 64² a face, into a cube render texture
+		public const int TraceSkyCube_ = 18, SkyCubeSize = 64;
+		private static readonly int SkyCubeTargetId = Shader.PropertyToID("_NFX_SkyCubeTarget");
+		private static RenderTexture skyFaces_;
+
+		private static void TraceSkyCube(CommandBuffer cmd, ComputeShader bridge, RenderTexture cube, Vector4 cover, Vector4 motion) {
+			if (skyTransmittance_ == null || skyView_ == null) {
+				return; // TraceSky first
+			}
+			var b = Buffers(TraceSkyCube_, SkyCubeSize * SkyCubeSize * 6, 1, 16);
+			kindParams_ = true;
+			kindA_ = cover;
+			kindB_ = motion;
+			Issue(cmd, TraceSkyCube_, skyMultiScatter_.ResultPtr, b.ResultPtr, SkyCubeSize, SkyCubeSize * 6, skyTransmittance_.ResultPtr, skyView_.ResultPtr);
+			kindParams_ = false;
+			// written as a 2D array of six slices (a compute shader cannot be relied on to write a cube map), then copied
+			// face by face into the cube HDRP takes: the black sky in the reflections was a cube never written
+			if (skyFaces_ == null) {
+				skyFaces_ = new RenderTexture(SkyCubeSize, SkyCubeSize, 0, cube.graphicsFormat) {
+					dimension = TextureDimension.Tex2DArray, volumeDepth = 6, enableRandomWrite = true, name = "NFX_SkyCubeFaces", hideFlags = HideFlags.DontSave
+				};
+				skyFaces_.Create();
+			}
+			int unpack = bridge.FindKernel("SkyCubeUnpack");
+			cmd.SetComputeBufferParam(bridge, unpack, NativeResultId, b.Result);
+			cmd.SetComputeTextureParam(bridge, unpack, SkyCubeTargetId, skyFaces_);
+			cmd.DispatchCompute(bridge, unpack, (SkyCubeSize + 7) / 8, (SkyCubeSize * 6 + 7) / 8, 1);
+			for (int face = 0; face < 6; ++face) {
+				cmd.CopyTexture(skyFaces_, face, 0, cube, face, 0);
+			}
+		}
+		public const int FogW = 160, FogH = 90, FogD = 64;
+		private static readonly int FogTargetId = Shader.PropertyToID("_NFX_FogTarget");
+		private static readonly int FogSourceId = Shader.PropertyToID("_NFX_FogSource");
+		private static readonly int FogCamDeltaId = Shader.PropertyToID("_NFX_FogCamDelta");
+		// boxes: the local fog boxes (5 float4 each, FogVolume.hlsl BoxesSigma), boxCount of them
+		public static void TraceFogVolume(CommandBuffer cmd, ComputeShader bridge, Vector4 fog, RTHandle historyIn, RTHandle historyOut, RTHandle integrated,
+		                                  Vector3 cameraDelta, float share, Vector4[] boxes = null, int boxCount = 0) {
+			var b = Buffers(TraceFogVolume_, FogW * FogH * FogD, 1, 16);
+			if (boxes != null && boxCount > 0) {
+				cmd.SetBufferData(b.Surface, boxes, 0, FogW * FogH * 3, boxCount * 5);
+			} // surface: 3 float4 per column (fits)
+			int prepare = bridge.FindKernel("PrepareFogVolume");
+			cmd.SetComputeBufferParam(bridge, prepare, NativeSurfaceId, b.Surface);
+			cmd.DispatchCompute(bridge, prepare, (FogW + 7) / 8, (FogH + 7) / 8, 1);
+			kindParams_ = true;
+			kindA_ = fog;
+			kindB_ = new Vector4(boxCount, Time.time, 0.0f, 0.0f);
+			// Screen: the sky data (the boxes' noise)
+			Issue(cmd, TraceFogVolume_, b.SurfacePtr, b.ResultPtr, FogW, FogH * FogD, skyTransmittance_ != null ? skyTransmittance_.ResultPtr : IntPtr.Zero);
+			kindParams_ = false;
+			int reproject = bridge.FindKernel("FogReproject");
+			cmd.SetComputeBufferParam(bridge, reproject, NativeResultId, b.Result);
+			cmd.SetComputeTextureParam(bridge, reproject, FogSourceId, historyIn);
+			cmd.SetComputeTextureParam(bridge, reproject, FogTargetId, historyOut);
+			cmd.SetComputeVectorParam(bridge, FogCamDeltaId, new Vector4(cameraDelta.x, cameraDelta.y, cameraDelta.z, share));
+			cmd.DispatchCompute(bridge, reproject, (FogW + 7) / 8, (FogH * FogD + 7) / 8, 1);
+			int integrate = bridge.FindKernel("FogIntegrate");
+			cmd.SetComputeTextureParam(bridge, integrate, FogSourceId, historyOut);
+			cmd.SetComputeTextureParam(bridge, integrate, FogTargetId, integrated);
+			cmd.DispatchCompute(bridge, integrate, (FogW + 7) / 8, (FogH + 7) / 8, 1);
 		}
 
 		// Cars move: their transforms go to the engine every frame, for the render thread's TLAS

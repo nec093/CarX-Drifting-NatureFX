@@ -25,6 +25,11 @@ namespace NatureFX.Map {
 		private bool starsWanted_ = true;
 
 		public string State { get; private set; } = "off";
+		// the star field for the own engine's sky (Rendering.AtmospherePass draws it): the texture (nits), its
+		// rotation (the sky turns) and whether the map wants stars
+		public static Cubemap StarTexture { get; private set; }
+		public static Vector3 StarRotation { get; private set; }
+		public static bool StarsWanted { get; private set; } = true;
 
 		public void Create() {
 			if (root_ != null) {
@@ -158,6 +163,11 @@ namespace NatureFX.Map {
 			// stars: only over HDRP's physically based sky, whose space emission they go into
 			var env = NatureFX.Rendering.VolumeOverhaul.Stack()?.GetComponent<VisualEnvironment>();
 			bool pbs = env != null && env.skyType.value == (int)SkyType.PhysicallyBased;
+			StarsWanted = starsWanted_;
+			StarRotation = new Vector3(-35.0f, Time.unscaledTime * 0.0042f, 0.0f);
+			if (starsWanted_ && StarTexture == null) {
+				StarTexture = Stars();
+			}
 			float stars = starsWanted_ && pbs ? night * (1.0f - Mathf.Clamp01(Weather.Current.Cloud * 1.3f)) : 0.0f;
 			volume_.enabled = stars > 0.001f;
 			if (volume_.enabled) {

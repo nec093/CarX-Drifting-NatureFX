@@ -47,6 +47,9 @@ static const float INV_PI = 0.31830988618;
 static const uint NoDescriptor = 0xFFFFFFFFu;
 // Flags bits
 #define NFX_FLAG_GLASS_SHADOWS 1u  // sun shadow rays pass glass dimmed (tinted windows darker) instead of untouched
+#define NFX_FLAG_OWN_GLASS 4u      // Glass.hlsl draws the glass itself (HDRP's glass hidden, roadmap E): see there
+#define NFX_FLAG_LAMP_MASK 2u      // HDRP's lamps are shadowed one by one (LampMask.hlsl, roadmap A4): LocalShadows
+                                   // then only traces the lights NatureFX adds
 // instance masks (NFX_Native_SetInstances): the scene every trace sees, and glass, which only Glass.hlsl looks for
 #define NFX_SCENE_MASK 0x01
 #define NFX_GLASS_MASK 0x02
@@ -512,6 +515,19 @@ HitSurface SurfaceAt(Hit hit, float3 rayDir, float lod)
     return s;
 }
 
+// The glass's opacity at a hit: its material's base alpha times its colour map's (HDRP's transparent glass blends by it)
+float GlassOpacity(Hit hit)
+{
+    Record r = LoadRecord(hit.instance);
+    float alpha = r.alphaScale;
+    if (r.texture != NoDescriptor && r.indices != NoDescriptor && r.uvs != NoDescriptor)
+    {
+        Texture2D texture = ResourceDescriptorHeap[r.texture];
+        alpha *= texture.SampleLevel(LinearWrap, HitUv(r, LoadTriangle(r, hit.primitive), hit.barycentrics), 0.0).a;
+    }
+    return saturate(alpha);
+}
+
 // Share of the light a pane of glass lets through: clear glass about 90 %, tinted (dark base colour) less
 float GlassTransmission(HitSurface g)
 {
@@ -563,6 +579,24 @@ float3 HitFresnel(HitSurface s, float3 rayDir)
 {
     float3 f0 = lerp(0.04, s.albedo, s.metallic);
     return EnvBRDF(f0, 1.0 - s.smoothness, saturate(dot(s.normal, -rayDir)));
+}
+
+// A lamp's weight on a point for the blocked share of its light: the diffuse (n.l) and, with shine, a moderately
+// rough dielectric lobe (GGX, alpha 0.3, F0 0.04) towards the view. A far lamp puts little diffuse light on a road but
+// a long bright reflection on it when wet: weighed by n.l alone, blocking it hardly changed the share, and its
+// reflection showed through walls. LampMask.hlsl picks each pixel's lamps by it.
+float LampWeight(float3 n, float3 toLight, float3 toView, bool shine)
+{
+    float ndl = saturate(dot(n, toLight));
+    if (!shine || ndl <= 0.0)
+        return ndl;
+    float3 h = normalize(toLight + toView);
+    float nh = saturate(dot(n, h));
+    const float a2 = 0.09;
+    float t = nh * nh * (a2 - 1.0) + 1.0;
+    float D = a2 / (PI * t * t);
+    float nv = max(dot(n, toView), 0.05);
+    return ndl + PI * 0.04 * D / (4.0 * nv);
 }
 
 float3 LocalLightIlluminance(int i, float3 pointAWS, out float3 toLight, out float dist)

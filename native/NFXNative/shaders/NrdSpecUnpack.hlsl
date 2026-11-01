@@ -1,6 +1,7 @@
 // NFXNative: REBLUR_SPECULAR's denoised reflection back into the trace's result buffer, as UnpackReflection reads it:
 // the radiance times the pixel's Fresnel again (taken off by NrdSpecPack.hlsl), the Fresnel luminance and the
-// distance left as the trace wrote them. Pixels not traced keep what the trace wrote.
+// distance left as the trace wrote them. Pixels not traced keep what the trace wrote; mirrors (roughness below 0.05)
+// keep the trace's own result.
 // Root: t0 a table (OUT_SPEC_RADIANCE_HITDIST), t1 surfaces (3 float4 per pixel), u0 result (2 float4 per pixel),
 // b0 { width, height }. Compiled into NrdSpecUnpack.h.
 #include "NRD.hlsli"
@@ -27,5 +28,10 @@ void main(uint3 id : SV_DispatchThreadID)
     float3 fresnel = asfloat(TraceSurface.Load3(index * 48 + 32));
     float3 radiance = max(REBLUR_BackEnd_UnpackRadianceAndNormHitDist(Signal[id.xy]).rgb, 0.0);
     float4 result = asfloat(TraceResult.Load4(index * 32));
-    TraceResult.Store4(index * 32, asuint(float4(radiance * max(fresnel, 0.02), result.a)));
+    // a mirror (car paint's varnish, a mirror, still water): one ray is all it takes and REBLUR's blur only took the
+    // sharpness off the paint's reflection; the trace's own result stays there, the denoised one comes in by 0.1
+    float roughness = sqrt(max(a.w, 0.0));
+    float denoised = saturate((roughness - 0.05) / 0.05);
+    float3 mixed = lerp(result.rgb, radiance * max(fresnel, 0.02), denoised);
+    TraceResult.Store4(index * 32, asuint(float4(mixed, result.a)));
 }

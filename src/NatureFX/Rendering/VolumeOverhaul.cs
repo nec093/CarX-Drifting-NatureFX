@@ -123,13 +123,13 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			volume_.enabled = true;
-			ssr_.active = s.RTReflections;
+			ssr_.active = EngineLighting.Reflections(s);
 			ssr_.enabled.Override(false);
-			gi_.active = s.RTAO;
+			gi_.active = EngineLighting.Ambient(s);
 			gi_.enable.Override(false);
-			ao_.active = s.RTAO;
+			ao_.active = EngineLighting.Ambient(s);
 			ao_.intensity.Override(0.0f);
-			contact_.active = s.RTShadows;
+			contact_.active = EngineLighting.Shadows(s);
 			contact_.enable.Override(false);
 
 			tonemapping_.active = s.AcesTonemapping;
@@ -161,7 +161,9 @@ namespace NatureFX.Rendering {
 		// A sky that is not HDRP's physically based one (a photo, a gradient) stays as bright at night as by day: its
 		// ambient light and reflections are faded out after dusk, as the physically based sky does by itself, and the
 		// sky itself is darkened to a night sky (it showed a white daytime photo at midnight).
-		public void UpdateSky(Light sun, bool timeOfDay) {
+		private HDRISky engineSky_; // A3: the own engine's sky as HDRP's (AtmospherePass.SkyCube)
+
+		public void UpdateSky(Light sun, bool timeOfDay, bool engineSky = false) {
 			if (sun == null || indirect_ == null) {
 				return;
 			}
@@ -183,18 +185,37 @@ namespace NatureFX.Rendering {
 			// Weather > Clouds could not touch). A track's own physically based settings (planet, ground, air) still
 			// come through: our component overrides nothing but the sky type. Only while NatureFX is on (this volume is
 			// off otherwise). The photo sky's dimming at night (DimSky, the indirect multipliers) is no longer needed.
-			if (!environment_.skyType.overrideState) {
+			// A3: with the own engine's sky running, HDRP's sky is a cube map of it (its sky reflections, reflection
+			// probes and ambient light then show the engine's sky, clouds included; by night its moon lit sky), redrawn
+			// by HDRP a few times a second; the screen's sky pixels are the engine's own (AtmospherePass)
+			var cube = engineSky ? AtmospherePass.SkyCube : null;
+			int want = cube != null ? (int)SkyType.HDRI : (int)SkyType.PhysicallyBased;
+			if (!environment_.skyType.overrideState || environment_.skyType.value != want) {
 				nightSky_ ??= profile_.Add<PhysicallyBasedSky>();
-				nightSky_.active = true;
-				environment_.skyType.Override((int)SkyType.PhysicallyBased);
+				engineSky_ ??= profile_.Add<HDRISky>();
+				nightSky_.active = cube == null;
+				engineSky_.active = cube != null;
+				environment_.skyType.Override(want);
 				lastSkyElevation_ = float.NaN; // redraw the sky's lighting now
+			}
+			if (cube != null) {
+				engineSky_.hdriSky.Override(cube);
+				engineSky_.skyIntensityMode.Override(SkyIntensityMode.Multiplier);
+				engineSky_.multiplier.Override(1.0f); // the cube is in nits already
+				engineSky_.updateMode.Override(EnvironmentUpdateMode.Realtime);
+				engineSky_.updatePeriod.Override(0.2f);
 			}
 			const float night = 0.0f;
 			indirect_.active = false;
 			DimSky(env, night);
 			string trackName = trackSky_ >= 0 && SkyTypes() != null && SkyTypes().TryGetValue(trackSky_, out var t) ? t.Name : $"type {trackSky_}";
-			SkyState = trackSky_ == (int)SkyType.PhysicallyBased ? $"{trackName}, the track's own"
-				: $"physically based (the track's {trackName} replaced){(timeOfDay ? "" : ", time of day is the game's")}";
+			// what HDRP renders with in the end, and what the track had
+			var now = VolumeOverhaul.Stack()?.GetComponent<VisualEnvironment>();
+			var hdri = VolumeOverhaul.Stack()?.GetComponent<HDRISky>();
+			string drawn = now == null ? "?" : now.skyType.value == (int)SkyType.HDRI
+				? $"HDRI {(hdri != null && hdri.hdriSky.value != null ? hdri.hdriSky.value.name : "none")}"
+				: now.skyType.value == (int)SkyType.PhysicallyBased ? "physically based" : $"type {now.skyType.value}";
+			SkyState = $"HDRP draws: {drawn}{(cube != null ? " (the own engine's sky as a cube map)" : "")}; the track's: {trackName}{(timeOfDay ? "" : ", time of day is the game's")}";
 			if (!float.IsNaN(lastSkyElevation_) && Mathf.Abs(elevation - lastSkyElevation_) < 0.5f && Mathf.Abs(night - lastNight_) < 0.02f) {
 				return;
 			}

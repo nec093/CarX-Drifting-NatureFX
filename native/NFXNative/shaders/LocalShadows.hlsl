@@ -10,7 +10,7 @@
 // Lamps HDRP draws come off where blocked; lights HDRP does not have (emissive surfaces standing in as lamps,
 // LightColor.w 2) go on where they get through (a negative blocked share).
 // Surface: as Ambient.hlsl. Output: float4 per pixel (blocked illuminance rgb, before the surface's diffuse colour
-// and the exposure). Compiled into LocalShadows.h.
+// and the exposure; with NFX_FLAG_LAMP_MASK only the lights NatureFX adds). Compiled into LocalShadows.h.
 #include "NFXCommon.hlsli"
 
 static const int Samples = 2;
@@ -25,9 +25,11 @@ float TargetWeight(int i, float3 p, float3 n, out float3 light, out float3 toLig
     dist = 0;
     if (LightColor[i].w < 0.5)
         return 0.0;
+    // HDRP's lamps have masks of their own (LampMask.hlsl)
+    if ((Flags & NFX_FLAG_LAMP_MASK) != 0u && LightColor[i].w < 1.5)
+        return 0.0;
     float3 e = LocalLightIlluminance(i, p, toLight, dist);
-    float ndl = saturate(dot(n, toLight));
-    light = e * ndl;
+    light = e * saturate(dot(n, toLight));
     return Luminance(light);
 }
 

@@ -7,6 +7,9 @@
 ## 引き継ぎ
 - セッションを始めたら、まず `docs/HANDOFF.md`（今の状態・未確認の項目・次にやること）を読む。区切りごとに更新する。
 
+## 方針（2026-11-01、ユーザー）
+- **RT の設定に関係なく、できるものはすべて独自エンジン（NFXNative）に移す。HDRP は必要最低限（G バッファ・マテリアルのラスタライズ、UI、ゲーム自体が要るもの）にして、高度なレンダリングは独自エンジンで行う。** 新しい描画機能は、RT のトグルではなく専用の設定で動く独自エンジンのパス（例: `AtmospherePass`）として作る。HDRP の機能を切ると半透明物などが壊れる場合は、切らずに出力を上書きする。ロードマップは `docs/native-atmosphere-lighting-plan.md`。
+
 ## プロジェクト概要
 - CarX Drift Racing Online（Unity 2023.2 / HDRP 16）向けの KSL Mod。リポジトリはこのフォルダ。
 - Unity のビルド用プロジェクトはリポジトリ外: `C:\Users\kppn1223\NatureFX-Unity`（Documents は Controlled Folder Access で Unity が書けないため）。
@@ -56,4 +59,4 @@
 - NRD（NVIDIA Real-Time Denoisers、`src/Nrd.inl`）: `%USERPROFILE%\NatureFX-Deps\NRD`（GitHub NVIDIA-RTX/NRD を clone）を vcvars64 の中で `cmake -S . -B _Build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DNRD_STATIC_LIBRARY=ON -DNRD_NRI=OFF -DNRD_EMBEDS_SPIRV_SHADERS=OFF -DNRD_EMBEDS_DXBC_SHADERS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded` → `cmake --build _Build` で `_Bin\NRD.lib` を作る（ShaderMake・MathLib・DXC を自動で取得する）。NRI は使わず、NRD のディスパッチを独自エンジンが Unity のキューで直接実行する（共有ルートシグネチャ: ルート CBV、SRV テーブル、UAV テーブル、静的サンプラー。記述子は専用ヒープのリング）。SIGMA_SHADOW_TRANSLUCENCY で太陽の影（ガラス越しは透過率の分だけ暗く。描画イベント 5、`NrdSigmaPack.hlsl` / `NrdSigmaUnpack.hlsl`）、REBLUR_DIFFUSE 2 つで環境光と GI（イベント 6、GI は跳ね返りの光と空の見える割合を別々に。半解像度のときだけ。`Ambient.hlsl` / `GI.hlsl` はレイの距離を表面バッファーの最後の float（+44）に書く）。ランプの影も REBLUR（イベント 6 モード 2、別インスタンス、遮られた光と発光面が足す光を別々に）、反射は REBLUR_SPECULAR（イベント 7、フレネルで割って渡し掛け戻す。粗さと法線はトレース入力のもの）。NRD のときは影のパスと反射のパスの自前のフィルターを飛ばす。C# は `NativeEngine.IssueNrd`、`NrdEventData` 328 バイト。配布時はライセンスに従い README に NVIDIA の表記を残す。
 - フレーム定数（`NFXCommon.hlsli` の `Frame`）はローカルライトを最後に置く（`NFX_MAX_LOCAL_LIGHTS` = 32、564 float、`kConstantSlot` 2304）。C# の `NativeEngine.Issue` の添字と必ず揃える。`Flags`（c[15]）は `NFX_FLAG_*`。
 - ランプの影（`LocalShadows.hlsl`）は寄与に比例して 1 画素 2 本のライトを選ぶ（RIS）。`LightColor.w` 2 は発光面の代役（HDRP にない光）で、届いた分を負の「遮られた光」として足す。合成の `color -= min(...)` は負を通す前提。
-- テストマップ `test_map` の `props_rt_features`（`tools/kino_sdk/NfxDataTestMap.cs` の `BuildFeatureArea`）に各 RT 機能の確認場所がある。ビルドは `Unity.exe -batchmode -quit -projectPath C:/Users/kppn1223/Desktop/kino_content_sdk -executeMethod NfxDataTestMap.BuildAll`（スクリプトを SDK の `Assets/Editor/NatureFX/` にコピーしてから）。実写素材の峠区間（`BuildRealArea`、スポーンの後ろ）は Poly Haven の CC0 素材を使う。先に `tools/kino_sdk/polyhaven_import.py` で SDK の `Assets/Content/NfxAssets` に変換しておく（docs/testmap-assets.md）。
+- テストマップ `test_map` は区画ごとに 1 テーマ（配置のルールは docs/testmap-layout.md、区画の表と中身は `tools/kino_sdk/NfxTestBays.cs`、地面・峠区間・看板は `NfxDataTestMap.cs`）。新しいテストは区画の表に 1 行足す。ビルドは `Unity.exe -batchmode -quit -projectPath C:/Users/kppn1223/Desktop/kino_content_sdk -executeMethod NfxDataTestMap.BuildAll`（`NfxDataTestMap.cs` と `NfxTestBays.cs` を SDK の `Assets/Editor/NatureFX/` にコピーしてから。ゲーム起動中は環境変数 `NFX_MAP_OUT` で別のフォルダへ）。実写素材の峠区間（`BuildRealArea`、スポーンの後ろ）は Poly Haven の CC0 素材を使う。先に `tools/kino_sdk/polyhaven_import.py` で SDK の `Assets/Content/NfxAssets` に変換しておく（docs/testmap-assets.md）。

@@ -116,6 +116,7 @@ namespace NatureFX.Rendering {
 			skipped_ = 0;
 			native_ = 0;
 			glass_ = 0;
+			OwnGlass.Slots.Clear();
 			int trees = Sync();
 			int failed = failed_;
 			Kino.Log.Info($"[NatureFX] Ray tracing scene: {InstanceCount} instances, {proxies_.Count} materials, {moving_.Count} moving, {lowerLodCount_} lower LOD renderers skipped, " +
@@ -466,6 +467,11 @@ namespace NatureFX.Rendering {
 					return true;
 				}
 			}
+			// drawn as transparent but not see-through: an opaque surface in the transparent queue (the garage's car paint,
+			// alpha 1) is no pane: as glass the own engine drew the car body see-through (roadmap E)
+			if (m.HasProperty("_BaseColor") && m.GetColor("_BaseColor").a >= 0.95f || m.HasProperty("_Color") && !m.HasProperty("_BaseColor") && m.GetColor("_Color").a >= 0.95f) {
+				return false;
+			}
 			// glass is smooth: a rough see-through surface is some overlay or effect, not a pane
 			float smoothness = m.HasProperty("_Smoothness") ? m.GetFloat("_Smoothness") : m.HasProperty("_Glossiness") ? m.GetFloat("_Glossiness") : 1.0f;
 			return smoothness >= 0.6f;
@@ -475,7 +481,8 @@ namespace NatureFX.Rendering {
 
 		private List<int> AddRenderer(Renderer r, Mesh mesh, int firstSubMesh, Matrix4x4 matrix, bool moving, bool unscaled, Renderer owner) {
 			var handles = new List<int>();
-			var materials = r.sharedMaterials;
+			// the glass the own engine draws is hidden from HDRP (OwnGlass): the scene reads what was there
+			var materials = OwnGlass.Originals(r) ?? r.sharedMaterials;
 			if (moving) {
 				foreach (var m in materials) {
 					if (m != null) {
@@ -497,6 +504,7 @@ namespace NatureFX.Rendering {
 							owner != null ? InstanceOverrides(r, i, source, moving) : null);
 						handles.Add(glassHandle);
 						++glass_;
+						OwnGlass.Slots.Add((r, i));
 					}
 					continue;
 				}

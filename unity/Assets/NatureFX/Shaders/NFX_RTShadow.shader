@@ -15,6 +15,7 @@ Shader "Hidden/NatureFX/RTShadow"
     #include "Packages/com.unity.render-pipelines.high-definition/Runtime/RenderPipeline/RenderPass/CustomPass/CustomPassCommon.hlsl"
     #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Material/NormalBuffer.hlsl"
     #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Material/Builtin/BuiltinData.hlsl"
+    #include "Assets/NatureFX/ShaderLibrary/NFX_FogCommon.hlsl"
 
     TEXTURE2D_X(_NFX_ColorTex);       // camera colour (full res)
     TEXTURE2D_X(_NFX_ShadowTex);      // new frame of the input being accumulated
@@ -43,6 +44,69 @@ Shader "Hidden/NatureFX/RTShadow"
     TEXTURE2D_X(_NFX_SkyTransmittance);
     float4 _NFX_SkyParams;            // x 1 = draw it, 2 = with clouds, y the sun above the air (lux), z camera height (m), w sun radius
     TEXTURE2D_X(_NFX_CloudTex);       // the own engine's clouds (Clouds.hlsl), quarter resolution: rgb radiance, a transmittance
+    TEXTURE2D_X(_NFX_CloudShadowTex); // their shadows seen from above (CloudShadow.hlsl): x the share of sun light through
+    float4 _NFX_CloudShadowParams;    // xy the map's centre (world xz), z its size (m), w 1 = use it
+    // step A: the light HDRP's lamps added (NFX_SunExact LampsExact) and the lamps as the engine sees them (LocalLights)
+    TEXTURE2D_X(_NFX_LampsExactTex);
+    // A4 full relight: all of HDRP's lamp light unshadowed (LampsExact), and the G-buffer's baked light (the sky light
+    // HDRP's G-buffer pass put on the surface, and its glow)
+    TEXTURE2D_X(_NFX_LampsTotalTex);
+    TEXTURE2D_X(_NFX_GBuffer3Tex);
+    float4 _NFX_LampPos[128];   // xyz absolute position, w range
+    float4 _NFX_LampColor[128]; // rgb intensity (cd), w 1 traced shadows, 2 a light HDRP does not have
+    float4 _NFX_LampDir[128];   // xyz spot direction, w angle scale (0 point)
+    float4 _NFX_LampSpot[128];  // x angle offset
+    float _NFX_LampCount;
+
+    // the unshadowed light of HDRP's lamps on a point, as the engine weighs it (NFXCommon LocalLightIlluminance)
+    float LampsLuminance(float3 pointAWS, float3 n)
+    {
+        float sum = 0.0;
+        int count = min((int)_NFX_LampCount, 128);
+        for (int i = 0; i < count; ++i)
+        {
+            if (_NFX_LampColor[i].w < 0.5 || _NFX_LampColor[i].w > 1.5)
+                continue;
+            float3 d = _NFX_LampPos[i].xyz - pointAWS;
+            float dist = length(d);
+            float3 toLight = d / max(dist, 1e-4);
+            float range = _NFX_LampPos[i].w;
+            float ratio = dist * dist / (range * range);
+            float window = saturate(1.0 - ratio * ratio);
+            float attenuation = window * window / max(dist * dist, 1e-4);
+            if (_NFX_LampDir[i].w > 0.0)
+            {
+                float cone = saturate(dot(-toLight, _NFX_LampDir[i].xyz) * _NFX_LampDir[i].w + _NFX_LampSpot[i].x);
+                attenuation *= cone * cone;
+            }
+            sum += Luminance(_NFX_LampColor[i].rgb) * attenuation * saturate(dot(n, toLight));
+        }
+        return sum;
+    }
+    StructuredBuffer<float4> _NFX_SkyProbe; // the own engine's sky as an ambient probe (HDRP's packing), phase 1c
+    float _NFX_SkyAmbientOn;
+
+    // the clouds' shadow on a point: along the sun down to the ground plane (y 0) where the map was made
+    float CloudShadowAt(float3 positionAWS)
+    {
+        float3 sun = _NFX_RTSunDir.xyz;
+        float2 xz = positionAWS.xz - sun.xz * positionAWS.y / max(sun.y, 0.05);
+        float2 uv = (xz - _NFX_CloudShadowParams.xy) / _NFX_CloudShadowParams.z + 0.5;
+        float shade = SAMPLE_TEXTURE2D_X_LOD(_NFX_CloudShadowTex, s_linear_clamp_sampler, saturate(uv), 0).r;
+        // beyond the map (16 km): fade to the average of its edge rather than stopping at a line
+        float edge = saturate(max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0 * 8.0 - 7.0);
+        return lerp(shade, 1.0, edge * 0.5);
+    }
+
+    float3 SkyProbeSH9(float3 n)
+    {
+        float4 vA = float4(n, 1.0);
+        float3 x1 = float3(dot(_NFX_SkyProbe[0], vA), dot(_NFX_SkyProbe[1], vA), dot(_NFX_SkyProbe[2], vA));
+        float4 vB = n.xyzz * n.yzzx;
+        float3 x2 = float3(dot(_NFX_SkyProbe[3], vB), dot(_NFX_SkyProbe[4], vB), dot(_NFX_SkyProbe[5], vB));
+        float vC = n.x * n.x - n.y * n.y;
+        return max(x1 + x2 + _NFX_SkyProbe[6].rgb * vC, 0.0);
+    }
     StructuredBuffer<float4> _NFX_AmbientProbe; // HDRP's diffuse sky probe (7 float4, the SH9 constants)
     float4 _NFX_LeafParams;           // x: share of the sun leaves let through, y: 1 = light shafts, z: 1 = local light shadows,
                                       // w: own engine GI bounce strength (0: the ambient texture is the one bounce factor)
@@ -253,6 +317,7 @@ Shader "Hidden/NatureFX/RTShadow"
     }
 
     float4 CompositeSurface(Varyings v);
+    float3 LeafGlow(uint2 pixel, float depth, bool sunLit, float surfaceW, float ndl, float3 L, float4 surface, float sunVisible);
 
     // HDRP's diffuse sky light for a normal (the probe's SH9 constants, as NFXNative's SampleSH9)
     float3 ProbeSH9(float3 n)
@@ -271,6 +336,7 @@ Shader "Hidden/NatureFX/RTShadow"
     float4 Composite(Varyings v) : SV_Target
     {
         float4 result = CompositeSurface(v);
+        // the own engine's 3D fog and sky: AtmospherePass, after this pass
         if (_NFX_LeafParams.y > 0.5 && _NFX_ShadowCompose.y < 0.5)
         {
             uint2 pixel = (uint2)v.positionCS.xy;
@@ -279,7 +345,15 @@ Shader "Hidden/NatureFX/RTShadow"
             // the sky already holds the light its air scatters (HDRP's sky and fog): adding 120 m more of it turned
             // the sky white, by night too. On a surface the light the air adds in front of it comes with the light the
             // same air takes away from it, or the whole picture gets a white veil.
-            if (depth != UNITY_RAW_FAR_CLIP_VALUE)
+            if (_NFX_ShaftParams.w > 0.5)
+            {
+                // the own engine's fog (Fog.hlsl): the air's light and transmittance over every pixel, the sky too
+                // (its haze); rgb in nits, not yet exposed
+                float linearDepth = depth != UNITY_RAW_FAR_CLIP_VALUE ? LinearEyeDepth(depth, _ZBufferParams) : 1e6;
+                float4 fog = Upsample(2, _NFX_ShaftSize, uv, linearDepth);
+                result.rgb = result.rgb * saturate(fog.a) + fog.rgb * GetCurrentExposureMultiplier();
+            }
+            else if (depth != UNITY_RAW_FAR_CLIP_VALUE)
             {
                 float linearDepth = LinearEyeDepth(depth, _ZBufferParams);
                 float transmittance = exp(-_NFX_ShaftParams.x * min(linearDepth, _NFX_ShaftParams.z));
@@ -375,6 +449,8 @@ Shader "Hidden/NatureFX/RTShadow"
             return float4(color, 1.0);
         }
         float linearDepth = LinearEyeDepth(depth, _ZBufferParams);
+        float3 hdrpColor = color;   // what HDRP drew, before any of the changes below
+        float3 nativeAdded = 0.0;   // light of the lamps only NatureFX has, where it gets through
         // local lights HDRP casts no shadows for: their blocked light comes off first (not part of the sun / ambient
         // split below)
         float4 surface = LOAD_TEXTURE2D_X(_NFX_SurfaceAlbedo, pixel);
@@ -385,7 +461,28 @@ Shader "Hidden/NatureFX/RTShadow"
             float3 localDiffuse = (known ? surface.rgb : 0.3) * (1.0 - (known ? saturate((surface.a - (surface.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0)) * INV_PI;
             // never more than 95 % of the pixel's brightness, scaled as a whole: clamping each channel took the warm
             // lamp light's red and green away and left blue speckles where a noisy sample overshot
-            float3 removed = Upsample(3, _NFX_LocalSize, uv, linearDepth).rgb * localDiffuse * GetCurrentExposureMultiplier();
+            float3 blockedLight = Upsample(3, _NFX_LocalSize, uv, linearDepth).rgb;
+            float3 removed = blockedLight * localDiffuse * GetCurrentExposureMultiplier();
+            // step A: with HDRP's own lamp light known exactly, the blocked share of it comes off (its shine too), not
+            // the blocked light on an estimated diffuse colour; lights only NatureFX has (a negative share) are added
+            // as before
+            float4 lampsExact = _NFX_SunExact.x > 0.5 ? LOAD_TEXTURE2D_X(_NFX_LampsExactTex, pixel) : 0.0;
+            if (_NFX_SunExact.y > 0.5)
+            {
+                // A4: each of HDRP's lamps shadowed by its own mask (NFX_SunExact LampsExact: the light it takes away);
+                // the traced lamp shadows then hold only the lights NatureFX adds (a negative blocked share)
+                nativeAdded = max(-removed, 0.0);
+                removed = (lampsExact.a > 0.5 ? max(lampsExact.rgb, 0.0) : 0.0) + min(removed, 0.0);
+            }
+            else if (lampsExact.a > 0.5 && Luminance(blockedLight) > 0.0)
+            {
+                NormalData lampNormal;
+                DecodeFromNormalBuffer(pixel, lampNormal);
+                PositionInputs lp = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
+                float total = LampsLuminance(GetAbsolutePositionWS(lp.positionWS), lampNormal.normalWS);
+                float share = total > 1e-6 ? saturate(Luminance(blockedLight) / total) : 0.0;
+                removed = max(lampsExact.rgb, 0.0) * share;
+            }
             if (any(!isfinite(removed)))
                 removed = 0.0;
             float removedLum = Luminance(removed);
@@ -402,6 +499,11 @@ Shader "Hidden/NatureFX/RTShadow"
                 ? SampleRT(_NFX_SunTex, uv).r
                 : Upsample(0, _NFX_SunSize, uv, linearDepth).r;
             sunVisible = saturate(sunVisible);
+        }
+        if (_NFX_CloudShadowParams.w > 0.5 && _NFX_RTSunDir.w > 0.0)
+        {
+            PositionInputs cp = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
+            sunVisible *= CloudShadowAt(GetAbsolutePositionWS(cp.positionWS));
         }
         // the ambient texture: one bounce ambient light, rgb relative to HDRP's; or the own engine's GI
         // (_NFX_LeafParams.w > 0, its strength): rgb the light bounced in, a the share of the sky seen. HDRP's
@@ -430,6 +532,15 @@ Shader "Hidden/NatureFX/RTShadow"
         float3 n = nd.normalWS;
         float ndl = dot(n, L);
         bool sunLit = _NFX_RTSunDir.w > 0.0 && ndl > 0.0;
+        // phase 1c: the sky's light on this surface from the own engine's sky (clouds included) in place of HDRP's
+        // probe; the difference, scaled by how much of the sky the surface sees like the rest of its sky light
+        float3 skyDelta = 0.0;
+        if (_NFX_SkyAmbientOn > 0.0)
+        {
+            float skyMetal = known ? saturate((surface.a - (surface.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0;
+            float3 skyAlbedo = (known ? surface.rgb : 0.3) * (1.0 - skyMetal);
+            skyDelta = skyAlbedo * (SkyProbeSH9(n) - ProbeSH9(n)) * GetCurrentExposureMultiplier() * ambientFactor * _NFX_SkyAmbientOn;
+        }
         // the sun light HDRP added here, worked out from the G-buffer as HDRP does (a = 0 where it is not known)
         float4 exact = _NFX_SunExact.x > 0.5 ? LOAD_TEXTURE2D_X(_NFX_SunExactTex, pixel) : 0.0;
         bool exactKnown = exact.a > 0.5;
@@ -452,6 +563,36 @@ Shader "Hidden/NatureFX/RTShadow"
             return float4(sunLit ? g : g * float3(0.75, 0.85, 1.0), 1.0);
         }
 
+        // A4, the full relight: the pixel taken apart exactly and put together again from the own engine's light.
+        // HDRP's image is its G-buffer's baked light (the sky light on the surface and its glow), the sun, the lamps
+        // and the rest (reflections, mostly); the sun and the lamps (known exactly) get the traced shadows, the sky
+        // light the traced sky share and GI and the own sky, the glow stays, the rest takes the sky share as its
+        // occlusion where GI does not run (the reflections pass replaces what it traces).
+        if (_NFX_SunExact.z > 0.5 && exactKnown)
+        {
+            float3 g3 = LOAD_TEXTURE2D_X(_NFX_GBuffer3Tex, pixel).rgb;
+            // HDRP's tag for "no baked light, AO stored here" (Lit.hlsl AO_IN_GBUFFER3_TAG)
+            if (g3.x > 2047.0 && g3.z > 1023.0)
+                g3 = 0.0;
+            float metal = known ? saturate((surface.a - (surface.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0;
+            float3 albedoD = (known ? surface.rgb : 0.3) * (1.0 - metal);
+            // the sky light HDRP baked in, as its probe on the surface's colour, never more than G3 holds; the rest
+            // of G3 is the glow
+            float3 bakeEstimate = albedoD * ProbeSH9(n) * GetCurrentExposureMultiplier();
+            float3 bake = bakeEstimate * min(1.0, Luminance(g3) / max(Luminance(bakeEstimate), 1e-6));
+            float3 glow = max(g3 - bake, 0.0);
+            float4 lampsTotal = _NFX_SunExact.y > 0.5 ? LOAD_TEXTURE2D_X(_NFX_LampsTotalTex, pixel) : 0.0;
+            float4 lampsBlocked = _NFX_SunExact.y > 0.5 ? LOAD_TEXTURE2D_X(_NFX_LampsExactTex, pixel) : 0.0;
+            float3 lampsAll = lampsTotal.a > 0.5 ? max(lampsTotal.rgb, 0.0) : 0.0;
+            float3 lampsLit = max(lampsAll - (lampsBlocked.a > 0.5 ? max(lampsBlocked.rgb, 0.0) : 0.0), 0.0);
+            float3 sunAll = max(exact.rgb, 0.0);
+            float3 restLight = max(hdrpColor - g3 - sunAll - lampsAll, 0.0);
+            float sunShade = 1.0 - (1.0 - sunVisible) * shadowStrength;
+            float3 relit = glow + bake * ambientFactor + skyDelta + sunAll * sunShade + lampsLit + nativeAdded
+                         + restLight * (_NFX_LeafParams.w > 0.0 && ambientStrength > 0.0 ? 1.0 : ambientFactor) + bounceLight;
+            return float4(max(relit, 0.0) + LeafGlow(pixel, depth, sunLit, surfaceW, ndl, L, surface, sunVisible), 1.0);
+        }
+
         // Without the ray traced shadows HDRP's shadow maps already darken the sun light, so the sun cannot be told
         // apart from the rest: the ambient light scales all of it, a little less to spare the sunlit share.
         // Facing away from the sun, all of the pixel's light is ambient.
@@ -471,9 +612,9 @@ Shader "Hidden/NatureFX/RTShadow"
             {
                 skyPart *= min(1.0, Luminance(color) / max(Luminance(skyPart), 1e-6));
                 // not below zero: the sky share is clamped by brightness, a channel of it can still exceed the pixel's
-                return float4(max(color - skyPart * (1.0 - ambientFactor), 0.0) + bounceLight, 1.0);
+                return float4(max(max(color - skyPart * (1.0 - ambientFactor), 0.0) + bounceLight + skyDelta, 0.0), 1.0);
             }
-            return float4(color * lerp(1.0, ambientFactor, 0.6) + bounceLight, 1.0);
+            return float4(max(color * lerp(1.0, ambientFactor, 0.6) + bounceLight + skyDelta, 0.0), 1.0);
         }
 
         // split the pixel into the sun's share and the rest (sky, bounce, reflections); shadow the first, scale the
@@ -504,18 +645,22 @@ Shader "Hidden/NatureFX/RTShadow"
         {
             result = sunPart * sunFactor + rest * ambientFactor + bounceLight;
         }
-        // A leaf lit from behind glows: sunlight passes through the thin blade, tinted twice by its colour,
-        // brightest when looking towards the sun. HDRP lights it from the front only.
-        if (!sunLit && surfaceW < 0.0 && _NFX_RTSunDir.w > 0.0 && _NFX_LeafParams.x > 0.0)
-        {
-            PositionInputs lp = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
-            float3 lv = GetWorldSpaceNormalizeViewDir(lp.positionWS);
-            float forward = pow(saturate(dot(lv, -L)), 6.0);
-            float3 tint = surface.rgb * saturate(surface.rgb * 2.0);
-            float3 through = tint * _NFX_RTSunColor.rgb * INV_PI * (0.3 + 1.7 * forward) * saturate(-ndl * 0.7 + 0.3);
-            result += through * sunVisible * _NFX_LeafParams.x * GetCurrentExposureMultiplier();
-        }
-        return float4(result, 1.0);
+        result = max(result + skyDelta, 0.0);
+        return float4(result + LeafGlow(pixel, depth, sunLit, surfaceW, ndl, L, surface, sunVisible), 1.0);
+    }
+
+    // A leaf lit from behind glows: sunlight passes through the thin blade, tinted twice by its colour, brightest when
+    // looking towards the sun. HDRP lights it from the front only.
+    float3 LeafGlow(uint2 pixel, float depth, bool sunLit, float surfaceW, float ndl, float3 L, float4 surface, float sunVisible)
+    {
+        if (sunLit || surfaceW >= 0.0 || _NFX_RTSunDir.w <= 0.0 || _NFX_LeafParams.x <= 0.0)
+            return 0.0;
+        PositionInputs lp = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
+        float3 lv = GetWorldSpaceNormalizeViewDir(lp.positionWS);
+        float forward = pow(saturate(dot(lv, -L)), 6.0);
+        float3 tint = surface.rgb * saturate(surface.rgb * 2.0);
+        float3 through = tint * _NFX_RTSunColor.rgb * INV_PI * (0.3 + 1.7 * forward) * saturate(-ndl * 0.7 + 0.3);
+        return through * sunVisible * _NFX_LeafParams.x * GetCurrentExposureMultiplier();
     }
 
     // The sun's share of a pixel where the exact sun light is not known (no G-buffer there): the direct sun light

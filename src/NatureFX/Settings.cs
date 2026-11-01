@@ -40,6 +40,7 @@ namespace NatureFX {
 
 		// sun / time of day (overrides the track's directional light while enabled)
 		public bool SunOverride { get; set; }
+		public bool SyncGameNight { get; set; }            // the game's night lighting (street lights) follows NatureFX's sun
 		public float TimeOfDay { get; set; }          // hours 0..24
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
 		public float SunMaxElevation { get; set; }    // degrees at noon
@@ -68,9 +69,6 @@ namespace NatureFX {
 		public bool WeatherCycle { get; set; }
 		public int WeatherPreset { get; set; }        // see WeatherController.Presets
 		public float WeatherCycleMinutes { get; set; }
-		public float RainStreaks { get; set; }
-		public float LensDrops { get; set; }
-		public float HeatHaze { get; set; }
 		public bool Moonlight { get; set; }
 		public float HeadlightShafts { get; set; }
 		public float SurfaceDetail { get; set; }
@@ -102,7 +100,6 @@ namespace NatureFX {
 		public float RTReflectionDistance { get; set; }
 		public int RTReflectionQuality { get; set; }       // 0 performance, 1 balanced, 2 quality
 		public bool RTGlassReflections { get; set; }       // own engine: glass (windows, lenses) mirrors the scene too
-		public bool CarGlossyPaint { get; set; }           // no longer used: the reflections treat car paint as varnish over a rough base
 		public bool CarChromeRims { get; set; }            // metal rims polished to a mirror
 
 		// ray traced sun shadows (DX12, DXR); softness from SunSize
@@ -110,6 +107,8 @@ namespace NatureFX {
 		public float RTShadowStrength { get; set; }
 		public bool RTShadowFullRes { get; set; }          // full resolution (sharp contact shadows) or half
 		public bool RTExactSun { get; set; }               // take away exactly the sun light HDRP added (G-buffer drawn again)
+		public bool RTLampMasks { get; set; }              // roadmap A4: each lamp shadowed by its own mask (with RTExactSun)
+		public bool RTFullRelight { get; set; }            // roadmap A4: HDRP's pixel taken apart and lit again by the own engine
 		public bool RTHideFakeShadows { get; set; }        // hide the game's painted shadow planes while the ray traced shadows run
 		public bool RebuildFoliage { get; set; }           // shader rebuild: foliage too (wind, snow); off leaves it to the game's shaders
 		public bool RTWind { get; set; }                   // own engine: the traced foliage sways with the wind as it is drawn
@@ -126,7 +125,6 @@ namespace NatureFX {
 		public bool RTOverlay { get; set; }                // on-screen timings, ray counts and memory
 		public int RTTraceScale { get; set; }              // ambient / GI / lamp shadows: 0 half resolution, 1 quarter (upscaled over frames)
 		public int RTDenoiser { get; set; }                // 0 the simple blur, 1 variance guided (sharper where the signal is clean)
-		public bool RTNativeSun { get; set; }              // old own engine switch, read once by the version 22 migration
 		public int RTBackend { get; set; }                 // how the own engine traces: 0 DXR 1.0 (ray tracing pipelines), 1 DXR 1.1 (inline)
 		public bool RTDxr12Sun { get; set; }               // own engine: the sun shadows on the DXR 1.2 device (Agility SDK 1.619), test
 
@@ -158,6 +156,15 @@ namespace NatureFX {
 		public float AerialHaze { get; set; }
 		// the sky drawn by NatureFX's own engine (physically based atmosphere) over HDRP's
 		public bool NativeSky { get; set; }
+		// the fog and haze drawn by the own engine (lit by the traced sun and the engine's sky) instead of HDRP's
+		public bool NativeFog { get; set; }
+		// all of the opaque lighting from the own engine (roadmap step A): its shadows, lamp shadows, sky light and GI,
+		// reflections, whatever the ray tracing toggles say (Rendering.EngineLighting)
+		public bool NativeLighting { get; set; }
+		// how bright the own engine's stars are against their physical brightness (the eye's night vision, which the
+		// camera's exposure does not reach), and how long a change of weather takes (s)
+		public float StarBrightness { get; set; }
+		public float WeatherChangeTime { get; set; }
 		// falling rain (with splashes) and snow around the camera: how dense (0 off)
 		public float Precipitation { get; set; }
 		// shader rebuild: hex tiled textures where the map's [materials] ask for it (antitiling=), 0 off .. 1
@@ -174,6 +181,10 @@ namespace NatureFX {
 		// the car nearest the camera
 		public float NightVision { get; set; }
 		public float LensFlare { get; set; }
+		public bool NativePost { get; set; }               // roadmap D: NatureFX's own exposure, bloom, tone curve and colour
+		public bool NativeParticles { get; set; }          // roadmap E: the game's own particles drawn with NatureFX/Particle
+		public bool NativeGlass { get; set; }              // roadmap E: the own engine draws the glass whole (HDRP's hidden)
+		public float PostBloom { get; set; }               // the share of the light the lens and eye scatter (own post)
 		public float LensStreaks { get; set; }
 		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
 		public bool MapProbes { get; set; }
@@ -223,6 +234,7 @@ namespace NatureFX {
 
 		// sun / time of day (overrides the track's directional light while enabled)
 		public bool SunOverride { get; set; }
+		public bool SyncGameNight { get; set; }            // the game's night lighting (street lights) follows NatureFX's sun
 		public float TimeOfDay { get; set; }          // hours 0..24
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
 		public float SunMaxElevation { get; set; }    // degrees at noon
@@ -251,9 +263,6 @@ namespace NatureFX {
 		public bool WeatherCycle { get; set; }
 		public int WeatherPreset { get; set; }        // see WeatherController.Presets
 		public float WeatherCycleMinutes { get; set; }
-		public float RainStreaks { get; set; }
-		public float LensDrops { get; set; }
-		public float HeatHaze { get; set; }
 		public bool Moonlight { get; set; }
 		public float HeadlightShafts { get; set; }
 		public float SurfaceDetail { get; set; }
@@ -285,7 +294,6 @@ namespace NatureFX {
 		public float RTReflectionDistance { get; set; }
 		public int RTReflectionQuality { get; set; }       // 0 performance, 1 balanced, 2 quality
 		public bool RTGlassReflections { get; set; }       // own engine: glass (windows, lenses) mirrors the scene too
-		public bool CarGlossyPaint { get; set; }           // no longer used: the reflections treat car paint as varnish over a rough base
 		public bool CarChromeRims { get; set; }            // metal rims polished to a mirror
 
 		// ray traced sun shadows (DX12, DXR); softness from SunSize
@@ -293,6 +301,8 @@ namespace NatureFX {
 		public float RTShadowStrength { get; set; }
 		public bool RTShadowFullRes { get; set; }          // full resolution (sharp contact shadows) or half
 		public bool RTExactSun { get; set; }               // take away exactly the sun light HDRP added (G-buffer drawn again)
+		public bool RTLampMasks { get; set; }              // roadmap A4: each lamp shadowed by its own mask (with RTExactSun)
+		public bool RTFullRelight { get; set; }            // roadmap A4: HDRP's pixel taken apart and lit again by the own engine
 		public bool RTHideFakeShadows { get; set; }        // hide the game's painted shadow planes while the ray traced shadows run
 		public bool RebuildFoliage { get; set; }           // shader rebuild: foliage too (wind, snow); off leaves it to the game's shaders
 		public bool RTWind { get; set; }                   // own engine: the traced foliage sways with the wind as it is drawn
@@ -309,7 +319,6 @@ namespace NatureFX {
 		public bool RTOverlay { get; set; }                // on-screen timings, ray counts and memory
 		public int RTTraceScale { get; set; }              // ambient / GI / lamp shadows: 0 half resolution, 1 quarter (upscaled over frames)
 		public int RTDenoiser { get; set; }                // 0 the simple blur, 1 variance guided (sharper where the signal is clean)
-		public bool RTNativeSun { get; set; }              // old own engine switch, read once by the version 22 migration
 		public int RTBackend { get; set; }                 // how the own engine traces: 0 DXR 1.0 (ray tracing pipelines), 1 DXR 1.1 (inline)
 		public bool RTDxr12Sun { get; set; }               // own engine: the sun shadows on the DXR 1.2 device (Agility SDK 1.619), test
 
@@ -341,6 +350,15 @@ namespace NatureFX {
 		public float AerialHaze { get; set; }
 		// the sky drawn by NatureFX's own engine (physically based atmosphere) over HDRP's
 		public bool NativeSky { get; set; }
+		// the fog and haze drawn by the own engine (lit by the traced sun and the engine's sky) instead of HDRP's
+		public bool NativeFog { get; set; }
+		// all of the opaque lighting from the own engine (roadmap step A): its shadows, lamp shadows, sky light and GI,
+		// reflections, whatever the ray tracing toggles say (Rendering.EngineLighting)
+		public bool NativeLighting { get; set; }
+		// how bright the own engine's stars are against their physical brightness (the eye's night vision, which the
+		// camera's exposure does not reach), and how long a change of weather takes (s)
+		public float StarBrightness { get; set; }
+		public float WeatherChangeTime { get; set; }
 		// falling rain (with splashes) and snow around the camera: how dense (0 off)
 		public float Precipitation { get; set; }
 		// shader rebuild: hex tiled textures where the map's [materials] ask for it (antitiling=), 0 off .. 1
@@ -357,6 +375,10 @@ namespace NatureFX {
 		// the car nearest the camera
 		public float NightVision { get; set; }
 		public float LensFlare { get; set; }
+		public bool NativePost { get; set; }               // roadmap D: NatureFX's own exposure, bloom, tone curve and colour
+		public bool NativeParticles { get; set; }          // roadmap E: the game's own particles drawn with NatureFX/Particle
+		public bool NativeGlass { get; set; }              // roadmap E: the own engine draws the glass whole (HDRP's hidden)
+		public float PostBloom { get; set; }               // the share of the light the lens and eye scatter (own post)
 		public float LensStreaks { get; set; }
 		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
 		public bool MapProbes { get; set; }
@@ -431,9 +453,6 @@ namespace NatureFX {
 				d.AdaptationSpeed = 1.5f;
 				d.WeatherPreset = 0;
 				d.WeatherCycleMinutes = 15.0f;
-				d.RainStreaks = 0.8f;
-				d.LensDrops = 0.6f;
-				d.HeatHaze = 0.3f;
 				d.Moonlight = true;
 				d.HeadlightShafts = 1.0f;
 				d.SurfaceDetail = 0.6f;
@@ -527,7 +546,7 @@ namespace NatureFX {
 			}
 			if (d.ConfigVersion < 22) {
 				// one ray tracing backend for every effect, chosen in Settings (the own engine switch became it)
-				d.RTBackend = d.RTNativeSun ? 1 : 0;
+				d.RTBackend = 0;
 				d.ConfigVersion = 22;
 			}
 			if (d.ConfigVersion < 23) {
@@ -553,7 +572,6 @@ namespace NatureFX {
 			}
 			if (d.ConfigVersion < 27) {
 				// showroom car finish
-				d.CarGlossyPaint = true;
 				d.CarChromeRims = true;
 				d.ConfigVersion = 27;
 			}
@@ -630,6 +648,54 @@ namespace NatureFX {
 			if (d.ConfigVersion < 42) {
 				d.NativeSky = true;
 				d.ConfigVersion = 42;
+			}
+			if (d.ConfigVersion < 43) {
+				d.NativeFog = true;
+				d.ConfigVersion = 43;
+			}
+			if (d.ConfigVersion < 44) {
+				d.NativeLighting = true;
+				d.ConfigVersion = 44;
+			}
+			if (d.ConfigVersion < 45) {
+				// the own engine's nights are as dark as moonlight: 8 EV kept them black (only an untouched default moves)
+				if (System.Math.Abs(d.AutoExposureMin - 8.0f) < 1e-3f) {
+					d.AutoExposureMin = 1.0f;
+				}
+				d.StarBrightness = 4.0f;
+				d.WeatherChangeTime = 30.0f;
+				d.ConfigVersion = 45;
+			}
+			if (d.ConfigVersion < 46) {
+				// each lamp shadowed by its own mask: its shine too (a lamp's reflection on a wet road showed through walls)
+				d.RTLampMasks = true;
+				d.ConfigVersion = 46;
+			}
+			if (d.ConfigVersion < 47) {
+				// the full relight (roadmap A4)
+				d.RTFullRelight = true;
+				d.ConfigVersion = 47;
+			}
+			if (d.ConfigVersion < 48) {
+				// the own post-processing (roadmap D)
+				d.NativePost = true;
+				d.PostBloom = 0.04f;
+				d.ConfigVersion = 48;
+			}
+			if (d.ConfigVersion < 49) {
+				// the game's own particles lit and fogged by the own engine (roadmap E)
+				d.NativeParticles = true;
+				d.ConfigVersion = 49;
+			}
+			if (d.ConfigVersion < 50) {
+				// the own engine draws the glass (roadmap E)
+				d.NativeGlass = true;
+				d.ConfigVersion = 50;
+			}
+			if (d.ConfigVersion < 51) {
+				// the game's street lights at NatureFX's night
+				d.SyncGameNight = true;
+				d.ConfigVersion = 51;
 			}
 		}
 

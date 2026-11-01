@@ -23,7 +23,7 @@ namespace NatureFX.Rendering {
 		private static Texture2D atlas_;
 
 		// NFX_Particle.shader's modes
-		public const int ModeLeaf = 0, ModeRain = 1, ModeSnow = 2, ModeGlow = 3, ModeMote = 4;
+		public const int ModeLeaf = 0, ModeRain = 1, ModeSnow = 2, ModeGlow = 3, ModeMote = 4, ModeSmoke = 5, ModeTextured = 6;
 
 		// a material of NFX_Particle.shader (null when the bundle is older than it); tiles: first and count
 		public static Material Material(NatureFX.Nature.ShaderBundle bundle, string name, int mode, Vector2 tiles, Color tint, float emission = 0.0f) {

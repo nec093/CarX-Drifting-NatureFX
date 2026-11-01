@@ -8,6 +8,9 @@
 //               2 snow: a soft white flake
 //               3 glow: emissive (fireflies), additive
 //               4 mote: dust or pollen lit by the sun (bright in a sunbeam), soft
+//               5 smoke: NatureFX's tyre smoke (a noise puff)
+//               6 textured: the game's own particles (GameParticles.cs, roadmap E) with their own texture and colour,
+//                 lit as a soft ball of scattering particles and fogged like the rest
 //   _NFX_PTiles x: first tile, y: number of tiles to pick from
 Shader "NatureFX/Particle"
 {
@@ -31,6 +34,8 @@ Shader "NatureFX/Particle"
 
     #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
     #include "Packages/com.unity.render-pipelines.high-definition/Runtime/ShaderLibrary/ShaderVariables.hlsl"
+    #include "Assets/NatureFX/ShaderLibrary/NFX_FogCommon.hlsl"
+    TEXTURE2D(_NFX_NoiseTex); // ShaderGlobals.EnsureNoiseTexture: r value noise, 256 cells over the texture
 
     TEXTURE2D(_MainTex);
     SAMPLER(sampler_MainTex);
@@ -50,12 +55,29 @@ Shader "NatureFX/Particle"
     float4 _NFX_PLightDirs[8];   // xyz: the spot's direction, w: cosine of the inner cone
     float _NFX_PLightCount;
 
+    // the sky's light from the own engine's sky (phase 1c probe, y of the fog's flags) in place of ParticleLighting's
+    // estimate; under the 3D fog the air's dimming is in the fog, not in the distance fade
+    float4 NFX_ParticleSky()
+    {
+        float4 v = _NFX_PSky;
+        if (_NFX_FogVolumeParams.y > 0.5)
+        {
+            float3 up = float3(_NFX_SkyLight[0].y + _NFX_SkyLight[0].w, _NFX_SkyLight[1].y + _NFX_SkyLight[1].w,
+                               _NFX_SkyLight[2].y + _NFX_SkyLight[2].w) - _NFX_SkyLight[6].rgb;
+            v.rgb = PI * max(up, 0.0);
+        }
+        if (_NFX_FogVolumeParams.x > 0.5)
+            v.w = 0.0;
+        return v;
+    }
+    #define _NFX_PSky NFX_ParticleSky()
+
     struct Attributes
     {
         float3 positionOS : POSITION;
         float3 normalOS : NORMAL;
         float4 color : COLOR;
-        float4 uv : TEXCOORD0; // xy: uv, z: stable random (ParticleSystemVertexStream.StableRandomX)
+        float4 uv : TEXCOORD0; // xy: uv, z: stable random (ParticleSystemVertexStream.StableRandomX), w: smoke: 1 = in a shadow (Custom1.x)
     };
 
     struct Varyings
@@ -66,6 +88,7 @@ Shader "NatureFX/Particle"
         float3 normalWS : TEXCOORD1;
         float3 positionRWS : TEXCOORD2;
         float2 uvLocal : TEXCOORD3;
+        float sunShadow : TEXCOORD4; // smoke: the share of the sun blocked at the particle (TireSmoke.UpdateShadows)
     };
 
     Varyings Vert(Attributes a)
@@ -79,7 +102,11 @@ Shader "NatureFX/Particle"
         float tile = _NFX_PTiles.x + min(floor(a.uv.z * _NFX_PTiles.y), _NFX_PTiles.y - 1.0);
         float2 cell = float2(fmod(tile, 4.0), 3.0 - floor(tile / 4.0));
         o.uvTile = float3((cell + saturate(a.uv.xy)) * 0.25, a.uv.z);
+        // the game's own texture (mode 6): the particle's uv as it is (its own sheet animation included)
+        if (_NFX_PMode > 5.5)
+            o.uvTile.xy = a.uv.xy;
         o.uvLocal = a.uv.xy;
+        o.sunShadow = _NFX_PMode > 4.5 && _NFX_PMode < 5.5 ? saturate(a.uv.w) : 0.0;
         return o;
     }
 
@@ -123,7 +150,26 @@ Shader "NatureFX/Particle"
         return exp(-_NFX_PSky.w * dist) * saturate((dist - 0.3) / 1.2);
     }
 
+    float4 FragLit(Varyings i, bool frontFace);
+
+    // the own engine's 3D fog over the particle (phase 2b)
     float4 Frag(Varyings i, bool frontFace : SV_IsFrontFace) : SV_Target
+    {
+        float4 c = FragLit(i, frontFace);
+        if (_NFX_FogVolumeParams.x > 0.5)
+        {
+            float2 uv = i.positionCS.xy * _ScreenSize.zw;
+            float distance = length(i.positionRWS);
+            float viewDepth = -mul(UNITY_MATRIX_V, float4(i.positionRWS, 1.0)).z;
+            float4 fog = NFX_Fog(uv, viewDepth, distance, i.positionRWS / max(distance, 1e-4));
+            int mode = (int)(_NFX_PMode + 0.5);
+            // glows add their light: only dimmed. The rest as HDRP fogs transparents: the colour seen through the air
+            c.rgb = mode == 3 ? c.rgb * fog.a : NFX_ApplyFog(c.rgb, fog);
+        }
+        return c;
+    }
+
+    float4 FragLit(Varyings i, bool frontFace)
     {
         int mode = (int)(_NFX_PMode + 0.5);
         float4 tex = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i.uvTile.xy);
@@ -178,6 +224,59 @@ Shader "NatureFX/Particle"
             // glow: emissive, added
             float3 color = _Emission * tint * tex.a * i.color.a * exposure;
             return float4(color, 1.0);
+        }
+        if (mode == 5)
+        {
+            // smoke: a soft round puff whose billows are noise, lit as a ball of scattering particles (bright towards
+            // the sun and the lamps, much of it from all round by multiple scattering), its edges soft against
+            // whatever it touches
+            float2 q = i.uvLocal * 2.0 - 1.0;
+            float r = length(q);
+            if (r >= 1.0)
+                discard;
+            float2 nuv = i.uvLocal * 5.0 + i.uvTile.z * 37.0 + float2(0.0, _Time.y * 0.15);
+            float billows = SAMPLE_TEXTURE2D_LOD(_NFX_NoiseTex, s_linear_repeat_sampler, nuv / 256.0, 0).r * 0.5
+                          + SAMPLE_TEXTURE2D_LOD(_NFX_NoiseTex, s_linear_repeat_sampler, nuv * 2.3 / 256.0, 0).r * 0.3
+                          + SAMPLE_TEXTURE2D_LOD(_NFX_NoiseTex, s_linear_repeat_sampler, nuv * 5.1 / 256.0, 0).r * 0.2;
+            float falloff = saturate(1.0 - r);
+            float density = saturate(falloff * falloff * (0.6 + 1.1 * billows) - 0.08);
+            // soft against the scene behind (it would cut a hard line into the road and the car)
+            float sceneDepth = LinearEyeDepth(LOAD_TEXTURE2D_X(_CameraDepthTexture, (uint2)i.positionCS.xy).r, _ZBufferParams);
+            float ownDepth = -mul(UNITY_MATRIX_V, float4(i.positionRWS, 1.0)).z;
+            float soft = saturate((sceneDepth - ownDepth) / 0.8);
+            // a sphere's normal across the billboard
+            float3 right = UNITY_MATRIX_V[0].xyz, up = UNITY_MATRIX_V[1].xyz, back = UNITY_MATRIX_V[2].xyz;
+            float3 n = normalize(q.x * right + q.y * up + sqrt(saturate(1.0 - r * r)) * back);
+            float3 sunL = _NFX_PSunDir.xyz;
+            float front = saturate(dot(n, sunL) * 0.5 + 0.5);
+            float sunBehind = pow(saturate(dot(-V, sunL)), 6.0);
+            float3 facing, diffuse, behind;
+            LampLight(i.positionRWS, V, n, true, facing, diffuse, behind);
+            float3 albedo = tint;
+            // the sun's light where it reaches the particle (in a building's or a car's shadow only the sky lights it)
+            float3 lit = _NFX_PSun.rgb * (1.0 - i.sunShadow) * (0.25 + 0.75 * front * front + sunBehind * 1.5) + _NFX_PSky.rgb * 1.1 + diffuse * 0.7 + behind * 1.2;
+            float3 color = lit * albedo * INV_PI * exposure;
+            return float4(color, density * _BaseColor.a * i.color.a * soft * fade);
+        }
+        if (mode == 6)
+        {
+            // the game's particle (dust, spray, smoke of its own): its texture and colour as the albedo of a soft ball
+            // of scattering particles, lit by the own engine's sun or moon, sky and lamps; soft against the scene
+            float2 q = i.uvLocal * 2.0 - 1.0;
+            float r2 = saturate(dot(q, q));
+            float3 right = UNITY_MATRIX_V[0].xyz, up = UNITY_MATRIX_V[1].xyz, back = UNITY_MATRIX_V[2].xyz;
+            float3 n = normalize(q.x * right + q.y * up + sqrt(1.0 - r2) * back);
+            float3 sunL = _NFX_PSunDir.xyz;
+            float front = saturate(dot(n, sunL) * 0.5 + 0.5);
+            float sunBehind = pow(saturate(dot(-V, sunL)), 6.0);
+            float3 facingT, diffuseT, behindT;
+            LampLight(i.positionRWS, V, n, true, facingT, diffuseT, behindT);
+            float3 lit = _NFX_PSun.rgb * (0.25 + 0.75 * front * front + sunBehind * 1.2) + _NFX_PSky.rgb + diffuseT * 0.7 + behindT;
+            float sceneDepth = LinearEyeDepth(LOAD_TEXTURE2D_X(_CameraDepthTexture, (uint2)i.positionCS.xy).r, _ZBufferParams);
+            float ownDepth = -mul(UNITY_MATRIX_V, float4(i.positionRWS, 1.0)).z;
+            float soft = saturate((sceneDepth - ownDepth) / 0.5);
+            float3 color = lit * tex.rgb * tint * INV_PI * exposure;
+            return float4(color, tex.a * _BaseColor.a * i.color.a * soft * fade);
         }
         // mote: dust or pollen; small and bright where the light is behind it (a sunbeam)
         float3 facing, diffuse, behind;

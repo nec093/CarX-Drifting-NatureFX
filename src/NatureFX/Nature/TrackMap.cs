@@ -33,6 +33,10 @@ namespace NatureFX.Nature {
 			public float Width;
 			public Vector3 LastContact;
 			public bool HadContact;
+			// the wheel's spin, from its turn about the axle between frames (no turn ever seen: the car's wheels do
+			// not turn their transform, and the spin is not known)
+			public Vector3 LastUp;
+			public bool HasUp, SeenSpin;
 		}
 
 		private class Car {
@@ -48,6 +52,10 @@ namespace NatureFX.Nature {
 			public Vector3 Velocity;
 			public Transform Wheel;
 			public Rigidbody Body;
+			// for the tyre heat (TireSmoke): how fast the tread slides over the road (m/s, sideways and lengthways:
+			// a drift, a burnout, a locked wheel) and the load on the tyre (N)
+			public float SlipSpeed;
+			public float Load;
 		}
 
 		public static readonly List<WheelContact> Contacts = new();
@@ -198,7 +206,34 @@ namespace NatureFX.Nature {
 					var v = car.Body.GetPointVelocity(contact);
 					float lateral = Mathf.Abs(Vector3.Dot(v, wheel.Transform.right));
 					float slide = Mathf.Clamp01((lateral - 1.5f) / 6.0f);
-					Contacts.Add(new WheelContact { Point = contact, Slide = slide, Velocity = v, Wheel = wheel.Transform, Body = car.Body });
+					// lengthways: the tread's speed (spin x radius) against the road's under it
+					float longitudinal = 0.0f;
+					var up = wheel.Transform.up;
+					if (wheel.HasUp && Time.deltaTime > 1e-4f) {
+						float turn = Vector3.SignedAngle(wheel.LastUp, up, wheel.Transform.right) * Mathf.Deg2Rad / Time.deltaTime;
+						if (Mathf.Abs(turn) > 0.5f) {
+							wheel.SeenSpin = true;
+						}
+						if (wheel.SeenSpin) {
+							float tread = Mathf.Abs(turn) * wheel.Radius;
+							// the rolling direction from the axle and the road (the wheel's own forward turns with its spin)
+							var rolling = Vector3.Cross(wheel.Transform.right, hit.normal).normalized;
+							float ground = Mathf.Abs(Vector3.Dot(v, rolling));
+							longitudinal = Mathf.Abs(tread - ground);
+						}
+					}
+					wheel.LastUp = up;
+					wheel.HasUp = true;
+					// a gripping tyre slips too, a little (a few degrees of slip angle, a few per cent of wheel slip): no heat
+					// worth speaking of. The wheel's measured spin is also only as good as its radius and the frame's
+					// timing, so lengthways only a clear spin up or lock counts
+					float rolled = Mathf.Abs(Vector3.Dot(v, Vector3.Cross(wheel.Transform.right, hit.normal).normalized));
+					float lateralSlip = Mathf.Max(0.0f, lateral - 1.0f - 0.05f * rolled);
+					float longitudinalSlip = Mathf.Max(0.0f, longitudinal - 2.0f - 0.25f * rolled);
+					float slip = Mathf.Sqrt(lateralSlip * lateralSlip + longitudinalSlip * longitudinalSlip);
+					float load = car.Body.mass * 9.81f / Mathf.Max(1, car.Wheels.Count);
+					Contacts.Add(new WheelContact { Point = contact, Slide = slide, Velocity = v, Wheel = wheel.Transform, Body = car.Body,
+						SlipSpeed = slip, Load = load });
 
 					stampData_[count++] = new StampData {
 						A = new Vector2(wheel.LastContact.x, wheel.LastContact.z),

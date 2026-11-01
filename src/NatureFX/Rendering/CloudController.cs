@@ -39,9 +39,13 @@ namespace NatureFX.Rendering {
 		// motion (xy how far the wind has carried the air (m, negated: the map is read upwind), z the clouds' age (s),
 		// w the distance at which they fade into the haze (m))
 		public static bool NativeOn { get; private set; }
+		// the own engine's cloud shadows darken the sun where the clouds are (RTShadowPass): the sun is then not dimmed
+		// as a whole under cloud cover as well (SunController)
+		public static bool NativeShadowsActive { get; set; }
 		public static Vector4 NativeCover { get; private set; }
 		public static Vector4 NativeMotion { get; private set; }
 		private Vector2 windOffset_;
+		private float changeTime_ = 30.0f;
 		private float age_;
 
 		public void Create() {
@@ -83,12 +87,14 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			var w = Weather.Current;
+			changeTime_ = s.WeatherChangeTime > 0.0f ? s.WeatherChangeTime : 30.0f;
 			if (on && s.Clouds && s.NativeSky) {
 				volume_.enabled = false;
 				UpdateNative(w);
 				return;
 			}
 			NativeOn = false;
+			NativeShadowsActive = false;
 			volume_.enabled = on && s.Clouds;
 			if (!volume_.enabled) {
 				State = "off";
@@ -182,8 +188,10 @@ namespace NatureFX.Rendering {
 
 		private void UpdateNative(WeatherState w) {
 			float target = Mathf.Clamp01(w.Cloud);
-			cover_ = cover_ < 0.0f ? target : Mathf.MoveTowards(cover_, target, Time.deltaTime / 180.0f);
-			storm_ = Mathf.MoveTowards(storm_, Mathf.Clamp01(w.Rain), Time.deltaTime / 180.0f);
+			// the weather already blends over Settings.WeatherChangeTime: the clouds follow it at the same pace
+			float follow = Mathf.Max(5.0f, changeTime_);
+			cover_ = cover_ < 0.0f ? target : Mathf.MoveTowards(cover_, target, Time.deltaTime / follow);
+			storm_ = Mathf.MoveTowards(storm_, Mathf.Clamp01(w.Rain), Time.deltaTime / follow);
 			float cover = cover_;
 			// the cover as cloud types: scattered cumulus when clear, more and taller as it clouds over, an altostratus
 			// sheet when overcast, cumulonimbus where it rains

@@ -21,6 +21,12 @@ namespace NatureFX.Map {
 		private bool gameFogOn_ = true;
 		private float gameFogDistance_ = float.PositiveInfinity;  // the track's own attenuation distance
 
+		// Native fog (Settings.NativeFog): the own engine draws the fog (NFXNative Fog.hlsl, RTShadowPass) from these:
+		// x extinction at the base (1/m), y the base height (world y), z the scale height (m), w 1 = on. HDRP's global
+		// fog is then switched off (this volume's mean free path out of reach); its volumetric fog stays for the map's
+		// local fog volumes and the tyre smoke.
+		public static Vector4 NativeParams { get; private set; }
+
 		public void Create() {
 			if (root_ != null) {
 				return;
@@ -53,7 +59,7 @@ namespace NatureFX.Map {
 		// volumetric: the map's local fog shows (MapVolumes), which HDRP draws only with volumetric fog on.
 		// haze (0..1, F8 Distant haze): without map fog, a thin layer of air that blues the far mountains (aerial
 		// perspective) without touching the near road.
-		public void Update(bool on, Vector3 camera, bool volumetric, float haze) {
+		public void Update(bool on, Vector3 camera, bool volumetric, float haze, bool native = false) {
 			if (volume_ == null) {
 				return;
 			}
@@ -67,7 +73,11 @@ namespace NatureFX.Map {
 				gameFogOn_ = stack != null && stack.enabled.value;
 				gameFogDistance_ = gameFogOn_ ? stack.meanFreePath.value : float.PositiveInfinity;
 			}
-			volume_.enabled = weight > 0.0f || volumetric || haze > 0.0f;
+			native &= on;
+			volume_.enabled = weight > 0.0f || volumetric || haze > 0.0f || native;
+			if (!native) {
+				NativeParams = Vector4.zero;
+			}
 			if (volumetric) {
 				// local fog and smoke further away than HDRP's default 64 m of volumetric fog show too
 				fog_.enableVolumetricFog.Override(true);
@@ -86,6 +96,10 @@ namespace NatureFX.Map {
 			}
 			if (!volume_.enabled) {
 				baseHeight_ = float.NaN;
+				return;
+			}
+			if (native) {
+				UpdateNative(camera, weight, distance, haze);
 				return;
 			}
 			// follows the camera's height slowly, so jumps and crests do not pump the fog
@@ -122,6 +136,37 @@ namespace NatureFX.Map {
 					fog_.meanFreePath.Override(100000.0f);
 				}
 			}
+		}
+
+		// the same fog as below, for the own engine: the map's fog, else the haze, else the track's own
+		private void UpdateNative(Vector3 camera, float weight, float distance, float haze) {
+			baseHeight_ = float.IsNaN(baseHeight_) ? camera.y : Mathf.Lerp(baseHeight_, camera.y, 1.0f - Mathf.Exp(-Time.unscaledDeltaTime * 0.5f));
+			float scale = Weather.Current.FogScale > 0.0f ? Weather.Current.FogScale : 1.0f;
+			float meanFreePath, baseHeight, layer;
+			if (weight > 0.0f) {
+				meanFreePath = Mathf.Max(1.0f, distance * scale) / Mathf.Max(weight, 0.01f);
+				baseHeight = baseHeight_ - 5.0f;
+				layer = MapDefaults.Value(MapKey.FogHeight, DefaultHeight);
+			} else if (haze > 0.0f) {
+				meanFreePath = Mathf.Max(1.0f, Mathf.Min(Mathf.Lerp(40000.0f, 3500.0f, haze), gameFogDistance_) * scale);
+				baseHeight = baseHeight_ - 300.0f;
+				layer = 1800.0f;
+			} else if (gameFogOn_ && !float.IsInfinity(gameFogDistance_)) {
+				meanFreePath = Mathf.Max(1.0f, gameFogDistance_ * scale);
+				baseHeight = baseHeight_ - 300.0f;
+				layer = 1800.0f;
+			} else {
+				meanFreePath = float.PositiveInfinity;
+				baseHeight = 0.0f;
+				layer = 1000.0f;
+			}
+			// HDRP's fog falls off from its base to its maximum height; as an exponential, a third of the layer
+			NativeParams = new Vector4(float.IsInfinity(meanFreePath) ? 0.0f : 1.0f / meanFreePath, baseHeight, Mathf.Max(20.0f, layer / 3.0f), 1.0f);
+			volume_.weight = 1.0f;
+			fog_.baseHeight.overrideState = false;
+			fog_.maximumHeight.overrideState = false;
+			fog_.maxFogDistance.overrideState = false;
+			fog_.meanFreePath.Override(100000.0f);
 		}
 	}
 }

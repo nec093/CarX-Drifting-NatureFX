@@ -32,7 +32,11 @@ NFX_ENTRY(id)
         float3 H;
         // a wet road: the water film over the bumps of the asphalt stretches every reflection along the view (the
         // long streaks of lamps and headlights at night), and keeps it narrow across
-        float wet = n.y > 0.7 ? saturate(ReflParams.w) : 0.0;
+        // a mirror (car paint's varnish, chrome, glass-smooth): the exact mirror direction. Its GGX lobe is narrower
+        // than a pixel; sampling it anyway only shook the reflection by a fraction of a pixel every frame, which with
+        // no history to average it (NrdSpecUnpack keeps a mirror's own trace) read as grain, orange peel
+        bool mirror = alpha <= 0.003;
+        float wet = n.y > 0.7 && !mirror ? saturate(ReflParams.w) : 0.0;
         float3 along = V - n * dot(V, n);
         if (wet > 0.0 && dot(along, along) > 1e-4)
         {
@@ -45,7 +49,7 @@ NFX_ENTRY(id)
             H = SampleGGXHalfVector(n, alpha, Hash22(pixel, FrameIndex, 0));
         }
         float3 dir = reflect(-V, H);
-        if (dot(dir, n) <= 0.0)
+        if (mirror || dot(dir, n) <= 0.0)
             dir = reflect(-V, n);
 
         float maxDistance = ReflParams.x;
@@ -68,7 +72,9 @@ NFX_ENTRY(id)
             if (onScreen < 0.999)
             {
                 float hitSky;
-                float3 shaded = ShadeReflectedHit(s, hitAWS, dir, Hash22(pixel, FrameIndex, 7), hitSky);
+                // a mirror's hit: its sky share from four rays, not one (one binary ray a frame grained the paint)
+                float3 shaded = mirror ? ShadeReflectedHitSmooth(s, hitAWS, dir, pixel, hitSky)
+                                       : ShadeReflectedHit(s, hitAWS, dir, Hash22(pixel, FrameIndex, 7), hitSky);
                 // a smooth hit (mirror, chrome, wet floor, glossy paint) shows what it faces: one more ray replaces
                 // the sky probe guess, weighted by the hit's own Fresnel
                 if (ReflParams.z > 0.5 && s.smoothness > 0.6)

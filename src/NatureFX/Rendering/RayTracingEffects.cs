@@ -23,6 +23,7 @@ namespace NatureFX.Rendering {
 		private RTShadowPass shadows_;
 		private readonly RTSurfaceTrace surfaces_ = new();  // camera rays shared by reflections and shadows
 		private readonly LocalLights lights_ = new();       // headlights and lamps near the camera
+		private AtmospherePass atmosphereTrace_, atmosphereComposite_;
 		private Light shadowlessSun_;                        // sun whose HDRP shadows the ray traced ones replace
 		private LightShadows sunShadowsBefore_;
 		private LightBakingOutput sunBakingBefore_;          // its baked shadow mask is switched off as well
@@ -117,6 +118,19 @@ namespace NatureFX.Rendering {
 				glassVolume.customPasses.Add(glass_);
 			}
 
+			// the atmosphere: traced before everything (the shadows read its cloud shadows and sky light), drawn after
+			var atmosphereShader = bundle.Get(AtmospherePass.ShaderName);
+			if (atmosphereShader == null) {
+				Kino.Log.Warning($"[NatureFX] {AtmospherePass.ShaderName} not in the shader bundle; the own engine's sky is off");
+			} else {
+				atmosphereTrace_ = new AtmospherePass { name = "NatureFX atmosphere (trace)", Lights = lights_, enabled = false };
+				atmosphereComposite_ = new AtmospherePass {
+					name = "NatureFX atmosphere (composite)", IsComposite = true, Lights = lights_,
+					Material = new Material(atmosphereShader) { hideFlags = HideFlags.DontSave }, enabled = false
+				};
+				volume.customPasses.Add(atmosphereComposite_);
+			}
+
 			// shadows go first, so the reflections see the shadowed image
 			var shadowShader = bundle.Get(ShadowShaderName);
 			var sunExactShader = bundle.Get(SunExactShaderName);
@@ -138,6 +152,9 @@ namespace NatureFX.Rendering {
 				};
 				volume.customPasses.Insert(0, shadows_);
 			}
+			if (atmosphereTrace_ != null) {
+				volume.customPasses.Insert(0, atmosphereTrace_);
+			}
 			return true;
 		}
 
@@ -146,7 +163,8 @@ namespace NatureFX.Rendering {
 
 		public string ShadowStatus => shadows_ == null ? "unavailable (needs DX12 ray tracing)" : !shadows_.enabled ? "off" : shadows_.Status;
 		public string ReflectionStatus => reflection_ == null ? "unavailable (needs DX12 ray tracing)" : !reflection_.enabled ? "off" : reflection_.Status;
-		public string SkyStatus => shadows_ == null ? "unavailable (needs DX12 ray tracing)" : !shadows_.enabled ? "off (needs a ray traced effect on)" : shadows_.SkyStatus;
+		public string SkyStatus => atmosphereTrace_ == null ? "unavailable (needs DX12 and the own engine)" : AtmospherePass.SkyStatus;
+		public string FogStatus => atmosphereTrace_ == null ? "unavailable (needs DX12 and the own engine)" : AtmospherePass.FogStatus;
 		public string GlassStatus => glass_ == null ? "unavailable (needs DX12 ray tracing)" : !glass_.enabled ? "off" : glass_.Status;
 
 		// Per frame: move car instances, pass the sun to the hit lighting.
@@ -158,7 +176,8 @@ namespace NatureFX.Rendering {
 			bool shadowsWork = shadows && shadows_.TraceShadows && !shadows_.Status.StartsWith("unavailable");
 			UpdateSunShadows(shadowsWork ? sun : null);
 			UpdateLampShadows(shadows && LampShadows && lights_.Enabled && !shadows_.Status.StartsWith("unavailable"));
-			if (dxrScene_ == null || (!reflections && !shadows)) {
+			bool atmosphere = atmosphereTrace_ != null && atmosphereTrace_.enabled && atmosphereTrace_.NativeSky;
+			if (dxrScene_ == null || (!reflections && !shadows && !atmosphere)) {
 				return;
 			}
 			Benchmark.Update();
@@ -168,11 +187,14 @@ namespace NatureFX.Rendering {
 			dxrScene_.SetCarMotionVectors(NativeEngine.NrdEnabled && NativeEngine.DevCarMotionVectors);
 			RTTimings.EndSceneUpdate();
 
-			if (sun != null && sun.isActiveAndEnabled) {
-				var toSun = -sun.transform.forward;
-				var color = sun.color.linear * sun.intensity;
-				if (sun.useColorTemperature) {
-					color *= Mathf.CorrelatedColorTemperatureToRGB(sun.colorTemperature);
+			// the own engine's light: the sun, or after dusk the moon (SunController.SkyLight): the traced shadows,
+			// the sky, the clouds and the fog all follow it, so the moon casts traced shadows and lights the night sky
+			var engineLight = SunController.SkyLight != null && SunController.SkyLight.isActiveAndEnabled ? SunController.SkyLight : sun;
+			if (engineLight != null && engineLight.isActiveAndEnabled) {
+				var toSun = -engineLight.transform.forward;
+				var color = engineLight.color.linear * engineLight.intensity;
+				if (engineLight.useColorTemperature) {
+					color *= Mathf.CorrelatedColorTemperatureToRGB(engineLight.colorTemperature);
 				}
 				sunDirection_ = new Vector4(toSun.x, toSun.y, toSun.z, toSun.y > 0.0f ? 1.0f : 0.0f);
 				sunIlluminance_ = new Vector4(color.r, color.g, color.b, 0.0f);
@@ -577,14 +599,24 @@ namespace NatureFX.Rendering {
 			// the own engine traces everything: DXR 1.0 (ray tracing pipelines, backend 0) or DXR 1.1 (inline, 1)
 			// the scene (BLAS, TLAS, their memory, the per frame wind upload) only while a ray traced effect runs; with
 			// all of them off the engine stays idle (RayTracingScene.PushNative uploads it again when one comes on)
-			NativeEngine.Enabled = s.Enabled && (s.RTShadows || s.RTAO || s.RTShafts || s.RTReflections);
+			// the sky, clouds and fog run on the own engine too, whatever the ray traced effects are set to
+			NativeEngine.Enabled = s.Enabled && (EngineLighting.Shadows(s) || EngineLighting.Ambient(s) || s.RTShafts || EngineLighting.Reflections(s) || s.NativeSky);
+			if (atmosphereTrace_ != null) {
+				atmosphereTrace_.enabled = atmosphereComposite_.enabled = s.Enabled && s.NativeSky;
+				atmosphereTrace_.NativeSky = s.Enabled && s.NativeSky;
+				atmosphereTrace_.NativeFog = s.NativeFog;
+				atmosphereTrace_.Clouds = s.Clouds;
+				atmosphereTrace_.CloudShadows = s.CloudShadows > 0.0f;
+				atmosphereTrace_.Anisotropy = s.RTShaftAnisotropy;
+				atmosphereComposite_.StarBrightness = s.StarBrightness;
+			}
 			NativeEngine.Pipeline = s.RTBackend == 0;
 			NativeEngine.Dxr12Sun = NativeEngine.Enabled && s.RTDxr12Sun;
 			NativeEngine.Wind = s.RTWind;
 			NativeEngine.Dxr12SunPaused = (benchmarkOff_ & RTStage.Dxr12Sun) != 0;
 			NativeEngine.OmmPaused = (benchmarkOff_ & RTStage.Omm) != 0;
 			if (reflection_ != null) {
-				reflection_.enabled = s.Enabled && s.RTReflections;
+				reflection_.enabled = s.Enabled && EngineLighting.Reflections(s);
 				reflection_.Intensity = s.RTReflectionIntensity;
 				reflection_.RoughnessCutoff = Mathf.Clamp(s.RTReflectionRoughness, 0.05f, 1.0f);
 				reflection_.MaxDistance = Mathf.Max(5.0f, s.RTReflectionDistance);
@@ -594,34 +626,43 @@ namespace NatureFX.Rendering {
 				reflection_.WetStreaks = s.RTWetReflections;
 			}
 			if (glass_ != null) {
-				glass_.enabled = s.Enabled && s.RTReflections && s.RTGlassReflections;
+				glass_.enabled = s.Enabled && EngineLighting.Reflections(s) && EngineLighting.GlassReflections(s);
 				glass_.Refraction = Mathf.Clamp01(s.RTGlassRefraction);
 				glass_.Intensity = s.RTReflectionIntensity;
 				glass_.MaxDistance = Mathf.Max(5.0f, s.RTReflectionDistance);
 			}
+			// roadmap E: the own engine draws the glass whole while its pass runs (HDRP's glass hidden meanwhile)
+			OwnGlass.Update(glass_ != null && glass_.enabled && s.NativeGlass && NativeEngine.Supports("own-glass") && Time.frameCount - glass_.LastRun < 30);
+			NativeEngine.OwnGlass = OwnGlass.Active;
 			if (shadows_ != null) {
-				shadows_.enabled = s.Enabled && (s.RTShadows || s.RTAO || s.RTShafts);
-				shadows_.NativeSky = s.NativeSky;
+				shadows_.enabled = s.Enabled && (EngineLighting.Shadows(s) || EngineLighting.Ambient(s) || s.RTShafts);
+				shadows_.NativeSky = false; // AtmospherePass
+				if (!shadows_.enabled) {
+					CloudController.NativeShadowsActive = false; // the pass that sets it no longer runs
+					Shader.SetGlobalVector("_NFX_FogVolumeParams", Vector4.zero); // nor the 3D fog the particles read
+				}
 				shadows_.SkySunLux = SunController.TopOfAtmosphereLux;
 				// haze: more aerosols as it clouds over and rains (the air near the ground turns milky)
 				shadows_.SkyAerosols = 1.0f + 2.0f * Nature.Weather.Current.Cloud + 2.0f * Nature.Weather.Current.Rain;
-				shadows_.TraceShadows = s.RTShadows;
-				shadows_.TraceAO = s.RTAO;
+				shadows_.TraceShadows = EngineLighting.Shadows(s);
+				shadows_.TraceAO = EngineLighting.Ambient(s);
 				shadows_.AOStrength = s.RTAOStrength;
 				shadows_.AODistance = s.RTAODistance;
 				shadows_.SkyOcclusionDistance = s.RTSkyOcclusion;
 				shadows_.ContactShadows = s.RTContactShadows;
-				shadows_.Bounce = s.RTGIBounce;
-				shadows_.MultiBounceGI = s.RTGIMultiBounce || PhotoMode.Active;
+				shadows_.Bounce = s.RTGIBounce || s.NativeLighting;
+				shadows_.MultiBounceGI = s.RTGIMultiBounce || s.NativeLighting || PhotoMode.Active;
 				shadows_.GIDistance = Mathf.Max(1.0f, s.RTGIDistance);
 				shadows_.GIIntensity = Mathf.Max(0.0f, s.RTGIIntensity);
 				shadows_.Strength = s.RTShadowStrength;
 				shadows_.FullResolutionShadows = s.RTShadowFullRes || PhotoMode.Active;
 				shadows_.ExactSun = s.RTExactSun;
+				shadows_.LampMasks = s.RTLampMasks;
+				shadows_.FullRelight = s.RTFullRelight;
 				shadows_.LeafTranslucency = s.RTLeafTranslucency;
 				shadows_.Shafts = s.RTShafts;
-				lights_.Enabled = s.RTLocalLights;
-				LampShadows = s.RTLampShadows;
+				lights_.Enabled = EngineLighting.LocalLights(s);
+				LampShadows = EngineLighting.LampShadows(s);
 				lights_.Emissive = s.RTEmissiveLights;
 				NativeEngine.GlassShadows = s.RTGlassShadows;
 				// photo mode: half resolution traces at least (the denoisers stay: PhotoMode averages their frames)

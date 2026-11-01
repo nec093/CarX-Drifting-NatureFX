@@ -19,6 +19,13 @@
 #pragma kernel PrepareGlass
 #pragma kernel PrepareNrdGuide
 #pragma kernel PrepareClouds
+#pragma kernel CloudTemporal
+#pragma kernel SkyAmbientSH
+#pragma kernel PrepareFog
+#pragma kernel PrepareFogVolume
+#pragma kernel SkyCubeUnpack
+#pragma kernel FogReproject
+#pragma kernel FogIntegrate
 
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
 #include "Packages/com.unity.render-pipelines.high-definition/Runtime/ShaderLibrary/ShaderVariables.hlsl"
@@ -154,6 +161,248 @@ void PrepareClouds(uint3 id : SV_DispatchThreadID)
             || LOAD_TEXTURE2D_X(_CameraDepthTexture, uint2(hi.x, lo.y)).r == UNITY_RAW_FAR_CLIP_VALUE;
     _NFX_NativeSurface[index] = float4(dir, sky ? 1.0 : 0.0);
     _NFX_NativeResult[index] = float4(0.0, 0.0, 0.0, 1.0);
+}
+
+// The clouds blended with their history (each frame marches them from another offset): the history is found by
+// the view direction in last frame's camera (the clouds are kilometres away: its rotation is what moves them on
+// screen) and kept within this frame's neighbourhood (no smearing as they drift and change).
+TEXTURE2D_X(_NFX_CloudCurrent);
+TEXTURE2D_X(_NFX_CloudHistory);
+float4 _NFX_CloudTemporal; // x the share of this frame (1: no history)
+SamplerState nfx_linear_clamp_sampler;
+
+float4 _NFX_PrevViewX, _NFX_PrevViewY, _NFX_PrevViewZ; // last frame's world to view rotation (rows), Unity's view space
+float4 _NFX_PrevTan;                                  // xy tan of last frame's half field of view (horizontal, vertical)
+
+[numthreads(8, 8, 1)]
+void CloudTemporal(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    float4 current = LOAD_TEXTURE2D_X(_NFX_CloudCurrent, id.xy);
+    // the neighbourhood's mean and spread (variance clipping: a wrong history is pulled to it, not to an extreme)
+    float4 m1 = 0.0, m2 = 0.0;
+    for (int y = -1; y <= 1; ++y)
+    for (int x = -1; x <= 1; ++x)
+    {
+        int2 p = clamp((int2)id.xy + int2(x, y), 0, (int2)_NFX_TargetSize.xy - 1);
+        float4 v = LOAD_TEXTURE2D_X(_NFX_CloudCurrent, p);
+        m1 += v;
+        m2 += v * v;
+    }
+    m1 /= 9.0;
+    float4 sigma = sqrt(max(m2 / 9.0 - m1 * m1, 0.0));
+    float4 lo = m1 - 1.5 * sigma, hi = m1 + 1.5 * sigma;
+    // this pixel's view direction in last frame's camera: its rotation and field of view, projected by hand (the
+    // clouds are kilometres away, the camera's move does not count). Screen v runs down, like the texture's rows
+    float2 uv = (id.xy + 0.5) * _NFX_TargetSize.zw;
+    float3 dir = normalize(ComputeWorldSpacePosition(uv, UNITY_NEAR_CLIP_VALUE, UNITY_MATRIX_I_VP));
+    float3 v = float3(dot(_NFX_PrevViewX.xyz, dir), dot(_NFX_PrevViewY.xyz, dir), dot(_NFX_PrevViewZ.xyz, dir));
+    float share = _NFX_CloudTemporal.x;
+    float4 result = current;
+    if (share < 1.0 && v.z < -1e-3)
+    {
+        float2 prevUv = float2(0.5 + 0.5 * v.x / (-v.z * _NFX_PrevTan.x), 0.5 - 0.5 * v.y / (-v.z * _NFX_PrevTan.y));
+        if (all(prevUv > 0.0) && all(prevUv < 1.0))
+        {
+            float4 history = clamp(SAMPLE_TEXTURE2D_X_LOD(_NFX_CloudHistory, nfx_linear_clamp_sampler, prevUv, 0), lo, hi);
+            result = lerp(history, current, share);
+        }
+    }
+    _NFX_NativeTarget[COORD_TEXTURE2D_X(id.xy)] = result;
+}
+
+// The sky's light (SkyAmbient.hlsl: 32 x 16 directions, equal area) as an ambient probe: projected onto L2
+// spherical harmonics, convolved with the cosine lobe and divided by pi (HDRP's diffuse probe: albedo times
+// SampleSH9 is the reflected radiance), packed as HDRP packs it (7 float4, SampleSH9's order).
+StructuredBuffer<float4> _NFX_SkySamples;
+RWStructuredBuffer<float4> _NFX_SkyProbe;
+groupshared float3 sh_[64][9];
+
+[numthreads(64, 1, 1)]
+void SkyAmbientSH(uint3 id : SV_DispatchThreadID)
+{
+    float3 c[9];
+    for (int k = 0; k < 9; ++k)
+        c[k] = 0.0;
+    for (uint i = id.x; i < 512; i += 64)
+    {
+        uint x = i % 32, y = i / 32;
+        float phi = (x + 0.5) / 32.0 * 2.0 * PI;
+        float cosTheta = 1.0 - 2.0 * (y + 0.5) / 16.0;
+        float sinTheta = sqrt(saturate(1.0 - cosTheta * cosTheta));
+        float3 n = float3(sinTheta * cos(phi), cosTheta, sinTheta * sin(phi));
+        float3 L = _NFX_SkySamples[i].rgb * (4.0 * PI / 512.0);
+        // Unity's order: Y00, Y1-1 (y), Y10 (z), Y11 (x), Y2-2 (xy), Y2-1 (yz), Y20, Y21 (xz), Y22
+        c[0] += L * 0.282095;
+        c[1] += L * 0.488603 * n.y;
+        c[2] += L * 0.488603 * n.z;
+        c[3] += L * 0.488603 * n.x;
+        c[4] += L * 1.092548 * n.x * n.y;
+        c[5] += L * 1.092548 * n.y * n.z;
+        c[6] += L * 0.315392 * (3.0 * n.z * n.z - 1.0);
+        c[7] += L * 1.092548 * n.x * n.z;
+        c[8] += L * 0.546274 * (n.x * n.x - n.y * n.y);
+    }
+    for (int k2 = 0; k2 < 9; ++k2)
+        sh_[id.x][k2] = c[k2];
+    GroupMemoryBarrierWithGroupSync();
+    if (id.x != 0)
+        return;
+    float3 t[9];
+    for (int k3 = 0; k3 < 9; ++k3)
+    {
+        t[k3] = 0.0;
+        for (int j = 0; j < 64; ++j)
+            t[k3] += sh_[j][k3];
+    }
+    // cosine lobe over pi (1, 2/3, 1/4) times each basis function's constant, as SampleSH9 evaluates them
+    static const float K[9] = { 0.282095 * 1.0, 0.488603 * 2.0 / 3.0, 0.488603 * 2.0 / 3.0, 0.488603 * 2.0 / 3.0,
+                                1.092548 * 0.25, 1.092548 * 0.25, 0.315392 * 0.25, 1.092548 * 0.25, 0.546274 * 0.25 };
+    float3 s[9];
+    for (int k4 = 0; k4 < 9; ++k4)
+        s[k4] = t[k4] * K[k4];
+    _NFX_SkyProbe[0] = float4(s[3].r, s[1].r, s[2].r, s[0].r - s[6].r);
+    _NFX_SkyProbe[1] = float4(s[3].g, s[1].g, s[2].g, s[0].g - s[6].g);
+    _NFX_SkyProbe[2] = float4(s[3].b, s[1].b, s[2].b, s[0].b - s[6].b);
+    _NFX_SkyProbe[3] = float4(s[4].r, s[5].r, s[6].r * 3.0, s[7].r);
+    _NFX_SkyProbe[4] = float4(s[4].g, s[5].g, s[6].g * 3.0, s[7].g);
+    _NFX_SkyProbe[5] = float4(s[4].b, s[5].b, s[6].b * 3.0, s[7].b);
+    _NFX_SkyProbe[6] = float4(s[8].r, s[8].g, s[8].b, 1.0);
+    // the sky's mean radiance (the fog's isotropic sky light): Y00's coefficient over its constant and the sphere
+    _NFX_SkyProbe[7] = float4(t[0] / (0.282095 * 4.0 * PI), 1.0);
+}
+
+// Fog.hlsl: each pixel's view direction and how far the air reaches: to the surface, or over the sky as far as
+// the haze matters (_NFX_ShaftParams.z)
+[numthreads(8, 8, 1)]
+void PrepareFog(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    uint index = id.y * (uint)_NFX_TargetSize.x + id.x;
+    uint2 pixel = TracePixel(id.xy);
+    float3 viewDir = normalize(GetPositionInput(pixel, _ScreenSize.zw, 0.5, UNITY_MATRIX_I_VP, UNITY_MATRIX_V).positionWS);
+    float depth = LOAD_TEXTURE2D_X(_CameraDepthTexture, pixel).r;
+    float distance = _NFX_ShaftParams.z;
+    if (depth != UNITY_RAW_FAR_CLIP_VALUE)
+        distance = min(length(GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V).positionWS), distance);
+    _NFX_NativeSurface[index] = float4(viewDir, distance);
+    _NFX_NativeResult[index] = float4(0.0, 0.0, 0.0, 1.0);
+}
+
+// The engine's sky (SkyCube.hlsl: the faces one after another) into the cube map HDRP takes as its sky
+RWTexture2DArray<float4> _NFX_SkyCubeTarget;
+#define SKY_CUBE_SIZE 64
+
+[numthreads(8, 8, 1)]
+void SkyCubeUnpack(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= SKY_CUBE_SIZE || id.y >= SKY_CUBE_SIZE * 6)
+        return;
+    uint face = id.y / SKY_CUBE_SIZE;
+    _NFX_SkyCubeTarget[uint3(id.x, id.y % SKY_CUBE_SIZE, face)] = _NFX_NativeResult[id.y * SKY_CUBE_SIZE + id.x];
+}
+
+// ------------------------------------------------------------------ 3D fog (FogVolume.hlsl)
+// A camera aligned grid: FOG_W x FOG_H columns, FOG_D slices spread exponentially in view depth from FOG_NEAR to
+// FOG_FAR (keep in step with FogVolume.hlsl and NFX_FogCommon.hlsl)
+#define FOG_W 160
+#define FOG_H 90
+#define FOG_D 64
+#define FOG_NEAR 0.5
+#define FOG_FAR 3000.0
+RWTexture3D<float4> _NFX_FogTarget;
+Texture3D<float4> _NFX_FogSource;
+float4 _NFX_FogCamDelta; // xyz this camera minus last frame's (world), w the share of this frame (1: no history)
+
+float FogSliceDepth(float s)
+{
+    return FOG_NEAR * pow(FOG_FAR / FOG_NEAR, s / FOG_D);
+}
+
+// each column's view ray, scaled to view depth 1 (camera relative world space)
+[numthreads(8, 8, 1)]
+void PrepareFogVolume(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= FOG_W || id.y >= FOG_H)
+        return;
+    float2 uv = (id.xy + 0.5) / float2(FOG_W, FOG_H);
+    float3 p = ComputeWorldSpacePosition(uv, 0.5, UNITY_MATRIX_I_VP);
+    float3 px = ComputeWorldSpacePosition(uv + float2(1.0 / FOG_W, 0.0), 0.5, UNITY_MATRIX_I_VP);
+    float3 py = ComputeWorldSpacePosition(uv + float2(0.0, 1.0 / FOG_H), 0.5, UNITY_MATRIX_I_VP);
+    p /= max(-mul(UNITY_MATRIX_V, float4(p, 1.0)).z, 1e-6);
+    px /= max(-mul(UNITY_MATRIX_V, float4(px, 1.0)).z, 1e-6);
+    py /= max(-mul(UNITY_MATRIX_V, float4(py, 1.0)).z, 1e-6);
+    // the centre ray and the steps to the next column and row (FogVolume.hlsl samples anywhere in the cell)
+    uint i = (id.y * FOG_W + id.x) * 3;
+    _NFX_NativeSurface[i] = float4(p, 0.0);
+    _NFX_NativeSurface[i + 1] = float4(px - p, 0.0);
+    _NFX_NativeSurface[i + 2] = float4(py - p, 0.0);
+}
+
+// the engine's cells into a 3D texture, blended with last frame's at the same place in the world (each frame
+// traces the sun from another point in the cell)
+[numthreads(8, 8, 1)]
+void FogReproject(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= FOG_W || id.y >= FOG_H * FOG_D)
+        return;
+    uint x = id.x, y = id.y % FOG_H, s = id.y / FOG_H;
+    float4 current = _NFX_NativeResult[(s * FOG_H + y) * FOG_W + x];
+    float share = _NFX_FogCamDelta.w;
+    float4 result = current;
+    if (share < 1.0)
+    {
+        float2 uv = (float2(x, y) + 0.5) / float2(FOG_W, FOG_H);
+        float3 dir = ComputeWorldSpacePosition(uv, 0.5, UNITY_MATRIX_I_VP);
+        dir /= max(-mul(UNITY_MATRIX_V, float4(dir, 1.0)).z, 1e-6);
+        float3 p = dir * FogSliceDepth(s + 0.5) + _NFX_FogCamDelta.xyz; // relative to last frame's camera
+        float4 clip = mul(UNITY_MATRIX_PREV_VP, float4(p, 1.0));
+        if (clip.w > FOG_NEAR)
+        {
+            float2 prevUv = clip.xy / clip.w * 0.5 + 0.5;
+#if UNITY_UV_STARTS_AT_TOP
+            prevUv.y = 1.0 - prevUv.y;
+#endif
+            float prevSlice = log(clip.w / FOG_NEAR) / log(FOG_FAR / FOG_NEAR);
+            float3 coord = float3(prevUv, prevSlice);
+            if (all(coord > 0.0) && all(coord < 1.0))
+            {
+                float4 history = _NFX_FogSource.SampleLevel(nfx_linear_clamp_sampler, coord, 0);
+                result = lerp(history, current, share);
+            }
+        }
+    }
+    _NFX_FogTarget[uint3(x, y, s)] = result;
+}
+
+// along each column: the light scattered towards the camera and the transmittance up to the far end of each slice
+[numthreads(8, 8, 1)]
+void FogIntegrate(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= FOG_W || id.y >= FOG_H)
+        return;
+    float2 uv = (id.xy + 0.5) / float2(FOG_W, FOG_H);
+    float3 dir = ComputeWorldSpacePosition(uv, 0.5, UNITY_MATRIX_I_VP);
+    float stretch = length(dir / max(-mul(UNITY_MATRIX_V, float4(dir, 1.0)).z, 1e-6)); // metres of ray per metre of depth
+    float3 L = 0.0;
+    float T = 1.0;
+    float previous = 0.0;
+    for (uint s = 0; s < FOG_D; ++s)
+    {
+        float4 cell = _NFX_FogSource[uint3(id.xy, s)];
+        float end = FogSliceDepth(s + 1.0);
+        float dt = (end - previous) * stretch;
+        previous = end;
+        float sigma = max(cell.a, 0.0);
+        float sampleT = exp(-sigma * dt);
+        L += T * (sigma > 1e-9 ? cell.rgb * (1.0 - sampleT) / sigma : cell.rgb * dt);
+        T *= sampleT;
+        _NFX_FogTarget[uint3(id.xy, s)] = float4(L, T);
+    }
 }
 
 [numthreads(8, 8, 1)]
@@ -304,7 +553,11 @@ void PrepareReflection(uint3 id : SV_DispatchThreadID)
         float4 s = LOAD_TEXTURE2D_X(_NFX_SurfaceNormal, pixel);
         bool exact = s.w != 0.0;
         bool coated = exact && surface.a > 0.495;
-        float roughness = coated ? min(nd.perceptualRoughness, 0.04) : nd.perceptualRoughness;
+        // chrome (plating, chrome wraps, polished rims): a smooth metal mirrors like the varnish does, sharp and along
+        // the mesh's own normal; HDRP's roughness and normal map left it grainy and dull (NFX_RTReflect ReflRoughness)
+        float metalNow = exact ? saturate((surface.a - (surface.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0;
+        bool chrome = exact && !coated && metalNow >= 0.85 && nd.perceptualRoughness <= 0.25;
+        float roughness = coated ? min(nd.perceptualRoughness, 0.04) : chrome ? min(nd.perceptualRoughness, 0.03) : nd.perceptualRoughness;
         if (roughness <= _NFX_ReflPrepare.x)
         {
             PositionInputs pos = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
@@ -317,14 +570,14 @@ void PrepareReflection(uint3 id : SV_DispatchThreadID)
             float3 f0 = lerp(0.04, albedo, metallic);
             // the varnish of a clear coat is smooth whatever the paint's normal map does (orange peel, dents): it
             // mirrors along the mesh's own normal
-            if (exact && (coated || dot(s.xyz, n) > 0.9995))
+            if (exact && (coated || chrome || dot(s.xyz, n) > 0.9995))
                 n = s.xyz;
             float3 surfaceAWS = exact ? cameraAWS + normalize(pixelAWS - cameraAWS) * abs(s.w) : pixelAWS;
             float viewDepth = LinearEyeDepth(depth, _ZBufferParams);
             a = float4(surfaceAWS + n * (0.02 + viewDepth * 0.001), max(roughness * roughness, 0.002));
             b.xyz = n;
             float nv = saturate(dot(n, V));
-            float3 fresnel = EnvBRDF(f0, nd.perceptualRoughness, nv);
+            float3 fresnel = EnvBRDF(f0, chrome ? 0.0 : nd.perceptualRoughness, nv);
             if (coated)
             {
                 // Car paint is two layers: a smooth varnish (4 % head on, rising towards grazing angles) over a

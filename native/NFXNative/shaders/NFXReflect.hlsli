@@ -30,12 +30,38 @@ float ScreenVisibility(float3 hitAWS, out float3 color)
 
 // ShadeHit for what a reflection shows directly: the sky light blocked by what is around the hit (one short ray),
 // a sun highlight as sharp as the hit's smoothness, and the local lights with their shadows.
+float3 ShadeReflectedHitWithSky(HitSurface s, float3 hitAWS, float3 rayDir, float sky);
+
 float3 ShadeReflectedHit(HitSurface s, float3 hitAWS, float3 rayDir, float2 xi, out float sky)
 {
     float3 hn = s.normal;
     float3 origin = hitAWS + hn * 0.03;
     sky = Blocked(origin, CosineSampleHemisphere(hn, xi), 4.0, true) ? NFX_SKY_COVERED : 1.0;
+    return ShadeReflectedHitWithSky(s, hitAWS, rayDir, sky);
+}
 
+// the same with the sky share from four stratified rays: for mirrors, whose one ray per pixel and frame has no
+// history to average it (Reflection.hlsl)
+float3 ShadeReflectedHitSmooth(HitSurface s, float3 hitAWS, float3 rayDir, uint2 pixel, out float sky)
+{
+    float3 hn = s.normal;
+    float3 origin = hitAWS + hn * 0.03;
+    float2 jitter = Hash22(pixel, FrameIndex, 31);
+    sky = 0.0;
+    [unroll]
+    for (int k = 0; k < 4; ++k)
+    {
+        float2 xi = frac((float2(k & 1, k >> 1) + jitter) * 0.5);
+        sky += Blocked(origin, CosineSampleHemisphere(hn, xi), 4.0, true) ? NFX_SKY_COVERED : 1.0;
+    }
+    sky *= 0.25;
+    return ShadeReflectedHitWithSky(s, hitAWS, rayDir, sky);
+}
+
+float3 ShadeReflectedHitWithSky(HitSurface s, float3 hitAWS, float3 rayDir, float sky)
+{
+    float3 hn = s.normal;
+    float3 origin = hitAWS + hn * 0.03;
     float3 irradiance = HitSkyLight(hn) * sky;
     float3 L = SunDir;
     float ndl = saturate(dot(hn, L));

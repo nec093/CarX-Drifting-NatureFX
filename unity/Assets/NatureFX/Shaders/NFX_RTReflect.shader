@@ -13,6 +13,7 @@ Shader "Hidden/NatureFX/RTReflect"
     #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Material/NormalBuffer.hlsl"
     #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Material/Builtin/BuiltinData.hlsl"
     #include "Assets/NatureFX/ShaderLibrary/NFX_RayTracing.hlsl"
+    #include "Assets/NatureFX/ShaderLibrary/NFX_FogCommon.hlsl"
 
     TEXTURE2D_X(_NFX_ColorTex);     // copy of the camera colour (full res)
     TEXTURE2D_X(_NFX_SourceTex);    // denoised reflection: rgb radiance, a = traced share
@@ -32,8 +33,12 @@ Shader "Hidden/NatureFX/RTReflect"
     // varnish whatever roughness HDRP's normal buffer holds for the base layer
     float ReflRoughness(uint2 pixel, float baseRoughness)
     {
-        bool coated = LOAD_TEXTURE2D_X(_NFX_SurfaceNormal, pixel).w != 0.0 && LOAD_TEXTURE2D_X(_NFX_SurfaceAlbedo, pixel).a > 0.495;
-        return coated ? min(baseRoughness, NFX_COAT_ROUGHNESS) : baseRoughness;
+        bool exact = LOAD_TEXTURE2D_X(_NFX_SurfaceNormal, pixel).w != 0.0;
+        float a = LOAD_TEXTURE2D_X(_NFX_SurfaceAlbedo, pixel).a;
+        bool coated = exact && a > 0.495;
+        // chrome: a smooth metal is a mirror (NFX_NativeBridge PrepareReflection)
+        bool chrome = exact && !coated && saturate(a / 0.49) >= 0.85 && baseRoughness <= 0.25;
+        return coated ? min(baseRoughness, NFX_COAT_ROUGHNESS) : chrome ? min(baseRoughness, 0.03) : baseRoughness;
     }
 
     #define SampleRT(tex, uv) SAMPLE_TEXTURE2D_X_LOD(tex, s_linear_clamp_sampler, (uv) * _RTHandleScale.xy, 0)
@@ -49,12 +54,48 @@ Shader "Hidden/NatureFX/RTReflect"
         uint2 pixel = (uint2)v.positionCS.xy;
         float3 color = LOAD_TEXTURE2D_X(_NFX_ColorTex, pixel).rgb;
         float4 glass = LOAD_TEXTURE2D_X(_NFX_GlassTex, pixel);
-        if (glass.a <= 0.0 || any(!isfinite(glass)))
+        if (any(!isfinite(glass)))
+            return float4(color, 1.0);
+        if (glass.a < -0.5)
+        {
+            // roadmap E, the own glass (Glass.hlsl with NFX_FLAG_OWN_GLASS): the colour is what is behind the glass
+            // (HDRP's glass is hidden); it lets the transmission through and adds what it mirrors, which gets the 3D
+            // fog between the camera and the glass
+            uint packed = (uint)(-glass.a - 1.0);
+            float3 transmission = float3(packed & 31u, (packed >> 5) & 31u, (packed >> 10) & 31u) / 31.0;
+            float ownMetres = (float)(packed >> 15);
+            float3 mirrored = glass.rgb * _NFX_GlassCompose.x;
+            float3 own = color * transmission;
+            float mirrorShare = saturate(1.0 - max(transmission.r, max(transmission.g, transmission.b)));
+            if (_NFX_FogVolumeParams.x > 0.5 && ownMetres > 0.0)
+            {
+                float2 uv = (pixel + 0.5) * _ScreenSize.zw;
+                float3 dir = normalize(ComputeWorldSpacePosition(uv, UNITY_NEAR_CLIP_VALUE, UNITY_MATRIX_I_VP));
+                float4 fog = NFX_Fog(uv, ownMetres * dot(dir, -UNITY_MATRIX_V[2].xyz), ownMetres, dir);
+                mirrored = mirrored * fog.a + fog.rgb * GetCurrentExposureMultiplier() * mirrorShare;
+            }
+            return float4(max(own + mirrored, 0.0), 1.0);
+        }
+        if (glass.a <= 0.0)
             return float4(color, 1.0);
         float3 change = glass.rgb * _NFX_GlassCompose.x;
         // a reflection takes at most its Fresnel share away; the refraction (in the same change) may move any colour
         // there, so the floor is low
-        return float4(max(color + change, color * 0.05), 1.0);
+        color = max(color + change, color * 0.05);
+        // the 3D fog in front of the glass (Glass.hlsl packs its distance: w = Fresnel share + 2 x whole metres). What
+        // is seen through it was fogged with the surface behind it; what it mirrors was not: that share gets the fog
+        // between the camera and the glass
+        float metres = floor(glass.a * 0.5);
+        float fresnel = saturate(glass.a - 2.0 * metres);
+        if (_NFX_FogVolumeParams.x > 0.5 && metres > 0.0)
+        {
+            float2 uv = (pixel + 0.5) * _ScreenSize.zw;
+            float3 dir = normalize(ComputeWorldSpacePosition(uv, UNITY_NEAR_CLIP_VALUE, UNITY_MATRIX_I_VP));
+            float viewDepth = metres * dot(dir, -UNITY_MATRIX_V[2].xyz);
+            float4 fog = NFX_Fog(uv, viewDepth, metres, dir);
+            color = color * (1.0 - fresnel * (1.0 - fog.a)) + fog.rgb * GetCurrentExposureMultiplier() * fresnel;
+        }
+        return float4(color, 1.0);
     }
 
     float4 Composite(Varyings v) : SV_Target
