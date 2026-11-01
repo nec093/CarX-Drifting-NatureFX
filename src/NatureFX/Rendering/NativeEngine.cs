@@ -61,6 +61,8 @@ namespace NatureFX.Rendering {
 		[DllImport(DllName)] private static extern void NFX_Native_SetWind(float[] frame, int active);
 		[DllImport(DllName)] private static extern int NFX_Native_RtStatus(byte[] buffer, int size);
 		[DllImport(DllName)] private static extern int NFX_Native_NrdStatus(byte[] buffer, int size);
+		[DllImport(DllName)] private static extern int NFX_Native_DlssStatus(byte[] buffer, int size);
+		[DllImport(DllName)] private static extern int NFX_Native_DlssCaps();
 		[DllImport(DllName)] private static extern void NFX_Native_ClearScene();
 		[DllImport(DllName)] private static extern int NFX_Native_AddGeometry(IntPtr vertexBuffer, ulong vertexAddressOffset, uint vertexStride, uint vertexCount, int positionFormat,
 		                                                                      IntPtr indexBuffer, ulong indexAddressOffset, uint indexCount, int indexFormat, int opaque,
@@ -247,6 +249,34 @@ namespace NatureFX.Rendering {
 					return Encoding.UTF8.GetString(buffer, 0, Math.Max(0, length));
 				} catch (Exception e) {
 					return $"unavailable ({e.GetType().Name}: the engine's DLL is older than the mod)";
+				}
+			}
+		}
+		public static string DlssStatus {
+			get {
+				if (!Supports("dlss")) {
+					return "the engine's DLL is older than the mod";
+				}
+				try {
+					var buffer = new byte[256];
+					int length = NFX_Native_DlssStatus(buffer, buffer.Length);
+					return Encoding.UTF8.GetString(buffer, 0, Math.Max(0, length));
+				} catch (Exception e) {
+					return $"unavailable ({e.GetType().Name})";
+				}
+			}
+		}
+		// DLSS Ray Reconstruction on this GPU: -1 not known yet (NGX starts with the first DLSS frame), 0 no, 1 yes
+		public static int DlssRayReconstructionAvailable {
+			get {
+				if (!Supports("dlss-rr")) {
+					return 0;
+				}
+				try {
+					int caps = NFX_Native_DlssCaps();
+					return caps < 0 ? -1 : (caps & 2) != 0 ? 1 : 0;
+				} catch (Exception) {
+					return 0;
 				}
 			}
 		}
@@ -914,6 +944,114 @@ namespace NatureFX.Rendering {
 			Marshal.WriteInt32(slot, 36, NrdReset ? 1 : 0);
 			Marshal.WriteInt32(slot, 320, mode);
 			cmd.IssuePluginEventAndData(NFX_Native_RenderEventAndDataFunc(), eventId, slot);
+		}
+
+		// ------------------------------------------------------------------ DLSS (NFXNative Dlss.inl)
+		// The colour (HDR, pre-exposed) anti-aliased by DLSS, at the render resolution (DLAA: output is color) or upscaled
+		// to the output's: PrepareDlss packs it with the motion and the depth, render event 9 runs DLSS on Unity's queue,
+		// UnpackDlss writes the result into output. jitter: the projection's offset this frame in render pixels; reset:
+		// the history dropped; motion: Dlaa.DevMotion; current / previous: camera relative world to clip without the
+		// jitter; quality: NVSDK_NGX_PerfQuality_Value (DLAA 5).
+		private static GraphicsBuffer dlssBuffer_, dlssOutput_;
+		private static IntPtr dlssBufferPtr_, dlssOutputPtr_, dlssEvents_;
+		private static int dlssPixels_, dlssOutputPixels_, dlssEvent_;
+		private const int DlssEventSize = 192, DlssEvents = 8;
+		private static GraphicsBuffer dlssGuides_;
+		private static IntPtr dlssGuidesPtr_;
+		private static int dlssGuidePixels_;
+		private static readonly float[] dlssMatrices_ = new float[32];
+		private static readonly int DlssGuidesId = Shader.PropertyToID("_NFX_DlssGuides");
+		private static readonly int DlssGuideDiffuseId = Shader.PropertyToID("_NFX_DlssGuideDiffuse");
+		private static readonly int DlssGuideSpecularId = Shader.PropertyToID("_NFX_DlssGuideSpecular");
+		private static readonly int DlssRayReconstructionId = Shader.PropertyToID("_NFX_DlssRR");
+		private static readonly int DlssColorId = Shader.PropertyToID("_NFX_DlssColor");
+		private static readonly int DlssBufferId = Shader.PropertyToID("_NFX_DlssBuffer");
+		private static readonly int DlssModeId = Shader.PropertyToID("_NFX_DlssMode");
+		private static readonly int DlssCurrentId = Shader.PropertyToID("_NFX_DlssCurrentVP");
+		private static readonly int DlssPreviousId = Shader.PropertyToID("_NFX_DlssPreviousVP");
+
+		private static void DlssBuffer(ref GraphicsBuffer buffer, ref IntPtr ptr, ref int pixels, int wanted, string name) {
+			if (buffer != null && pixels == wanted) {
+				return;
+			}
+			if (buffer != null) {
+				retired_.Add((buffer, Time.frameCount));
+			}
+			pixels = wanted;
+			buffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, wanted), 16) { name = name };
+			ptr = buffer.GetNativeBufferPtr();
+		}
+
+		public static bool Dlss(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle color, RTHandle output, int width, int height,
+		                        int outWidth, int outHeight, Vector2 jitter, bool reset, int motion, Matrix4x4 current, Matrix4x4 previous, int quality,
+		                        RTHandle guideDiffuse = null, RTHandle guideSpecular = null, Matrix4x4 view = default, Matrix4x4 projection = default) {
+			if (bridge == null || !Ready || !Supports("dlss")) {
+				return false;
+			}
+			DlssBuffer(ref dlssBuffer_, ref dlssBufferPtr_, ref dlssPixels_, width * height, "NFX_DlssBuffer");
+			bool upscaling = outWidth != width || outHeight != height;
+			if (upscaling) {
+				DlssBuffer(ref dlssOutput_, ref dlssOutputPtr_, ref dlssOutputPixels_, outWidth * outHeight, "NFX_DlssOutput");
+			}
+			var outBuffer = upscaling ? dlssOutput_ : dlssBuffer_;
+			var outPtr = upscaling ? dlssOutputPtr_ : dlssBufferPtr_;
+
+			int prepare = bridge.FindKernel("PrepareDlss");
+			cmd.SetComputeVectorParam(bridge, TargetSizeId, new Vector4(width, height, 1.0f / width, 1.0f / height));
+			cmd.SetComputeFloatParam(bridge, DlssModeId, motion);
+			cmd.SetComputeMatrixParam(bridge, DlssCurrentId, current);
+			cmd.SetComputeMatrixParam(bridge, DlssPreviousId, previous);
+			cmd.SetComputeTextureParam(bridge, prepare, DlssColorId, color);
+			cmd.SetComputeTextureParam(bridge, prepare, CameraDepthId, ctx.cameraDepthBuffer);
+			cmd.SetComputeTextureParam(bridge, prepare, MotionVectorsId, ctx.cameraMotionVectorsBuffer);
+			cmd.SetComputeBufferParam(bridge, prepare, DlssBufferId, dlssBuffer_);
+			// Ray Reconstruction: the albedos, the normals and the roughness too (a second uint4 per pixel)
+			bool rr = guideDiffuse != null && guideSpecular != null;
+			// made once at the render size and kept (switching it with RR every frame remade 16 MB a frame)
+			if (rr || dlssGuides_ == null) {
+				DlssBuffer(ref dlssGuides_, ref dlssGuidesPtr_, ref dlssGuidePixels_, rr ? width * height : 1, "NFX_DlssGuides");
+			}
+			cmd.SetComputeFloatParam(bridge, DlssRayReconstructionId, rr ? 1.0f : 0.0f);
+			// unused without RR, but bound as what the kernel declares (TEXTURE2D_X: a texture array here): a plain 2D
+			// texture made Unity skip the whole dispatch, and DLSS upscaled whatever the buffer held
+			cmd.SetComputeTextureParam(bridge, prepare, DlssGuideDiffuseId, rr ? guideDiffuse : TextureXR.GetBlackTexture());
+			cmd.SetComputeTextureParam(bridge, prepare, DlssGuideSpecularId, rr ? guideSpecular : TextureXR.GetBlackTexture());
+			cmd.SetComputeTextureParam(bridge, prepare, NormalBufferId, ctx.cameraNormalBuffer);
+			cmd.SetComputeBufferParam(bridge, prepare, DlssGuidesId, dlssGuides_);
+			cmd.DispatchCompute(bridge, prepare, (width + 7) / 8, (height + 7) / 8, TextureXR.slices);
+
+			if (dlssEvents_ == IntPtr.Zero) {
+				dlssEvents_ = Marshal.AllocHGlobal(DlssEventSize * DlssEvents);
+			}
+			var slot = dlssEvents_ + DlssEventSize * (dlssEvent_++ % DlssEvents);
+			Marshal.WriteIntPtr(slot, 0, dlssBufferPtr_);
+			Marshal.WriteIntPtr(slot, 8, outPtr);
+			Marshal.WriteInt32(slot, 16, width);
+			Marshal.WriteInt32(slot, 20, height);
+			Marshal.WriteInt32(slot, 24, outWidth);
+			Marshal.WriteInt32(slot, 28, outHeight);
+			Marshal.Copy(new[] { jitter.x, jitter.y }, 0, slot + 32, 2);
+			Marshal.WriteInt32(slot, 40, reset ? 1 : 0);
+			Marshal.Copy(new[] { Time.unscaledDeltaTime * 1000.0f }, 0, slot + 44, 1);
+			Marshal.WriteInt32(slot, 48, quality);
+			Marshal.WriteInt32(slot, 52, rr ? 1 : 0);
+			Marshal.WriteIntPtr(slot, 56, dlssGuidesPtr_);
+			// Ray Reconstruction's camera without the jitter: world to view (absolute) and view to clip (as rendered
+			// into a texture, reversed depth), Matrix4x4's column major order
+			var clip = rr ? GL.GetGPUProjectionMatrix(projection, true) : Matrix4x4.zero;
+			for (int i = 0; i < 16; ++i) {
+				dlssMatrices_[i] = view[i];
+				dlssMatrices_[16 + i] = clip[i];
+			}
+			Marshal.Copy(dlssMatrices_, 0, slot + 64, 32);
+			cmd.IssuePluginEventAndData(NFX_Native_RenderEventAndDataFunc(), 9, slot);
+
+			int unpack = bridge.FindKernel("UnpackDlss");
+			cmd.SetComputeVectorParam(bridge, TargetSizeId, new Vector4(outWidth, outHeight, 1.0f / outWidth, 1.0f / outHeight));
+			cmd.SetComputeBufferParam(bridge, unpack, DlssBufferId, outBuffer);
+			cmd.SetComputeTextureParam(bridge, unpack, NativeTargetId, output);
+			cmd.DispatchCompute(bridge, unpack, (outWidth + 7) / 8, (outHeight + 7) / 8, TextureXR.slices);
+			return true;
 		}
 
 		// The surfaces the ambient light and the local light shadows trace from (they share the resolution); the

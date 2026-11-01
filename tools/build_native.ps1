@@ -62,6 +62,15 @@ foreach ($name in @('NrdSigmaPack', 'NrdSigmaUnpack', 'NrdReblurPack', 'NrdReblu
 }
 $nrdInclude = Join-Path $nrd 'Include'
 
+# NVIDIA DLSS (Dlss.inl): the NGX SDK from %USERPROFILE%\NatureFX-Deps\DLSS (github.com/NVIDIA/DLSS), its static
+# library (/MT) and nvngx_dlss.dll next to NFXNative.dll
+$dlss = if ($env:NFX_DLSS) { $env:NFX_DLSS } else { Join-Path $env:USERPROFILE 'NatureFX-Deps\DLSS' }
+foreach ($name in @('DlssPack', 'DlssUnpack', 'DlssPackGuides')) {
+	& $dxc -nologo -T cs_6_5 -E main -O3 -Vn "g_$name" -Fh (Join-Path $out "$name.h") -Fo (Join-Path $out "$name.cso") (Join-Path $src "shaders\$name.hlsl")
+	if ($LASTEXITCODE -ne 0) { throw "dxc failed on $name" }
+}
+$dlssInclude = Join-Path $dlss 'include'
+
 # the compiled shaders as files too: the engine prefers them to its embedded copies once reloaded (never locked, so
 # they can be replaced while the game runs)
 $dest = Join-Path $game 'kino\mods\NatureFX'
@@ -74,7 +83,7 @@ if ($ShadersOnly) {
 }
 $nrdLibs = "`"$(Join-Path $nrd '_Bin\NRD.lib')`" `"$(Join-Path $nrd '_Build\_deps\shadermake-build\ShaderMakeBlob.lib')`""
 
-$cl = "cl /nologo /O2 /EHsc /std:c++17 /utf-8 /W3 /LD /I`"$agilityInclude`" /I`"$pluginApi`" /I`"$out`" /I`"$probe`" /I`"$nrdInclude`" `"$src\src\NFXNative.cpp`" /Fo`"$out\\`" /link d3d12.lib dxgi.lib $nrdLibs /OUT:`"$out\NFXNative.dll`" /IMPLIB:`"$out\NFXNative.lib`""
+$cl = "cl /nologo /O2 /EHsc /std:c++17 /utf-8 /W3 /LD /I`"$agilityInclude`" /I`"$pluginApi`" /I`"$out`" /I`"$probe`" /I`"$nrdInclude`" /I`"$dlssInclude`" `"$src\src\NFXNative.cpp`" /Fo`"$out\\`" /link d3d12.lib dxgi.lib $nrdLibs `"$(Join-Path $dlss 'lib\Windows_x86_64\x64\nvsdk_ngx_s.lib')`" advapi32.lib version.lib user32.lib /OUT:`"$out\NFXNative.dll`" /IMPLIB:`"$out\NFXNative.lib`""
 cmd /c "`"$vcvars`" >nul && $cl"
 if ($LASTEXITCODE -ne 0) { throw 'cl failed' }
 
@@ -82,4 +91,8 @@ if ($LASTEXITCODE -ne 0) { throw 'cl failed' }
 New-Item -ItemType Directory -Force (Join-Path $dest 'D3D12') | Out-Null
 Copy-Item -Force (Join-Path $agility 'build\native\bin\x64\D3D12Core.dll') (Join-Path $dest 'D3D12')
 Copy-Item -Force (Join-Path $out 'NFXNative.dll') $dest
+# DLSS's runtime (NGX loads it from NFXNative.dll's folder) and its licence
+Copy-Item -Force (Join-Path $dlss 'lib\Windows_x86_64\rel\nvngx_dlss.dll') $dest
+Copy-Item -Force (Join-Path $dlss 'lib\Windows_x86_64\rel\nvngx_dlssd.dll') $dest
+Copy-Item -Force (Join-Path $dlss 'LICENSE.txt') (Join-Path $dest 'DLSS-LICENSE.txt')
 Write-Host "[NFXNative] Built and copied to $dest"

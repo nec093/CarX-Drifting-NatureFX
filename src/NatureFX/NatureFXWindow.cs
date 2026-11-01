@@ -787,6 +787,20 @@ namespace NatureFX {
 			Widgets.BeginDependent(S.NativePost);
 			Other(Widgets.Slider("Bloom", S.PostBloom, 0, 0.2f, v => S.PostBloom = v, "0.000"));
 			Widgets.Info("The share of all light a lens and the eye scatter around: bright lamps glow, a grey wall hardly at all (no threshold).");
+			Other(Widgets.Switch("NVIDIA DLSS", S.Dlaa, v => S.Dlaa = v));
+			Widgets.BeginDependent(S.Dlaa);
+			int dlss = Mathf.Clamp(S.DlssQuality, 0, Rendering.Dlaa.Qualities.Length - 1);
+			if (Widgets.Chips(ref dlss, Rendering.Dlaa.Qualities)) {
+				S.DlssQuality = dlss;
+				Other(true);
+			}
+			Other(Widgets.Switch("Ray Reconstruction", S.DlssRayReconstruction, v => S.DlssRayReconstruction = v,
+				"DLSS denoises the ray traced sun shadows and reflections with the whole picture, in place of NRD and NatureFX's filters " +
+				"(ambient light, GI and lamp shadows keep theirs). Needs the exact sun light (Shadows)."));
+			Widgets.EndDependent();
+			Widgets.Info("In place of HDRP's TAA (RTX GPUs; others keep TAA). DLAA: anti-aliasing at the display resolution. Quality, Balanced, " +
+			             "Performance, Ultra perf.: rendered at 67, 58, 50, 33 % of it and upscaled (faster).");
+			Widgets.Info($"Now: {Rendering.Dlaa.Status}");
 			Widgets.EndDependent();
 			Widgets.Info($"Now: {mod_.Post.Status}");
 			Widgets.EndCard();
@@ -1054,6 +1068,18 @@ namespace NatureFX {
 			Widgets.Switch("Reflections (REBLUR)", NativeEngine.DevNrdReflections, v => NativeEngine.DevNrdReflections = v);
 			Widgets.Switch("Cars' motion vector pass", NativeEngine.DevCarMotionVectors, v => NativeEngine.DevCarMotionVectors = v,
 				"NRD follows a moving car's pixels by its motion vectors; the game draws cars without that pass.");
+			Widgets.EndCard();
+			Widgets.BeginCard("DLAA", "What DLSS is handed, to find what makes the picture worse than TAA. Not saved.");
+			int sign = Rendering.Dlaa.DevJitterSign;
+			if (Widgets.Chips(ref sign, Rendering.Dlaa.JitterSigns)) {
+				Rendering.Dlaa.DevJitterSign = sign;
+			}
+			int motion = Rendering.Dlaa.DevMotion;
+			if (Widgets.Chips(ref motion, Rendering.Dlaa.Motions)) {
+				Rendering.Dlaa.DevMotion = motion;
+			}
+			Widgets.Slider("Jitter", Rendering.Dlaa.DevJitterScale, 0, 1, v => Rendering.Dlaa.DevJitterScale = v, "0.00");
+			Widgets.Info($"Now: {Rendering.Dlaa.Status}");
 			Widgets.EndCard();
 			Widgets.BeginCard("System", null, true);
 			Widgets.Info(Capabilities.Describe());

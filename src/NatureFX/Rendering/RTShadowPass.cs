@@ -173,6 +173,14 @@ namespace NatureFX.Rendering {
 		public readonly HistoryGuard History = new();
 		private RTHandle color_;
 		private RTHandle[] gbuffer_;
+		// DLSS Ray Reconstruction's guides (NFX_SunExact DlssGuides: diffuse and specular albedo), this frame's when
+		// GuidesFrame is Time.frameCount (Dlaa, PostPass)
+		private RTHandle guideDiffuse_, guideSpecular_;
+		private RenderTargetIdentifier[] guideIds_;
+		public static RTHandle GuideDiffuse { get; private set; }
+		public static RTHandle GuideSpecular { get; private set; }
+		public static int GuidesFrame { get; private set; } = -10;
+		public static int ExactFrame { get; private set; } = -10;
 		private RenderTargetIdentifier[] gbufferIds_;
 		private RTHandle dbufferBlack_, dbufferNormal_, dbufferWhite_; // neutral decal buffers: no decal anywhere
 		private RTHandle sunExact_;
@@ -261,6 +269,9 @@ namespace NatureFX.Rendering {
 			lampHistoryB_ = Alloc(Vector2.one, "NFX_LampMaskHistoryB", GraphicsFormat.R32G32B32A32_SFloat, false);
 			lampsTotal_ = Alloc(Vector2.one, "NFX_LampsTotal", GraphicsFormat.R16G16B16A16_SFloat, false);
 			lampHistoryValid_ = false;
+			guideDiffuse_ = Alloc(Vector2.one, "NFX_DlssGuideDiffuse", GraphicsFormat.R16G16B16A16_SFloat, false);
+			guideSpecular_ = Alloc(Vector2.one, "NFX_DlssGuideSpecular", GraphicsFormat.R16G16B16A16_SFloat, false);
+			guideIds_ = new RenderTargetIdentifier[] { guideDiffuse_, guideSpecular_ };
 		}
 
 		private void ReleaseExactTargets() {
@@ -278,6 +289,10 @@ namespace NatureFX.Rendering {
 			lampHistoryA_.Release();
 			lampHistoryB_.Release();
 			lampsTotal_.Release();
+			guideDiffuse_.Release();
+			guideSpecular_.Release();
+			GuideDiffuse = GuideSpecular = null;
+			GuidesFrame = -10;
 			lampMask_?.Release();
 			lampMask_ = null;
 			gbuffer_ = null;
@@ -321,6 +336,15 @@ namespace NatureFX.Rendering {
 			props_.SetVector(RTSunDir, SunDirection);
 			CoreUtils.SetRenderTarget(cmd, sunExact_, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, SunExactMaterial, props_, 0);
+			ExactFrame = Time.frameCount;
+			// DLSS Ray Reconstruction's albedos, from the same G-buffer
+			if (Dlaa.RayReconstruction) {
+				CoreUtils.SetRenderTarget(cmd, guideIds_, ctx.cameraDepthBuffer, ClearFlag.None);
+				CoreUtils.DrawFullScreen(cmd, SunExactMaterial, props_, 2);
+				GuideDiffuse = guideDiffuse_;
+				GuideSpecular = guideSpecular_;
+				GuidesFrame = Time.frameCount;
+			}
 			// the light HDRP's lamps added, for the old blocked share (without lamp masks, DrawExactLamps)
 			if (!maskUsed_) {
 				CoreUtils.SetRenderTarget(cmd, lampsExact_, ClearFlag.None);
@@ -492,8 +516,9 @@ namespace NatureFX.Rendering {
 			bool converged = History.StillFrames > 30;
 			// the DXR 1.2 device's sun shadows arrive one frame late (RtDevice.inl): the filter reads them reprojected
 			// NRD's SIGMA (NativeEngine.NrdSun) already denoised them, history included: passed through as they are
+			// DLSS Ray Reconstruction denoises them with the whole picture: this frame's rays as they are
 			var sunResult = !TraceShadows ? null
-				: NativeEngine.NrdSun ? Filter(cmd, sun_, sunSize, 1.0f, PassDenoiseSun, sunRadius, fov, 0)
+				: NativeEngine.NrdSun || Dlaa.RayReconstruction ? Filter(cmd, sun_, sunSize, 1.0f, PassDenoiseSun, sunRadius, fov, 0)
 				: Filter(cmd, sun_, sunSize, blend, PassDenoiseSun, sunRadius, fov, 2, NativeEngine.Dxr12SunActive, StillShare(blend, 1.0f / 16.0f));
 			// GI: one ray per half resolution pixel with every bounce behind it varies far more than the one bounce
 			// ambient light: a longer history (about 20 frames) and a fifth, wider blur step. Ambient light and lamp

@@ -185,6 +185,9 @@ namespace NatureFX {
 		public float NightVision { get; set; }
 		public float LensFlare { get; set; }
 		public bool NativePost { get; set; }               // roadmap D: NatureFX's own exposure, bloom, tone curve and colour
+		public bool Dlaa { get; set; }                     // NVIDIA DLSS (own engine) in place of HDRP's TAA, with the own post
+		public int DlssQuality { get; set; }               // 0 DLAA, 1 Quality, 2 Balanced, 3 Performance, 4 Ultra performance (upscaling)
+		public bool DlssRayReconstruction { get; set; }    // DLSS Ray Reconstruction: the sun shadows and reflections denoised by DLSS
 		public bool NativeParticles { get; set; }          // roadmap E: the game's own particles drawn with NatureFX/Particle
 		public bool NativeGlass { get; set; }              // roadmap E: the own engine draws the glass whole (HDRP's hidden)
 		public float PostBloom { get; set; }               // the share of the light the lens and eye scatter (own post)
@@ -382,6 +385,9 @@ namespace NatureFX {
 		public float NightVision { get; set; }
 		public float LensFlare { get; set; }
 		public bool NativePost { get; set; }               // roadmap D: NatureFX's own exposure, bloom, tone curve and colour
+		public bool Dlaa { get; set; }                     // NVIDIA DLSS (own engine) in place of HDRP's TAA, with the own post
+		public int DlssQuality { get; set; }               // 0 DLAA, 1 Quality, 2 Balanced, 3 Performance, 4 Ultra performance (upscaling)
+		public bool DlssRayReconstruction { get; set; }    // DLSS Ray Reconstruction: the sun shadows and reflections denoised by DLSS
 		public bool NativeParticles { get; set; }          // roadmap E: the game's own particles drawn with NatureFX/Particle
 		public bool NativeGlass { get; set; }              // roadmap E: the own engine draws the glass whole (HDRP's hidden)
 		public float PostBloom { get; set; }               // the share of the light the lens and eye scatter (own post)
@@ -728,6 +734,11 @@ namespace NatureFX {
 				// the moon's strength from 0.001 to 0.1 (user): 0.1 about a real full moon, now that the sun is real (Units)
 				d.MoonBrightness = 0.1f;
 				d.ConfigVersion = 56;
+			}
+			if (d.ConfigVersion < 57) {
+				// DLAA in place of TAA (falls back to TAA without an RTX GPU)
+				d.Dlaa = true;
+				d.ConfigVersion = 57;
 			}
 		}
 

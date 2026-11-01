@@ -28,6 +28,8 @@ namespace NatureFX.Rendering {
 		private static readonly int ModeId = Shader.PropertyToID("_NFX_PostMode");
 		private static readonly int FlareId = Shader.PropertyToID("_NFX_PostFlare");
 		private static readonly int FlareTexId = Shader.PropertyToID("_NFX_PostFlareTex");
+		private static readonly int PlainId = Shader.PropertyToID("_NFX_PostPlain");
+		private static readonly int UpscaledFinalId = Shader.PropertyToID("_NFX_UpscaledFinal");
 
 		public Material Material;
 		public float Bloom = 0.04f;        // the share of the light scattered by the lens and the eye
@@ -43,12 +45,19 @@ namespace NatureFX.Rendering {
 		private RTHandle source_;
 		private readonly RTHandle[] down_ = new RTHandle[BloomLevels], up_ = new RTHandle[BloomLevels];
 		private RenderTexture meter_;
+		// DLSS upscaling (Dlaa): the display resolution's own textures (not scaled by HDRP's dynamic resolution): the
+		// upscaled colour, the bloom chain and the finished picture HDRP's TAAU pass draws (NFX_Upscaled)
+		private RTHandle fullSource_, fullFinal_;
+		private readonly RTHandle[] fullDown_ = new RTHandle[BloomLevels], fullUp_ = new RTHandle[BloomLevels];
+		private int fullWidth_, fullHeight_;
 		private bool pending_;
 		private readonly MaterialPropertyBlock props_ = new();
 
 		protected override void Setup(ScriptableRenderContext renderContext, CommandBuffer cmd) {
+			// written by DLAA's UnpackDlss (a compute shader): without random write Unity refused the write and the
+			// jittered picture went on unresolved
 			source_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension,
-				colorFormat: GraphicsFormat.R16G16B16A16_SFloat, useDynamicScale: true, name: "NFX_Post_Source");
+				colorFormat: GraphicsFormat.R16G16B16A16_SFloat, enableRandomWrite: true, useDynamicScale: true, name: "NFX_Post_Source");
 			for (int i = 0; i < BloomLevels; ++i) {
 				var scale = Vector2.one / (2 << i);
 				down_[i] = RTHandles.Alloc(scale, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.B10G11R11_UFloatPack32,
@@ -60,7 +69,40 @@ namespace NatureFX.Rendering {
 			meter_.Create();
 		}
 
+		private void ReleaseFull() {
+			fullSource_?.Release();
+			fullFinal_?.Release();
+			fullSource_ = fullFinal_ = null;
+			for (int i = 0; i < BloomLevels; ++i) {
+				fullDown_[i]?.Release();
+				fullUp_[i]?.Release();
+				fullDown_[i] = fullUp_[i] = null;
+			}
+			fullWidth_ = fullHeight_ = 0;
+		}
+
+		private void AllocateFull(int width, int height) {
+			if (fullSource_ != null && fullWidth_ == width && fullHeight_ == height) {
+				return;
+			}
+			ReleaseFull();
+			fullWidth_ = width;
+			fullHeight_ = height;
+			fullSource_ = RTHandles.Alloc(width, height, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.R16G16B16A16_SFloat,
+				enableRandomWrite: true, name: "NFX_Post_FullSource");
+			fullFinal_ = RTHandles.Alloc(width, height, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.R16G16B16A16_SFloat,
+				name: "NFX_Post_FullFinal");
+			for (int i = 0; i < BloomLevels; ++i) {
+				int w = Mathf.Max(1, width >> (i + 1)), h = Mathf.Max(1, height >> (i + 1));
+				fullDown_[i] = RTHandles.Alloc(w, h, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.B10G11R11_UFloatPack32,
+					name: $"NFX_Post_FullDown{i}");
+				fullUp_[i] = RTHandles.Alloc(w, h, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.B10G11R11_UFloatPack32,
+					name: $"NFX_Post_FullUp{i}");
+			}
+		}
+
 		protected override void Cleanup() {
+			ReleaseFull();
 			source_?.Release();
 			for (int i = 0; i < BloomLevels; ++i) {
 				down_[i]?.Release();
@@ -85,12 +127,30 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			var cmd = ctx.cmd;
-			int width = ctx.hdCamera.actualWidth, height = ctx.hdCamera.actualHeight;
+			int renderWidth = ctx.hdCamera.actualWidth, renderHeight = ctx.hdCamera.actualHeight;
 			CustomPassUtils.Copy(ctx, ctx.cameraColorBuffer, source_);
+			// DLSS (in place of HDRP's TAA) on the HDR colour before everything here, so the meter, the bloom and the
+			// flare see the anti-aliased picture: DLAA in place, or upscaled to the display resolution, where the rest of
+			// this pass then runs on its own textures and leaves the picture for HDRP's TAAU pass (NFX_Upscaled)
+			var cam = ctx.hdCamera.camera;
+			int displayWidth = cam.pixelWidth, displayHeight = cam.pixelHeight;
+			bool upscaled = false;
+			if (Dlaa.Upscaling && (displayWidth > renderWidth || displayHeight > renderHeight)) {
+				AllocateFull(displayWidth, displayHeight);
+				upscaled = Dlaa.Run(ctx, source_, fullSource_, renderWidth, renderHeight, displayWidth, displayHeight);
+			} else {
+				Dlaa.Run(ctx, source_, source_, renderWidth, renderHeight, renderWidth, renderHeight);
+			}
+			var source = upscaled ? fullSource_ : source_;
+			var down = upscaled ? fullDown_ : down_;
+			var up = upscaled ? fullUp_ : up_;
+			var target = upscaled ? fullFinal_ : ctx.cameraColorBuffer;
+			int width = upscaled ? displayWidth : renderWidth, height = upscaled ? displayHeight : renderHeight;
 			props_.Clear();
+			props_.SetFloat(PlainId, upscaled ? 1.0f : 0.0f);
 
 			// meter
-			props_.SetTexture(SourceId, source_);
+			props_.SetTexture(SourceId, source);
 			props_.SetVector(TargetSizeId, Size(MeterW, MeterH));
 			CoreUtils.SetRenderTarget(cmd, meter_, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, Material, props_, PassMeter);
@@ -114,19 +174,19 @@ namespace NatureFX.Rendering {
 			int levels = Bloom > 0.0f ? BloomLevels : 0;
 			for (int i = 0; i < levels; ++i) {
 				float w = Mathf.Max(1, width >> (i + 1)), h = Mathf.Max(1, height >> (i + 1));
-				var from = i == 0 ? source_ : down_[i - 1];
+				var from = i == 0 ? source : down[i - 1];
 				float fw = i == 0 ? width : Mathf.Max(1, width >> i), fh = i == 0 ? height : Mathf.Max(1, height >> i);
 				props_.SetTexture(SourceId, from);
 				props_.SetVector(SourceSizeId, Size(fw, fh));
-				Draw(cmd, down_[i], i == 0 ? PassDownFirst : PassDown, Size(w, h));
+				Draw(cmd, down[i], i == 0 ? PassDownFirst : PassDown, Size(w, h));
 			}
 			for (int i = levels - 2; i >= 0; --i) {
 				float w = Mathf.Max(1, width >> (i + 1)), h = Mathf.Max(1, height >> (i + 1));
-				var low = i == levels - 2 ? down_[levels - 1] : up_[i + 1];
-				props_.SetTexture(SourceId, down_[i]);
+				var low = i == levels - 2 ? down[levels - 1] : up[i + 1];
+				props_.SetTexture(SourceId, down[i]);
 				props_.SetTexture(LowId, low);
 				props_.SetVector(SourceSizeId, Size(Mathf.Max(1, width >> (i + 2)), Mathf.Max(1, height >> (i + 2))));
-				Draw(cmd, up_[i], PassUp, Size(w, h));
+				Draw(cmd, up[i], PassUp, Size(w, h));
 			}
 
 			// the lens flare (drawn in the final pass): how bright each light shows, from the bloom's quarter resolution level;
@@ -135,13 +195,16 @@ namespace NatureFX.Rendering {
 			var flareParams = new Vector4(FlareGhosts, FlareStreaks, 4.0f, flare ? 1.0f : 0.0f);
 
 			// the finished picture
-			props_.SetTexture(SourceId, source_);
-			props_.SetTexture(FlareTexId, flare ? down_[1] : source_);
+			props_.SetTexture(SourceId, source);
+			props_.SetTexture(FlareTexId, flare ? down[1] : source);
 			props_.SetVector(FlareId, flareParams);
-			props_.SetTexture(BloomId, levels > 0 ? (levels > 1 ? up_[0] : down_[0]) : source_);
+			props_.SetTexture(BloomId, levels > 0 ? (levels > 1 ? up[0] : down[0]) : source);
 			props_.SetVector(ParamsId, new Vector4(levels > 0 ? Bloom : 0.0f, Compensation, Contrast, Saturation));
 			props_.SetVector(ModeId, new Vector4(Tonemap, levels, 0.0f, 0.0f));
-			Draw(cmd, ctx.cameraColorBuffer, PassFinal, Size(width, height));
+			Draw(cmd, target, PassFinal, Size(width, height));
+			if (upscaled) {
+				cmd.SetGlobalTexture(UpscaledFinalId, fullFinal_);
+			}
 		}
 	}
 
@@ -175,6 +238,8 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			root_ = new GameObject("NatureFX.Post");
+			Dlaa.Hook();
+			Dlaa.SetShader(bundle.Get(Dlaa.UpscaledShaderName));
 			UnityEngine.Object.DontDestroyOnLoad(root_);
 			profile_ = ScriptableObject.CreateInstance<VolumeProfile>();
 			profile_.name = "NatureFX.Post";
@@ -217,6 +282,7 @@ namespace NatureFX.Rendering {
 		}
 
 		public void Reload(ShaderBundle bundle) {
+			Dlaa.SetShader(bundle.Get(Dlaa.UpscaledShaderName));
 			var shader = bundle.Get(ShaderName);
 			if (shader != null && material_ != null) {
 				material_.shader = shader;
@@ -224,6 +290,7 @@ namespace NatureFX.Rendering {
 		}
 
 		public void Destroy() {
+			Dlaa.Unhook();
 			if (root_ != null) {
 				UnityEngine.Object.Destroy(root_);
 			}
@@ -247,6 +314,7 @@ namespace NatureFX.Rendering {
 				pass_.enabled = active;
 			}
 			if (!active) {
+				Dlaa.Wanted = false;
 				ev_ = float.NaN;
 				Status = pass_ == null ? "not in the shader bundle (HDRP's post-processing)" : "off (HDRP's post-processing)";
 				return;
@@ -259,6 +327,9 @@ namespace NatureFX.Rendering {
 			pass_.Tonemap = s.AcesTonemapping ? Mathf.Clamp(s.TonemapMode, 0, 3) : 0;
 			pass_.FlareGhosts = LensEffects.FlareGhosts;
 			pass_.FlareStreaks = LensEffects.FlareStreaks;
+			Dlaa.Wanted = s.Dlaa;
+			Dlaa.Quality = s.DlssQuality;
+			Dlaa.RayReconstructionWanted = s.DlssRayReconstruction;
 
 			// eye adaptation (with the game's exposure chosen, HDRP keeps it)
 			exposure_.active = s.ExposureMode == 1;

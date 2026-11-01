@@ -26,6 +26,8 @@
 #pragma kernel SkyCubeUnpack
 #pragma kernel FogReproject
 #pragma kernel FogIntegrate
+#pragma kernel PrepareDlss
+#pragma kernel UnpackDlss
 
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
 #include "Packages/com.unity.render-pipelines.high-definition/Runtime/ShaderLibrary/ShaderVariables.hlsl"
@@ -654,4 +656,86 @@ void PrepareNrdGuide(uint3 id : SV_DispatchThreadID)
     float viewZ = depth == UNITY_RAW_FAR_CLIP_VALUE ? 1e6 : LinearEyeDepth(depth, _ZBufferParams);
     _NFX_NrdGuide[index * 2] = float4(nd.normalWS, nd.perceptualRoughness);
     _NFX_NrdGuide[index * 2 + 1] = float4(viewZ, -motion, 0.0);
+}
+
+// ------------------------------------------------------------------ DLAA (NFXNative Dlss.inl)
+// The camera's colour, motion and depth for DLSS, a uint4 per pixel: the pre-exposed colour as 4 halves, the motion to
+// the previous frame in pixels (previous - current, as DLSS wants it) as 2 halves, the device depth. The motion is the
+// camera's own, from its matrices without the jitter (Dlaa: what DLSS is told, the jitter left out), plus what HDRP's
+// motion vectors say beyond the camera's (a car moving of itself), measured against HDRP's own matrices so whatever
+// HDRP made of the jitter cancels out.
+TEXTURE2D_X(_NFX_DlssColor);
+RWStructuredBuffer<uint4> _NFX_DlssBuffer;
+float _NFX_DlssMode; // Developer > DLAA: 0 the camera's and what moves of itself, 1 the camera's only, 2 none
+float4x4 _NFX_DlssCurrentVP, _NFX_DlssPreviousVP;
+// Ray Reconstruction (_NFX_DlssRR 1): the guides per pixel, a uint4: diffuse albedo rgb and specular albedo rgb as 6
+// halves, the world normal octahedron encoded as 2 halves; the perceptual roughness goes in the colour's alpha
+float _NFX_DlssRR;
+TEXTURE2D_X(_NFX_DlssGuideDiffuse);
+TEXTURE2D_X(_NFX_DlssGuideSpecular);
+RWStructuredBuffer<uint4> _NFX_DlssGuides;
+
+float2 DlssUV(float4x4 m, float4 p)
+{
+    float4 clip = mul(m, p);
+    float2 uv = clip.xy / clip.w * 0.5 + 0.5;
+#if UNITY_UV_STARTS_AT_TOP
+    uv.y = 1.0 - uv.y;
+#endif
+    return uv;
+}
+
+[numthreads(8, 8, 1)]
+void PrepareDlss(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    uint index = id.y * (uint)_NFX_TargetSize.x + id.x;
+    float4 color = max(LOAD_TEXTURE2D_X(_NFX_DlssColor, id.xy), 0.0);
+    color = min(color, 65000.0);
+    float depth = LOAD_TEXTURE2D_X(_CameraDepthTexture, id.xy).r;
+    bool sky = depth == UNITY_RAW_FAR_CLIP_VALUE;
+    float2 motion = 0.0;
+    if (_NFX_DlssMode < 1.5)
+    {
+        PositionInputs pos = GetPositionInput(id.xy, _ScreenSize.zw, sky ? 0.5 : depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
+        float3 rws = pos.positionWS;
+        // the sky: a direction (no parallax)
+        float4 p = sky ? float4(normalize(rws - GetPrimaryCameraPosition()), 0.0) : float4(rws, 1.0);
+        motion = (DlssUV(_NFX_DlssPreviousVP, p) - DlssUV(_NFX_DlssCurrentVP, p)) * _ScreenSize.xy;
+        float4 motionBuffer = LOAD_TEXTURE2D_X(_NFX_MotionVectors, id.xy);
+        if (_NFX_DlssMode < 0.5 && !sky && motionBuffer.x <= 1.0)
+        {
+            // HDRP's (current - previous, uv) against what its own matrices give for a still point there
+            float2 cameraHdrp = DlssUV(UNITY_MATRIX_PREV_VP, p) - DlssUV(UNITY_MATRIX_VP, p);
+            float2 own = (-motionBuffer.xy - cameraHdrp) * _ScreenSize.xy;
+            if (dot(own, own) > 0.25)
+                motion += own;
+        }
+    }
+    if (_NFX_DlssRR > 0.5)
+    {
+        NormalData nd;
+        DecodeFromNormalBuffer(id.xy, nd);
+        float3 diffuse = sky ? 0.5 : LOAD_TEXTURE2D_X(_NFX_DlssGuideDiffuse, id.xy).rgb;
+        float3 specular = sky ? 0.0 : LOAD_TEXTURE2D_X(_NFX_DlssGuideSpecular, id.xy).rgb;
+        float2 oct = sky ? 0.0 : PackNormalOctQuadEncode(nd.normalWS);
+        color.a = sky ? 1.0 : nd.perceptualRoughness;
+        _NFX_DlssGuides[index] = uint4(f32tof16(diffuse.r) | (f32tof16(diffuse.g) << 16), f32tof16(diffuse.b) | (f32tof16(specular.r) << 16),
+                                       f32tof16(specular.g) | (f32tof16(specular.b) << 16), f32tof16(oct.x) | (f32tof16(oct.y) << 16));
+    }
+    _NFX_DlssBuffer[index] = uint4(f32tof16(color.r) | (f32tof16(color.g) << 16), f32tof16(color.b) | (f32tof16(color.a) << 16),
+                                   f32tof16(motion.x) | (f32tof16(motion.y) << 16), asuint(depth));
+}
+
+// DLAA's result (written back over the colour) into the camera's colour copy
+[numthreads(8, 8, 1)]
+void UnpackDlss(uint3 id : SV_DispatchThreadID)
+{
+    UNITY_XR_ASSIGN_VIEW_INDEX(id.z);
+    if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
+        return;
+    uint4 p = _NFX_DlssBuffer[id.y * (uint)_NFX_TargetSize.x + id.x];
+    _NFX_NativeTarget[COORD_TEXTURE2D_X(id.xy)] = float4(f16tof32(p.x), f16tof32(p.x >> 16), f16tof32(p.y), f16tof32(p.y >> 16));
 }

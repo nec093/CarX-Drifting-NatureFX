@@ -136,3 +136,6 @@ KN マップ側から揺れ方・雪の積もり方・区域ごとの天候を�
 - **NVIDIA Real-Time Denoisers (NRD)**: レイトレースの影のノイズ除去（「NRD SIGMA (sun)」）に NVIDIA の NRD を使用しています。
   NVIDIA, the NVIDIA logo and NRD are trademarks and/or registered trademarks of NVIDIA Corporation.
   NRD は NVIDIA RTX SDKs License に従って配布されます（NatureFX の独自エンジン `NFXNative.dll` にオブジェクトコードとして組み込み）。
+- **NVIDIA DLSS (DLAA)**: アンチエイリアス（Own post-processing の「DLAA」）に NVIDIA DLSS を使用しています。
+  NVIDIA, the NVIDIA logo and DLSS are trademarks and/or registered trademarks of NVIDIA Corporation.
+  DLSS は NVIDIA RTX SDKs License に従って配布されます（NGX ライブラリを `NFXNative.dll` に組み込み、実行時の `nvngx_dlss.dll` / `nvngx_dlssd.dll` を同梱。ライセンス文は `DLSS-LICENSE.txt`）。

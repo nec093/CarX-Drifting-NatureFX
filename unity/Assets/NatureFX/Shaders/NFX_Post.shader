@@ -30,7 +30,9 @@ Shader "Hidden/NatureFX/Post"
     float4 _NFX_PostParams;         // x bloom share, y exposure compensation (EV), z contrast (-1..1), w saturation (-1..1)
     float4 _NFX_PostMode;           // x tone curve: 0 ACES, 1 Neutral, 2 AgX, 3 none; y bloom levels
 
-    #define SampleRT(tex, uv) SAMPLE_TEXTURE2D_X_LOD(tex, s_linear_clamp_sampler, (uv) * _RTHandleScale.xy, 0)
+    float _NFX_PostPlain;           // 1: the textures are the display resolution's own (DLSS upscaling), not scaled RTHandles
+
+    #define SampleRT(tex, uv) SAMPLE_TEXTURE2D_X_LOD(tex, s_linear_clamp_sampler, (uv) * (_NFX_PostPlain > 0.5 ? float2(1.0, 1.0) : _RTHandleScale.xy), 0)
 
     float2 TargetUV(Varyings v)
     {

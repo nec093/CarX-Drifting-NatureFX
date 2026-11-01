@@ -139,7 +139,8 @@ namespace NatureFX.Rendering {
 			props_.SetVector(ComposeParams, new Vector4(1.0f, 0.0f, resetHistory ? 1.0f : History.StillBlend(Mathf.Clamp01(TemporalBlend), 1.0f / 64.0f), frame_));
 			var history = flip_ ? historyA_ : historyB_;
 			var previous = flip_ ? historyB_ : historyA_;
-			if (!NativeEngine.NrdReflections) {
+			// DLSS Ray Reconstruction (Dlaa) denoises them with the whole picture: the trace as it is too
+			if (!NativeEngine.NrdReflections && !Dlaa.RayReconstruction) {
 				props_.SetTexture(TraceTex, trace_);
 				props_.SetTexture(HistoryTex, previous);
 				props_.SetTexture(DistTex, distance_);

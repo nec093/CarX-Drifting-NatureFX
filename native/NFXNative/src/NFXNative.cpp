@@ -679,7 +679,7 @@ NFX_EXPORT int NFX_Native_Info(char* buffer, int size) {
 	s += g_pluginLoadCalled ? (g_unityD3D12 != nullptr ? "yes (D3D12v7)" : "yes (no D3D12v7)") : "no";
 	s += ", device from: " + g_deviceSource;
 	// features the C# side checks before relying on them (an older DLL lacks them)
-	s += ", features: own-glass lamp-mask";
+	s += ", features: own-glass lamp-mask dlss dlss-rr";
 	if (g_device) {
 		D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
 		g_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options));
@@ -1839,6 +1839,9 @@ struct NrdEventData;
 void NrdSigma(const NrdEventData* data);
 void NrdReblur(const NrdEventData* data);
 void NrdReflection(const NrdEventData* data);
+// DLAA in place of TAA (Dlss.inl)
+struct DlssEventData;
+void Dlss(const DlssEventData* data);
 
 void UNITY_INTERFACE_API OnRenderEventAndData(int eventId, void* data) {
 	if (eventId == 3) {
@@ -1849,6 +1852,8 @@ void UNITY_INTERFACE_API OnRenderEventAndData(int eventId, void* data) {
 		NrdReblur(static_cast<const NrdEventData*>(data));
 	} else if (eventId == 7) {
 		NrdReflection(static_cast<const NrdEventData*>(data));
+	} else if (eventId == 9) {
+		Dlss(static_cast<const DlssEventData*>(data));
 	}
 }
 
@@ -2116,6 +2121,7 @@ NFX_EXPORT int NFX_Native_Dxr12Probe(const char* sdkPath, char* buffer, int size
 
 #include "RtDevice.inl"
 #include "Nrd.inl"
+#include "Dlss.inl"
 
 namespace {
 // Render event 8: the shader files NFX_Native_LoadShaders read take the embedded ones' place, and every trace pipeline
@@ -2138,6 +2144,7 @@ void ReloadShaders() {
 	}
 	bool ok = CreateTracePipelines();
 	NrdDropKernels();
+	DlssDropKernels();
 	char line[192];
 	snprintf(line, sizeof(line), "%zu shader files in use; trace pipelines %s", g_shaderFiles.size(),
 	         ok ? "made again" : "failed (a shader file is broken: traces stop until the next reload)");

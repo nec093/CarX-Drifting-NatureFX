@@ -669,8 +669,9 @@ namespace NatureFX.Rendering {
 				shadows_.QuarterResolution = s.RTTraceScale == 1 && !PhotoMode.Active;
 				shadows_.VarianceDenoiser = s.RTDenoiser >= 1;
 				NativeEngine.NrdEnabled = s.RTDenoiser == 2 && s.Enabled;
-				NativeEngine.NrdSun = NativeEngine.NrdEnabled && NativeEngine.DevNrdSun;
-				NativeEngine.NrdReflections = NativeEngine.NrdEnabled && NativeEngine.DevNrdReflections;
+				// DLSS Ray Reconstruction takes the sun shadows and the reflections raw (Dlaa)
+				NativeEngine.NrdSun = NativeEngine.NrdEnabled && NativeEngine.DevNrdSun && !Dlaa.RayReconstruction;
+				NativeEngine.NrdReflections = NativeEngine.NrdEnabled && NativeEngine.DevNrdReflections && !Dlaa.RayReconstruction;
 				shadows_.ShaftDensity = s.RTShaftDensity;
 				shadows_.ShaftAnisotropy = s.RTShaftAnisotropy;
 				shadows_.SunAngularDiameter = Mathf.Clamp(s.SunSize, 0.05f, 5.0f);
