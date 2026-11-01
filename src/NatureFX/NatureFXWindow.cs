@@ -18,14 +18,20 @@ namespace NatureFX {
 		private const float SidebarWidth = 150;
 		private const float DefaultScale = 0.85f;
 
-		private static readonly string[] Tabs = { "Overview", "Sun & time", "Weather", "Road & cars", "Nature", "Settings", "Reflections", "Shadows", "Ambient light & GI", "Exposure & tone", "Shader rebuild", "Developer", "Map", "Sky & fog", "Lighting" };
+		private static readonly string[] Tabs = {
+			"Overview",
+			"Sun & time", "Sky & fog", "Lighting & shadows", "Ambient light & GI", "Reflections & glass",
+			"Exposure & tone", "DLSS", "Lens & eye",
+			"Weather", "Nature", "Road", "Cars", "Map",
+			"Ray tracing", "Shader rebuild", "Settings", "Developer",
+		};
 		private static readonly string[] TonemapNames = { "ACES", "Neutral", "Filmic (GT) / AgX", "None" };
 		private static readonly string[] ReflectionQualityNames = { "Performance", "Balanced", "Quality" };
 		private static readonly string[] BackendNames = { "DXR 1.0", "DXR 1.1" };
 
 		private readonly NatureFXMod mod_;
 		private Vector2 position_ = new(60, 60);
-		private Vector2 scroll_;
+		private Vector2 scroll_, sidebarScroll_;
 		private int tab_;
 		private bool visible_;
 		private bool prevCursorVisible_;
@@ -165,19 +171,22 @@ namespace NatureFX {
 			switch (index) {
 				case 0: DrawOverview(); break;
 				case 1: DrawSun(); break;
-				case 2: DrawWeather(); break;
-				case 3: DrawRoadAndCars(); break;
-				case 4: DrawNature(); break;
-				case 5: DrawSettings(); break;
-				case 6: DrawReflections(); break;
-				case 7: DrawRayTracedShadows(); break;
-				case 8: DrawRayTracedAO(); break;
-				case 9: DrawExposureAndTone(); break;
-				case 10: DrawShaderRebuild(); break;
-				case 11: DrawDeveloper(); break;
-				case 12: DrawMapProfile(); break;
-				case 13: DrawSkyAndFog(); break;
-				case 14: DrawLighting(); break;
+				case 2: DrawSkyAndFog(); break;
+				case 3: DrawLighting(); break;
+				case 4: DrawRayTracedAO(); break;
+				case 5: DrawReflections(); break;
+				case 6: DrawExposureAndTone(); break;
+				case 7: DrawDlss(); break;
+				case 8: DrawLens(); break;
+				case 9: DrawWeather(); break;
+				case 10: DrawNature(); break;
+				case 11: DrawRoad(); break;
+				case 12: DrawCars(); break;
+				case 13: DrawMapProfile(); break;
+				case 14: DrawRayTracingBackend(); break;
+				case 15: DrawShaderRebuild(); break;
+				case 16: DrawSettings(); break;
+				case 17: DrawDeveloper(); break;
 			}
 		}
 
@@ -219,16 +228,20 @@ namespace NatureFX {
 		// tab index groups shown in the sidebar
 		private static (string Name, int[] Tabs)[] VisibleGroups => Groups;
 
+		// light and sky first (the own engine's: docs/native-atmosphere-lighting-plan.md), then what the camera does
+		// with the picture, the world and its cars, and the engine and tools last
 		private static readonly (string Name, int[] Tabs)[] Groups = {
 			("GENERAL", new[] { 0 }),
-			// the own engine's sky and light first (docs/native-atmosphere-lighting-plan.md: HDRP only the minimum)
-			("SKY & LIGHT", new[] { 13, 14, 7, 8, 6, 9 }),
-			("WORLD", new[] { 1, 2, 4, 3, 12 }),
-			("ADVANCED", new[] { 10, 5, 11 })
+			("LIGHT & SKY", new[] { 1, 2, 3, 4, 5 }),
+			("CAMERA", new[] { 6, 7, 8 }),
+			("WORLD", new[] { 9, 10, 11, 12, 13 }),
+			("ADVANCED", new[] { 14, 15, 16, 17 })
 		};
 
 		private void DrawSidebar() {
 			GUILayout.BeginVertical(Theme.Sidebar, GUILayout.Width(SidebarWidth));
+			// scrolls when the window is shorter than the list
+			sidebarScroll_ = GUILayout.BeginScrollView(sidebarScroll_, GUIStyle.none, GUIStyle.none);
 			foreach (var group in VisibleGroups) {
 				GUILayout.Label(group.Name, Theme.SidebarGroup);
 				foreach (int i in group.Tabs) {
@@ -245,6 +258,7 @@ namespace NatureFX {
 				}
 			}
 			GUILayout.FlexibleSpace();
+			GUILayout.EndScrollView();
 			GUILayout.EndVertical();
 		}
 
@@ -465,34 +479,47 @@ namespace NatureFX {
 			Other(Widgets.Slider("Distant haze", S.AerialHaze, 0, 1, v => S.AerialHaze = v));
 			Widgets.Info($"Now: {mod_.RT.FogStatus}");
 			Widgets.EndCard();
+
+			DrawLightShafts();
+			Widgets.BeginCard("HDRP's fog", "Only with Native fog off (HDRP's volumetric fog in its place).", true);
+			Widgets.BeginDependent(!(S.NativeSky && S.NativeFog));
+			Other(Widgets.Slider("Headlight beams", S.HeadlightShafts, 0, 4, v => S.HeadlightShafts = v));
+			Other(Widgets.Slider("Sun in the fog", S.LightShafts, 0, 4, v => S.LightShafts = v));
+			Widgets.Info("How strongly the sun (and moon) light HDRP's volumetric fog: its shafts between trees and buildings. Needs volumetric fog in the map.");
+			Widgets.EndDependent();
+			Widgets.EndCard();
 		}
 
-		// Sky & light > Lighting: the own engine's lighting as a whole (the details are in the tabs below it)
+		// Lighting & shadows: the own engine's lighting as a whole, the sun's and the lamps' traced shadows, the game's
+		// particles lit by it, and HDRP's shadows where the own engine does not do them
 		private void DrawLighting() {
 			Widgets.BeginCard("Native lighting", "All of the opaque lighting from the own engine: traced sun and moon shadows, lamp and headlight shadows, " +
-			                                     "the sky light and GI, reflections, whatever the ray tracing switches say. Their quality is set in " +
-			                                     "Shadows, Ambient light & GI and Reflections.");
+			                                     "the sky light and GI, reflections, whatever the ray tracing switches say. Their quality is set below and in " +
+			                                     "Ambient light & GI and Reflections & glass.");
 			Other(Widgets.Switch("Native lighting", S.NativeLighting, v => S.NativeLighting = v));
 			Widgets.Info($"Shadows: {mod_.RT.ShadowStatus}");
 			Widgets.Info($"Reflections: {mod_.RT.ReflectionStatus}");
 			Widgets.EndCard();
 
-			Widgets.BeginCard("Glass", "The own engine draws the glass whole: what it lets through (tinted by its colour as far as it is opaque), what it " +
-			                           "mirrors (traced), the sun's glint and the bend of solid glass. HDRP's glass is hidden meanwhile. Needs Glass reflections.");
-			Other(Widgets.Switch("Own glass", S.NativeGlass, v => S.NativeGlass = v));
-			Widgets.Info($"Now: {mod_.RT.GlassStatus}");
-			Widgets.EndCard();
-
+			DrawRayTracedShadows();
 			Widgets.BeginCard("The game's particles", "The game's and the track's own alpha blended particles (dust, spray, smoke) drawn with NatureFX's particle shader, " +
 			                                          "lit by the own engine's sun or moon, sky and lamps and inside its 3D fog. Fire, sparks and glows keep their own.");
 			Other(Widgets.Switch("Own particle lighting", S.NativeParticles, v => S.NativeParticles = v));
 			Widgets.Info($"Now: {mod_.GameFx.Count} particle systems drawn by NatureFX, {mod_.GameFx.Skipped} kept (additive, mesh or no texture)");
 			Widgets.EndCard();
+			Widgets.BeginCard("HDRP's sun shadows", "Only with Native lighting off (HDRP's shadow maps in place of the traced shadows).", true);
+			Widgets.BeginDependent(!S.NativeLighting);
+			Other(Widgets.Switch("Soft HDRP sun shadows", S.RealisticShadows, v => S.RealisticShadows = v,
+				"HDRP's own sun shadows soften with distance from the caster, by Sun size and more under clouds (High shadow filtering). " +
+				"The ray traced shadows have their own softness."));
+			Widgets.EndDependent();
+			Widgets.EndCard();
+
 		}
 
 		private void NativeLightingNote() {
 			if (S.NativeLighting) {
-				Widgets.Info("Native lighting (Sky & light > Lighting) is on: this runs whatever the switch below says.");
+				Widgets.Info("Native lighting (Lighting & shadows) is on: this runs whatever the switch below says.");
 			}
 		}
 
@@ -521,18 +548,6 @@ namespace NatureFX {
 			Widgets.EndDependent();
 			Widgets.EndCard();
 
-			Widgets.BeginCard("HDRP only", "These apply to HDRP's own fog and shadows: with Native fog and Native lighting on (Sky & light) the own engine does both, and they are greyed out.");
-			Widgets.BeginDependent(!(S.NativeSky && S.NativeFog));
-			Other(Widgets.Slider("Headlight beams", S.HeadlightShafts, 0, 4, v => S.HeadlightShafts = v));
-			Other(Widgets.Slider("Sun in the fog", S.LightShafts, 0, 4, v => S.LightShafts = v));
-			Widgets.Info("How strongly the sun (and moon) light HDRP's volumetric fog: its shafts between trees and buildings. Needs volumetric fog in the map.");
-			Widgets.EndDependent();
-			Widgets.BeginDependent(!S.NativeLighting);
-			Other(Widgets.Switch("Soft HDRP sun shadows", S.RealisticShadows, v => S.RealisticShadows = v,
-				"HDRP's own sun shadows soften with distance from the caster, by Sun size and more under clouds (High shadow filtering). " +
-				"The ray traced shadows have their own softness."));
-			Widgets.EndDependent();
-			Widgets.EndCard();
 		}
 
 		private void DrawNature() {
@@ -581,24 +596,15 @@ namespace NatureFX {
 
 			Widgets.BeginCard("Rain and snow", "Falling rain and snow around the camera, with the weather: rain streaks that splash where they land and show in headlights and under street lights, drifting snowflakes. 0 turns them off.");
 			Widgets.Slider("Precipitation", S.Precipitation, 0, 2, v => S.Precipitation = v);
+			Other(Widgets.Slider("Snow depth", S.SnowDepth, 0, 0.5f, v => S.SnowDepth = v, "0.00", " m"));
 			Widgets.Info($"Now: {mod_.Rain.State}");
-			Widgets.EndCard();
-
-			Widgets.BeginCard("Eye and lens", "Night vision: in the dark colours fade towards blue-green and dim parts get grainy, as the eye sees. " +
-			                                  "Lens flare: ghosts and streaks from bright lights. Depth of field: focus on the car, for replays and photos.");
-			Widgets.Slider("Night vision", S.NightVision, 0, 1, v => S.NightVision = v);
-			Widgets.Slider("Lens flare", S.LensFlare, 0, 1, v => S.LensFlare = v);
-			Widgets.BeginDependent(S.LensFlare > 0.0f);
-			Widgets.Slider("Light streaks", S.LensStreaks, 0, 1, v => S.LensStreaks = v);
-			Widgets.EndDependent();
-			Widgets.Switch("Depth of field", S.DepthOfField, v => S.DepthOfField = v);
 			Widgets.EndCard();
 
 			// only the Manual preset uses these values
 			if (S.WeatherPreset == 0) {
 				DrawManualWeather();
 			}
-			DrawRainAndAir();
+			DrawBuildUp();
 		}
 
 		private void DrawManualWeather() {
@@ -611,11 +617,7 @@ namespace NatureFX {
 			Widgets.EndCard();
 		}
 
-		private void DrawRainAndAir() {
-			Widgets.BeginCard("Rain & air");
-			Other(Widgets.Slider("Snow depth", S.SnowDepth, 0, 0.5f, v => S.SnowDepth = v, "0.00", " m"));
-			Widgets.EndCard();
-
+		private void DrawBuildUp() {
 			Widgets.BeginCard("Build up over time");
 			Other(Widgets.Switch("Enable", S.AccumulateOverTime, v => S.AccumulateOverTime = v));
 			Widgets.BeginDependent(S.AccumulateOverTime);
@@ -629,18 +631,47 @@ namespace NatureFX {
 			Widgets.EndCard();
 		}
 
-		private void DrawRoadAndCars() {
+		private void DrawRoad() {
 			Widgets.BeginCard("Road surface", "Marks are kept around the camera and cleared when you drive far away.");
 			Other(Widgets.Switch("Tyre marks, dry line, snow ruts", S.TireMarks, v => S.TireMarks = v));
 			Widgets.BeginDependent(S.TireMarks);
 			Other(Widgets.Slider("Rubber when sliding", S.RubberAmount, 0, 2, v => S.RubberAmount = v));
 			Widgets.EndDependent();
 			Other(Widgets.Slider("Surface detail", S.SurfaceDetail, 0, 1, v => S.SurfaceDetail = v));
+			Widgets.BeginDependent(S.ReplaceShaders);
+			Other(Widgets.Slider("Road wear", S.RoadWear, 0, 1, v => S.RoadWear = v));
+			Widgets.Info("Rubber laid down on the driven ground in long streaks, worn smooth in places (needs Replace game shaders, Shader rebuild).");
+			Widgets.EndDependent();
 			if (Widgets.Button("Clear marks", 120)) {
 				mod_.Tracks.Clear();
 			}
 			Widgets.EndCard();
 
+		}
+
+		private void DrawCars() {
+			Widgets.BeginCard("Headlights", "A real low beam in place of the game's round spot: the lamp's colour and strength, and the beam's sharp cut-off " +
+			                                "just below the horizon (rising on the kerb side, left: driving on the left), so the road is lit and the eyes above it are not.");
+			int lamp = Mathf.Clamp(S.HeadlightType, 0, 3);
+			if (Widgets.Chips(ref lamp, new[] { "Game", "Halogen", "HID", "LED" })) {
+				S.HeadlightType = lamp;
+				Other(true);
+			}
+			Widgets.Info("Halogen: warm 3200 K, 18 000 cd a lamp. HID (xenon): 4300 K, 36 000 cd, a faint blue edge at the cut-off. LED: 5800 K, 30 000 cd.");
+			Widgets.BeginDependent(S.HeadlightType != 0);
+			Other(Widgets.Slider("Beam aim", S.HeadlightAim, -1, 3, v => S.HeadlightAim = v, "0.0", "° down"));
+			Widgets.Info("The low beam's axis below level, from the car's body: 0.6° is the usual setting (1 %); more lights the road closer, less reaches further and dazzles.");
+			Widgets.Switch("High beam (F7)", mod_.Headlights.HighBeam, v => mod_.Headlights.HighBeam = v,
+				"Your car's high beam: no cut-off, the light gathered far ahead, 2.5 times the low beam. Not saved.");
+			Widgets.EndDependent();
+			Widgets.Info($"Now: {mod_.Headlights.Status}");
+			Widgets.EndCard();
+
+			Widgets.BeginCard("Car finish", "Paint reflects like real car paint: a clear varnish mirror over the coloured base. DX12 ray tracing.");
+			Other(Widgets.Switch("Chrome rims", S.CarChromeRims, v => S.CarChromeRims = v,
+				"Metal rims, chrome paint included, polished to a mirror instead of brushed aluminium. Painted rims stay as they are."));
+			Widgets.Info($"Now: {mod_.Finish.Status}");
+			Widgets.EndCard();
 			Widgets.BeginCard("Cars in the rain", "Beading drops, water running off and an oily sheen, drawn over the car paint.");
 			Other(Widgets.Switch("Enable", S.CarRain, v => S.CarRain = v));
 			Widgets.BeginDependent(S.CarRain);
@@ -649,7 +680,7 @@ namespace NatureFX {
 			Widgets.EndDependent();
 			Widgets.EndCard();
 
-			Widgets.BeginCard("Smoke and light from the cars", "Volumetric tyre smoke and spray lit by the sun, lamps and headlights " +
+			Widgets.BeginCard("Smoke, glow and dirt", "Volumetric tyre smoke and spray lit by the sun, lamps and headlights " +
 			                                                    "(needs Tyre marks on: it starts where the tyres slide). Brake discs that glow after hard braking, afterfire.");
 			Widgets.Slider("Tyre smoke and spray", S.TireSmoke, 0, 2, v => S.TireSmoke = v);
 			Widgets.BeginDependent(S.TireSmoke > 0.0f);
@@ -694,27 +725,10 @@ namespace NatureFX {
 			Widgets.Info($"Glass: {mod_.RT.GlassStatus}");
 			Widgets.EndCard();
 
-			Widgets.BeginCard("Headlights", "A real low beam in place of the game's round spot: the lamp's colour and strength, and the beam's sharp cut-off " +
-			                                "just below the horizon (rising on the kerb side, left: driving on the left), so the road is lit and the eyes above it are not.");
-			int lamp = Mathf.Clamp(S.HeadlightType, 0, 3);
-			if (Widgets.Chips(ref lamp, new[] { "Game", "Halogen", "HID", "LED" })) {
-				S.HeadlightType = lamp;
-				Other(true);
-			}
-			Widgets.Info("Halogen: warm 3200 K, 18 000 cd a lamp. HID (xenon): 4300 K, 36 000 cd, a faint blue edge at the cut-off. LED: 5800 K, 30 000 cd.");
-			Widgets.BeginDependent(S.HeadlightType != 0);
-			Other(Widgets.Slider("Beam aim", S.HeadlightAim, -1, 3, v => S.HeadlightAim = v, "0.0", "° down"));
-			Widgets.Info("The low beam's axis below level, from the car's body: 0.6° is the usual setting (1 %); more lights the road closer, less reaches further and dazzles.");
-			Widgets.Switch("High beam (F7)", mod_.Headlights.HighBeam, v => mod_.Headlights.HighBeam = v,
-				"Your car's high beam: no cut-off, the light gathered far ahead, 2.5 times the low beam. Not saved.");
-			Widgets.EndDependent();
-			Widgets.Info($"Now: {mod_.Headlights.Status}");
-			Widgets.EndCard();
-
-			Widgets.BeginCard("Car finish", "Paint reflects like real car paint: a clear varnish mirror over the coloured base. DX12 ray tracing.");
-			Other(Widgets.Switch("Chrome rims", S.CarChromeRims, v => S.CarChromeRims = v,
-				"Metal rims, chrome paint included, polished to a mirror instead of brushed aluminium. Painted rims stay as they are."));
-			Widgets.Info($"Now: {mod_.Finish.Status}");
+			Widgets.BeginCard("Glass", "The own engine draws the glass whole: what it lets through (tinted by its colour as far as it is opaque), what it " +
+			                           "mirrors (traced), the sun's glint and the bend of solid glass. HDRP's glass is hidden meanwhile. Needs Glass reflections.");
+			Other(Widgets.Switch("Own glass", S.NativeGlass, v => S.NativeGlass = v));
+			Widgets.Info($"Now: {mod_.RT.GlassStatus}");
 			Widgets.EndCard();
 		}
 
@@ -732,12 +746,6 @@ namespace NatureFX {
 			Other(Widgets.Switch("Light through glass", S.RTGlassShadows, v => S.RTGlassShadows = v,
 				"The sun through windows is dimmed by the glass (tinted windows more) instead of passing untouched."));
 			Widgets.Info($"Painted shadows: {mod_.PaintedShadows.Status}");
-			if (Widgets.Button(mod_.Identify.Armed ? "Click the scene…" : "What is this? (click)", 200)) {
-				mod_.Identify.Arm();
-			}
-			if (mod_.Identify.Result.Length > 0) {
-				Widgets.Info(mod_.Identify.Result);
-			}
 			Other(Widgets.Switch("Swaying foliage", S.RTWind, v => S.RTWind = v,
 				"The traced shadows of the leaves sway with the wind as the leaves do (own engine; foliage from the shader rebuild). Off: they stay still."));
 			Other(Widgets.Switch("Exact sun light", S.RTExactSun, v => S.RTExactSun = v,
@@ -751,21 +759,9 @@ namespace NatureFX {
 			Widgets.Info("0.53° is the real sun; larger values soften shadows like a hazy or low sun.");
 			Other(Widgets.Slider("Leaf translucency", S.RTLeafTranslucency, 0, 1, v => S.RTLeafTranslucency = v));
 			Widgets.Info("Leaves and grass lit from behind glow with the sunlight passing through them.");
-			if (Widgets.Button("Reset accumulated image", 200)) {
-				mod_.RT.ResetHistory();
-			}
-			Widgets.Switch("Show traced shadows only", mod_.RT.ShadowDebugView, v => {
-				mod_.RT.ShadowDebugView = v;
-				mod_.MarkDirty();
-			}, "Debug view: white is lit by the sun, black is the traced shadow, blue-grey faces away from the sun or is sky. Not saved.");
-			Widgets.Switch("Show exact sun light", mod_.RT.ExactSunDebugView, v => {
-				mod_.RT.ExactSunDebugView = v;
-				mod_.MarkDirty();
-			}, "Debug view: the sun light the shadows take away, before shadowing. Dark magenta where it is not known (an estimate is used there). Not saved.");
 			Widgets.EndDependent();
 			Widgets.Info($"Now: {mod_.RT.ShadowStatus}");
 			Widgets.EndCard();
-			DrawLightShafts();
 
 			Widgets.BeginCard("Lamps and headlights", "The 32 point and spot lights nearest to the camera light what reflections and bounce light " +
 			                                          "show, and cast soft ray traced shadows where the game gives them none. Mostly at night. DX12 only.");
@@ -779,28 +775,14 @@ namespace NatureFX {
 			Widgets.EndCard();
 		}
 
-		// Ray tracing only mode: exposure and tone without the rest of the camera tab (same settings)
+		// Camera > Exposure & tone: the own post-processing's exposure, bloom, tone curve and colour
 		private void DrawExposureAndTone() {
 			Widgets.BeginCard("Own post-processing", "NatureFX's own exposure (metering and eye adaptation), bloom, tone curve and colour, in place of HDRP's. " +
-			                                         "HDRP then only does anti-aliasing, depth of field, motion blur and lens flares.");
+			                                         "HDRP then only does depth of field and motion blur (anti-aliasing: DLSS).");
 			Other(Widgets.Switch("Own post-processing", S.NativePost, v => S.NativePost = v));
 			Widgets.BeginDependent(S.NativePost);
 			Other(Widgets.Slider("Bloom", S.PostBloom, 0, 0.2f, v => S.PostBloom = v, "0.000"));
 			Widgets.Info("The share of all light a lens and the eye scatter around: bright lamps glow, a grey wall hardly at all (no threshold).");
-			Other(Widgets.Switch("NVIDIA DLSS", S.Dlaa, v => S.Dlaa = v));
-			Widgets.BeginDependent(S.Dlaa);
-			int dlss = Mathf.Clamp(S.DlssQuality, 0, Rendering.Dlaa.Qualities.Length - 1);
-			if (Widgets.Chips(ref dlss, Rendering.Dlaa.Qualities)) {
-				S.DlssQuality = dlss;
-				Other(true);
-			}
-			Other(Widgets.Switch("Ray Reconstruction", S.DlssRayReconstruction, v => S.DlssRayReconstruction = v,
-				"DLSS denoises the ray traced sun shadows and reflections with the whole picture, in place of NRD and NatureFX's filters " +
-				"(ambient light, GI and lamp shadows keep theirs). Needs the exact sun light (Shadows)."));
-			Widgets.EndDependent();
-			Widgets.Info("In place of HDRP's TAA (RTX GPUs; others keep TAA). DLAA: anti-aliasing at the display resolution. Quality, Balanced, " +
-			             "Performance, Ultra perf.: rendered at 67, 58, 50, 33 % of it and upscaled (faster).");
-			Widgets.Info($"Now: {Rendering.Dlaa.Status}");
 			Widgets.EndDependent();
 			Widgets.Info($"Now: {mod_.Post.Status}");
 			Widgets.EndCard();
@@ -839,6 +821,43 @@ namespace NatureFX {
 			Widgets.EndCard();
 		}
 
+		// Camera > DLSS: NVIDIA's anti-aliasing and upscaling in place of HDRP's TAA (Rendering.Dlaa)
+		private void DrawDlss() {
+			Widgets.BeginCard("NVIDIA DLSS", "Anti-aliasing and upscaling by NatureFX's own engine in place of HDRP's TAA (RTX GPUs; others keep TAA). " +
+			                                 "Needs Own post-processing (Exposure & tone).");
+			Widgets.BeginDependent(S.NativePost);
+			Other(Widgets.Switch("NVIDIA DLSS", S.Dlaa, v => S.Dlaa = v));
+			Widgets.BeginDependent(S.Dlaa);
+			int dlss = Mathf.Clamp(S.DlssQuality, 0, Rendering.Dlaa.Qualities.Length - 1);
+			if (Widgets.Chips(ref dlss, Rendering.Dlaa.Qualities)) {
+				S.DlssQuality = dlss;
+				Other(true);
+			}
+			Other(Widgets.Switch("Ray Reconstruction", S.DlssRayReconstruction, v => S.DlssRayReconstruction = v,
+				"DLSS denoises the ray traced sun shadows with the whole picture, in place of NRD and NatureFX's filter " +
+				"(reflections, ambient light, GI and lamp shadows keep theirs). Needs the exact sun light (Shadows)."));
+			Widgets.EndDependent();
+			Widgets.Info("DLAA: anti-aliasing at the display resolution. Quality, Balanced, Performance, Ultra perf.: rendered at 67, 58, 50, " +
+			             "33 % of it and upscaled (faster; the sun shadows get 2 to 4 rays a pixel to keep their quality). At 1080p Quality or " +
+			             "Balanced; Ultra perf. is for 4K and above.");
+			Widgets.Info($"Now: {Rendering.Dlaa.Status}");
+			Widgets.EndDependent();
+			Widgets.EndCard();
+		}
+
+		// Camera > Lens & eye: what a lens and the eye add to the picture
+		private void DrawLens() {
+			Widgets.BeginCard("Eye and lens", "Night vision: in the dark colours fade towards blue-green and dim parts get grainy, as the eye sees. " +
+			                                  "Lens flare: ghosts and streaks from bright lights. Depth of field: focus on the car, for replays and photos.");
+			Widgets.Slider("Night vision", S.NightVision, 0, 1, v => S.NightVision = v);
+			Widgets.Slider("Lens flare", S.LensFlare, 0, 1, v => S.LensFlare = v);
+			Widgets.BeginDependent(S.LensFlare > 0.0f);
+			Widgets.Slider("Light streaks", S.LensStreaks, 0, 1, v => S.LensStreaks = v);
+			Widgets.EndDependent();
+			Widgets.Switch("Depth of field", S.DepthOfField, v => S.DepthOfField = v);
+			Widgets.EndCard();
+		}
+
 		private void DrawRayTracedAO() {
 			Widgets.BeginCard("Ray traced ambient light", "Light that does not come straight from the sun: darkened where the surroundings block the sky " +
 			                                              "(under cars, roofs and trees, in corners and gaps) and tinted by what it bounces off. " +
@@ -859,11 +878,6 @@ namespace NatureFX {
 			Widgets.Info("How strongly the light bounced in (and its colour) is added; 1 is physically right.");
 			Widgets.EndDependent();
 			Widgets.EndDependent();
-			Widgets.Switch("Show ambient light / GI only", mod_.RT.GIDebugView, v => {
-				mod_.RT.GIDebugView = v;
-				mod_.MarkDirty();
-			}, "Debug view: mid grey where the ambient light is unchanged, darker where the sky is blocked, brighter and tinted " +
-			   "where light bounces in. Not saved.");
 			Other(Widgets.Slider("Strength", S.RTAOStrength, 0, 1, v => S.RTAOStrength = v));
 			Other(Widgets.Slider("Distance", S.RTAODistance, 0.5f, 20, v => S.RTAODistance = v, "0.0", " m"));
 			Widgets.Info("How far the light is traced: short for contact shadows in gaps, long for the shade under roofs and trees and bounce from further away.");
@@ -918,14 +932,9 @@ namespace NatureFX {
 			Other(Widgets.Slider("Anti-tiling", S.AntiTiling, 0, 1, v => S.AntiTiling = v));
 			Widgets.Info("Hex tiles against a texture's visible repeat and seams, on the materials the map's profile asks for (antitiling=). " +
 			             "Three texture reads instead of one there.");
-			Other(Widgets.Slider("Road wear", S.RoadWear, 0, 1, v => S.RoadWear = v));
-			Widgets.Info("Rubber laid down on the driven ground in long streaks, worn smooth in places.");
-			Other(Widgets.Slider("Surface detail", S.SurfaceDetail, 0, 1, v => S.SurfaceDetail = v));
-			Other(Widgets.Switch("Tyre marks", S.TireMarks, v => S.TireMarks = v));
-			if (Widgets.Button("Clear marks", 120)) {
-				mod_.Tracks.Clear();
-			}
 			Widgets.EndDependent();
+			Other(Widgets.Switch("Wet look on unreplaced HDRP/Lit", S.WetGameMaterials, v => S.WetGameMaterials = v,
+				"Materials left with the game's shaders still get wet in the rain."));
 			var replacer = mod_.Replacer;
 			Widgets.Info($"Replaced: {replacer.ReplacedCount} materials");
 			foreach (var kv in replacer.Deferred) {
@@ -942,15 +951,36 @@ namespace NatureFX {
 
 		private string inventoryPath_;
 
-		// Developer: clearing the accumulated ray traced image and measuring each stage's cost
-		private void DrawRayTracingTools() {
-			Widgets.BeginCard("Ray tracing history", "Shadows, ambient light and reflections build up over several frames. " +
-			                                         "Camera cuts reset them on their own; this clears anything left burnt in.");
+		// Developer: what the traced light looks like on its own, clearing what built up, finding a surface's material
+		private void DrawRayTracingDebug() {
+			Widgets.BeginCard("Ray tracing views", "Debug views and tools for the traced light. Not saved.");
 			if (Widgets.Button("Reset accumulated image", 200)) {
 				mod_.RT.ResetHistory();
 			}
+			Widgets.Info("Shadows, ambient light and reflections build up over several frames; camera cuts reset them on their own, this clears anything left burnt in.");
+			Widgets.Switch("Show traced shadows only", mod_.RT.ShadowDebugView, v => {
+				mod_.RT.ShadowDebugView = v;
+				mod_.MarkDirty();
+			}, "White is lit by the sun, black is the traced shadow, blue-grey faces away from the sun or is sky.");
+			Widgets.Switch("Show exact sun light", mod_.RT.ExactSunDebugView, v => {
+				mod_.RT.ExactSunDebugView = v;
+				mod_.MarkDirty();
+			}, "The sun light the shadows take away, before shadowing. Dark magenta where it is not known (an estimate is used there).");
+			Widgets.Switch("Show ambient light / GI only", mod_.RT.GIDebugView, v => {
+				mod_.RT.GIDebugView = v;
+				mod_.MarkDirty();
+			}, "Mid grey where the ambient light is unchanged, darker where the sky is blocked, brighter and tinted where light bounces in.");
+			if (Widgets.Button(mod_.Identify.Armed ? "Click the scene…" : "What is this? (click)", 200)) {
+				mod_.Identify.Arm();
+			}
+			if (mod_.Identify.Result.Length > 0) {
+				Widgets.Info(mod_.Identify.Result);
+			}
 			Widgets.EndCard();
+		}
 
+		// Ray tracing: each stage's cost
+		private void DrawRayTracingCost() {
 			Widgets.BeginCard("Ray tracing cost", "Switches each ray tracing stage off for a few seconds and compares the frame time. " +
 			                                      "Keep the camera still; a frame rate cap or vsync hides the difference.");
 			var bench = mod_.RT.Benchmark;
@@ -971,7 +1001,7 @@ namespace NatureFX {
 
 		// One choice for every ray traced effect: surfaces, shadows, ambient light, lamps, light shafts and reflections
 		private void DrawRayTracingBackend() {
-			Widgets.BeginCard("Ray tracing", "How NatureFX's own engine (NFXNative.dll) traces every ray traced effect (surfaces, shadows, ambient light, lamps, light shafts, reflections). DX12 only.");
+			Widgets.BeginCard("Ray tracing engine", "How NatureFX's own engine (NFXNative.dll) traces every ray traced effect (surfaces, shadows, ambient light, lamps, light shafts, reflections). DX12 only.");
 			int backend = Mathf.Clamp(S.RTBackend, 0, BackendNames.Length - 1);
 			if (Widgets.Chips(ref backend, BackendNames)) {
 				S.RTBackend = backend;
@@ -1012,6 +1042,7 @@ namespace NatureFX {
 			}
 			Widgets.Info($"DXR 1.2 (shader execution reordering, opacity micromaps; needs Agility SDK 1.619 next to the game's): {NativeEngine.Dxr12Result}");
 			Widgets.EndCard();
+			DrawRayTracingCost();
 		}
 
 		private string reloadStatus_;
@@ -1032,23 +1063,12 @@ namespace NatureFX {
 			}
 			Widgets.EndCard();
 
-			DrawRayTracingBackend();
-
-			Widgets.Heading("ADVANCED");
 			DrawGraphicsApi();
-			Widgets.BeginCard("Shader replacement", "NatureFX swaps game materials to its own shaders for wind, snow, wetness and the rest.", true);
-			Widgets.Info($"Bundle shaders: {mod_.Bundle.Shaders.Count} · replaced materials: {mod_.Replacer.ReplacedCount}");
-			Other(Widgets.Switch("Replace game shaders", S.ReplaceShaders, v => {
-				S.ReplaceShaders = v;
-				mod_.SetShaderReplacement(v);
-			}));
-			Other(Widgets.Switch("Wet look on unreplaced HDRP/Lit", S.WetGameMaterials, v => S.WetGameMaterials = v));
-			Widgets.EndCard();
 		}
 
 		// tools for working on NatureFX itself: reload, status, diagnostics, variant recording
 		private void DrawDeveloper() {
-			DrawRayTracingTools();
+			DrawRayTracingDebug();
 			Widgets.BeginCard("Reload shaders", "Without a restart: the newest shader bundle in kino/mods/NatureFX/reload/ (the bundle build " +
 				"puts one there while the game runs) and the engine's shaders in NativeShaders/ (tools/build_native.ps1 -ShadersOnly). " +
 				"C# and the engine's C++ still need a restart.");
@@ -1069,7 +1089,7 @@ namespace NatureFX {
 			Widgets.Switch("Cars' motion vector pass", NativeEngine.DevCarMotionVectors, v => NativeEngine.DevCarMotionVectors = v,
 				"NRD follows a moving car's pixels by its motion vectors; the game draws cars without that pass.");
 			Widgets.EndCard();
-			Widgets.BeginCard("DLAA", "What DLSS is handed, to find what makes the picture worse than TAA. Not saved.");
+			Widgets.BeginCard("DLSS tests", "What DLSS is handed, to find what makes the picture worse than TAA. Not saved.");
 			int sign = Rendering.Dlaa.DevJitterSign;
 			if (Widgets.Chips(ref sign, Rendering.Dlaa.JitterSigns)) {
 				Rendering.Dlaa.DevJitterSign = sign;
@@ -1079,6 +1099,11 @@ namespace NatureFX {
 				Rendering.Dlaa.DevMotion = motion;
 			}
 			Widgets.Slider("Jitter", Rendering.Dlaa.DevJitterScale, 0, 1, v => Rendering.Dlaa.DevJitterScale = v, "0.00");
+			Widgets.Switch("Ray Reconstruction with upscaling (test)", Rendering.Dlaa.DevRayReconstructionUpscaling,
+				v => Rendering.Dlaa.DevRayReconstructionUpscaling = v,
+				"Off for now: it shook the picture and once hung the GPU. NVIDIA's own log goes to kino/mods/NatureFX/NFX_ngx.log.");
+			Widgets.Switch("Upscale with HDRP's TAAU instead (test)", Rendering.Dlaa.DevHdrpTaau, v => Rendering.Dlaa.DevHdrpTaau = v,
+				"The same lower resolution (Quality ... Ultra perf.), upscaled by HDRP's own TAAU: tells DLSS's doing from the resolution's.");
 			Widgets.Info($"Now: {Rendering.Dlaa.Status}");
 			Widgets.EndCard();
 			Widgets.BeginCard("System", null, true);

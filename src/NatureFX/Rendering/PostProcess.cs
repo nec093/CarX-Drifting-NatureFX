@@ -135,7 +135,7 @@ namespace NatureFX.Rendering {
 			var cam = ctx.hdCamera.camera;
 			int displayWidth = cam.pixelWidth, displayHeight = cam.pixelHeight;
 			bool upscaled = false;
-			if (Dlaa.Upscaling && (displayWidth > renderWidth || displayHeight > renderHeight)) {
+			if (Dlaa.UpscalingWithDlss && (displayWidth > renderWidth || displayHeight > renderHeight)) {
 				AllocateFull(displayWidth, displayHeight);
 				upscaled = Dlaa.Run(ctx, source_, fullSource_, renderWidth, renderHeight, displayWidth, displayHeight);
 			} else {

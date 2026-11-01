@@ -273,6 +273,13 @@ namespace NatureFX.Nature {
 				reason = "UI and sprites (not replaced)";
 				return null;
 			}
+			// what the game draws for its menus (the car and part icons of the IconGenerator scene, KSL's livery
+			// editor background): the UI's own pictures. Swapped by the full replacement, the menu UI and the
+			// settings window flickered (gone for a frame now and then).
+			if (r != null && (r.gameObject.scene.name == "IconGenerator" || r.transform.root.name.StartsWith("Kino.LiveryGroups", StringComparison.Ordinal))) {
+				reason = "menu pictures (icons, livery editor)";
+				return null;
+			}
 			foreach (string prefix in ExcludedShaderPrefixes) {
 				if (shaderName.StartsWith(prefix, StringComparison.Ordinal)) {
 					reason = $"not a surface or not supported: {prefix}";

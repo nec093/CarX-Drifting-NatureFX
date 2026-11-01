@@ -238,6 +238,7 @@ namespace NatureFX.Rendering {
 		// to find which part of NRD a problem comes from (not saved)
 		public static bool DevNrdSun = true, DevNrdAmbient = true, DevNrdLamps = true, DevNrdReflections = true, DevCarMotionVectors = true;
 		public static bool NrdReset;       // the shadow pass dropped its history this frame
+		public static int SunSamples = 1;  // sun shadow rays per pixel (SunShadow.hlsl; Dlaa: more while upscaling)
 		public static string NrdStatus {
 			get {
 				if (!NrdEnabled) {
@@ -680,7 +681,7 @@ namespace NatureFX.Rendering {
 			c[4] = sunColor_.x; c[5] = sunColor_.y; c[6] = sunColor_.z; c[7] = CoarseShadowDistance;
 			c[8] = camera_.x; c[9] = camera_.y; c[10] = camera_.z; c[11] = Bits((uint)frame_);
 			c[12] = Bits((uint)width); c[13] = Bits((uint)height); c[14] = Bits(sunDirection_.w > 0.0f ? 1u : 0u);
-			c[15] = Bits((GlassShadows ? 1u : 0u) | (LampMask ? 2u : 0u) | (OwnGlass ? 4u : 0u));
+			c[15] = Bits((GlassShadows ? 1u : 0u) | (LampMask ? 2u : 0u) | (OwnGlass ? 4u : 0u) | ((uint)(Mathf.Clamp(SunSamples, 1, 8) - 1) << 8));
 			c[16] = ambientParams_.x; c[17] = ambientParams_.y; c[18] = ambientParams_.z; c[19] = ambientParams_.w;
 			Put(c, 20, skyParams_);
 			c[25] = aerosols_; c[26] = 1.0f; // LightCount.y aerosols, .z ozone (Sky.hlsli)

@@ -62,6 +62,24 @@ std::wstring DlssFolder() {
 	return slash == std::wstring::npos ? L"." : folder.substr(0, slash);
 }
 
+// NGX's own log lines (its warnings about the inputs it is given) in NFX_ngx.log next to NFXNative.dll, started
+// afresh each run; NGX may call this from any thread
+std::mutex g_dlssLogMutex;
+FILE* g_dlssLog = nullptr;
+
+void NVSDK_CONV DlssLog(const char* message, NVSDK_NGX_Logging_Level level, NVSDK_NGX_Feature feature) {
+	std::lock_guard<std::mutex> lock(g_dlssLogMutex);
+	if (g_dlssLog == nullptr || message == nullptr) {
+		return;
+	}
+	fprintf(g_dlssLog, "[%d] %s", static_cast<int>(feature), message);
+	size_t length = strlen(message);
+	if (length == 0 || message[length - 1] != '\n') {
+		fputc('\n', g_dlssLog);
+	}
+	fflush(g_dlssLog);
+}
+
 // NGX on Unity's device (render thread, once). Fails for good: the status says why.
 bool DlssInit() {
 	auto& d = g_dlss;
@@ -77,6 +95,15 @@ bool DlssInit() {
 	NVSDK_NGX_FeatureCommonInfo info = {};
 	info.PathListInfo.Path = paths;
 	info.PathListInfo.Length = 1;
+	{
+		std::lock_guard<std::mutex> lock(g_dlssLogMutex);
+		if (g_dlssLog == nullptr) {
+			_wfopen_s(&g_dlssLog, (folder + L"\\NFX_ngx.log").c_str(), L"w");
+		}
+	}
+	info.LoggingInfo.LoggingCallback = &DlssLog;
+	info.LoggingInfo.MinimumLoggingLevel = NVSDK_NGX_LOGGING_LEVEL_ON;
+	info.LoggingInfo.DisableOtherLoggingSinks = true;
 	NVSDK_NGX_Result r = NVSDK_NGX_D3D12_Init_with_ProjectID("6f3b8a2e-4c1d-4e7a-9b5f-2d8c0e1a7f43", NVSDK_NGX_ENGINE_TYPE_CUSTOM, "NatureFX",
 	                                                        folder.c_str(), g_device.Get(), &info);
 	if (NVSDK_NGX_FAILED(r)) {

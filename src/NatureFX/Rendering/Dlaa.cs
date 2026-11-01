@@ -36,6 +36,11 @@ namespace NatureFX.Rendering {
 		// 2 x negated; 3 y negated), the motion (0 the camera's and what moves of itself; 1 the camera's only; 2 none),
 		// the jitter amount (DLAA's own; 0 none)
 		public static int DevJitterSign, DevMotion;
+		// Ray Reconstruction while upscaling, which is off for now (shaking, light noise, a GPU hang): to look into it
+		public static bool DevRayReconstructionUpscaling;
+		// the same lower resolution upscaled by HDRP's own TAAU instead of DLSS: what is DLSS's and what the
+		// resolution's
+		public static bool DevHdrpTaau;
 		public static float DevJitterScale = 1.0f;
 		public static readonly string[] JitterSigns = { "-x -y", "+x +y", "-x +y", "+x -y" };
 		public static readonly string[] Motions = { "Camera + moving objects", "Camera only", "None" };
@@ -66,6 +71,8 @@ namespace NatureFX.Rendering {
 		public static bool Active => Wanted && !failed_ && NativeEngine.Ready && NativeEngine.Bridge != null && NativeEngine.Supports("dlss");
 		// this frame HDRP renders at the lower resolution and PostPass upscales (Begin)
 		public static bool Upscaling { get; private set; }
+		// PostPass upscales with DLSS this frame (not HDRP's TAAU, Developer)
+		public static bool UpscalingWithDlss => Upscaling && !DevHdrpTaau;
 
 		public static string Status {
 			get {
@@ -78,7 +85,7 @@ namespace NatureFX.Rendering {
 				if (!Active) {
 					return NativeEngine.Ready && !NativeEngine.Supports("dlss") ? "waiting for the engine's new DLL (HDRP's TAA)" : "waiting for the own engine (HDRP's TAA)";
 				}
-				if (RayReconstructionWanted && Quality > 0) {
+				if (RayReconstructionWanted && Quality > 0 && !DevRayReconstructionUpscaling) {
 					return $"{NativeEngine.DlssStatus} (Ray Reconstruction with DLAA only for now)";
 				}
 				if (Quality > 0 && upscaledShader_ == null) {
@@ -160,15 +167,18 @@ namespace NatureFX.Rendering {
 			// with DLAA only for now: upscaling with it shook the picture, threw light noise and once hung the GPU
 			// (DXGI_ERROR_DEVICE_HUNG while switching modes)
 			int quality = Mathf.Clamp(Quality, 0, Shares.Length - 1);
-			RayReconstruction = RayReconstructionWanted && quality == 0 && NativeEngine.DlssRayReconstructionAvailable != 0 &&
+			RayReconstruction = RayReconstructionWanted && (quality == 0 || DevRayReconstructionUpscaling) && NativeEngine.DlssRayReconstructionAvailable != 0 &&
 			                    Time.frameCount - RTShadowPass.ExactFrame <= 2;
-			Upscaling = quality > 0 && upscaledShader_ != null && SwapTaa(true) && SetDynamicResolution(Shares[quality] * 100.0f);
+			Upscaling = quality > 0 && upscaledShader_ != null && SwapTaa(!DevHdrpTaau) && SetDynamicResolution(Shares[quality] * 100.0f);
+			// the sun shadows' rays kept about the display resolution's: a moving shadow over still ground has no
+			// history, and the render resolution's noise was upscaled with it (TAAU the same: not DLSS's doing)
+			NativeEngine.SunSamples = Upscaling ? Mathf.Clamp(Mathf.RoundToInt(1.0f / (Shares[quality] * Shares[quality])), 1, 4) : 1;
 			if (Upscaling) {
 				// HDRP's TAAU path: it jitters the camera (taaJitter) and upscales in its TAA pass, drawn by NFX_Upscaled;
 				// its anti-flicker at 0 tells that pass from the one after a physically based depth of field (3.5)
 				data.antialiasing = HDAdditionalCameraData.AntialiasingMode.TemporalAntialiasing;
 				data.allowDynamicResolution = true;
-				data.taaAntiFlicker = 0.0f;
+				data.taaAntiFlicker = DevHdrpTaau ? originalAntiFlicker_ : 0.0f;
 				return;
 			}
 			SetDynamicResolution(-1.0f);
@@ -255,6 +265,7 @@ namespace NatureFX.Rendering {
 
 		private static void RestoreAll() {
 			Upscaling = false;
+			NativeEngine.SunSamples = 1;
 			RayReconstruction = false;
 			SetDynamicResolution(-1.0f);
 			SwapTaa(false);
@@ -287,7 +298,7 @@ namespace NatureFX.Rendering {
 			if (!Active || cam != camera_ || matricesFrame_ != Time.frameCount || ranFrame_ == Time.frameCount) {
 				return false;
 			}
-			if (!Upscaling && cam != jittered_) {
+			if (!Upscaling && cam != jittered_ || Upscaling && DevHdrpTaau) {
 				return false;
 			}
 			ranFrame_ = Time.frameCount;
