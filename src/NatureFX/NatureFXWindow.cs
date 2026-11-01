@@ -753,6 +753,10 @@ namespace NatureFX {
 			Other(Widgets.Switch("Full relight", S.RTFullRelight, v => S.RTFullRelight = v,
 				"The own engine lights every opaque pixel again: HDRP's image is taken apart exactly (its baked sky light and glow, sun, lamps, reflections) " +
 				"and put together with the traced shadows, sky share, GI and the own sky. Needs Exact sun light. Off: HDRP's image with corrections."));
+			Other(Widgets.Switch("Shadows on transparent surfaces", S.RTTransparentShadows, v => S.RTTransparentShadows = v,
+				"Garlands, flags, see-through sheets and other transparent things take the sun's traced shadow too (a ray traced shadow map " +
+				"around the camera; NatureFX shaders only, the shader rebuild's)."));
+			Widgets.Info($"Transparent surfaces: {Rendering.SunShadowMap.Status}");
 			Other(Widgets.Switch("Per-lamp shadows", S.RTLampMasks, v => S.RTLampMasks = v,
 				"Each lamp and headlight shadowed by its own traced mask (the four that matter most per pixel), its shine on a wet road too. Needs Exact sun light. Off: one blocked share for all lamps."));
 			Other(Widgets.Slider("Sun size (softness)", S.SunSize, 0.1f, 3, v => S.SunSize = v, "0.00", "°"));

@@ -1152,6 +1152,23 @@ namespace NatureFX.Rendering {
 		// this frame (else its own)
 		public const int TraceLampMask_ = 19;
 
+		// The sun's ray traced shadow map for transparent surfaces (SunShadowMap, NFXNative SunMap.hlsl): rows row ..
+		// row + rows of a cells x cells map into target, centred on origin (xyz, w the cell size), across dir (towards
+		// the sun as the map is traced, whatever the sun does meanwhile), the rays starting start m up it
+		public const int TraceSunMap_ = 20;
+
+		public static void TraceSunMap(CommandBuffer cmd, GraphicsBuffer target, Vector4 origin, Vector4 dir, int row, int rows, int cells, float start) {
+			var ptr = target.GetNativeBufferPtr();
+			var sun = sunDirection_;
+			sunDirection_ = new Vector4(dir.x, dir.y, dir.z, 1.0f);
+			kindParams_ = true;
+			kindA_ = origin;
+			kindB_ = new Vector4(row, start, cells, 0.0f);
+			Issue(cmd, TraceSunMap_, ptr, ptr, cells, rows);
+			kindParams_ = false;
+			sunDirection_ = sun;
+		}
+
 		public static void TraceLampMask(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, RTHandle target, Vector4 size) {
 			int width = (int)size.x, height = (int)size.y;
 			var result = Buffers(TraceLampMask_, width * height, 1, 16);

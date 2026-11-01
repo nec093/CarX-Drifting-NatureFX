@@ -660,6 +660,7 @@ namespace NatureFX.Rendering {
 				shadows_.ExactSun = s.RTExactSun;
 				shadows_.LampMasks = s.RTLampMasks;
 				shadows_.FullRelight = s.RTFullRelight;
+				shadows_.TransparentShadows = s.RTTransparentShadows;
 				shadows_.LeafTranslucency = s.RTLeafTranslucency;
 				shadows_.Shafts = s.RTShafts;
 				lights_.Enabled = EngineLighting.LocalLights(s);

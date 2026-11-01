@@ -321,8 +321,10 @@ namespace NatureFX.Nature {
 
 			// HDRP/Lit glass keeps its blend settings under the same property names; other transparent shaders wait
 			bool transparent = m.renderQueue >= (int)UnityEngine.Rendering.RenderQueue.GeometryLast + 1 || (m.HasProperty("_SurfaceType") && m.GetFloat("_SurfaceType") > 0.5f);
-			if (transparent && shaderName != "HDRP/Lit") {
-				reason = "transparent (glass, water: stage 4)";
+			// transparent: HDRP/Lit, and HDRP Shader Graphs (their surface type and blend under HDRP/Lit's names: the generic
+			// surface takes them over, and the sun's traced shadow with it); glass and water have their own handling
+			if (transparent && shaderName != "HDRP/Lit" && (!m.HasProperty("_SurfaceType") || lower.Contains("glass") || lower.Contains("water"))) {
+				reason = "transparent (glass, water, not HDRP's kind)";
 				return null;
 			}
 			// unlit (signs, screens): the generic surface glowing at a real luminance (GenericTranslator); transparent ones
@@ -479,6 +481,10 @@ namespace NatureFX.Nature {
 			}
 			if (m.HasProperty("_EmissiveColorMap") && m.GetTexture("_EmissiveColorMap") != null) {
 				yield return "_EMISSIVE_COLOR_MAP";
+			}
+			if (m.HasProperty("_SurfaceType") && m.GetFloat("_SurfaceType") > 0.5f) {
+				yield return "_SURFACE_TYPE_TRANSPARENT";
+				yield return "_ENABLE_FOG_ON_TRANSPARENT";
 			}
 		}
 

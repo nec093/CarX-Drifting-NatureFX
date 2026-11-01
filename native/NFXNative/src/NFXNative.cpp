@@ -46,6 +46,7 @@
 #include "FogVolume.h"        // g_FogVolume: the 3D fog's scattering per froxel
 #include "SkyCube.h"          // g_SkyCube: the engine's sky as HDRP's cube map
 #include "LampMask.h"         // g_LampMask: each lamp's own visibility (roadmap A4)
+#include "SunMap.h"           // g_SunMap: the sun's ray traced shadow map for transparent surfaces
 #include "SanitizeIndices.h"  // g_SanitizeIndices: shaders/SanitizeIndices.hlsl as DXIL
 #include "ExtractUvs.h"       // g_ExtractUvs: shaders/ExtractUvs.hlsl as DXIL
 // the same traces as DXR 1.0 libraries (NFX_PIPELINE: TraceRay in a ray tracing pipeline), g_<name>Lib
@@ -69,6 +70,7 @@
 #include "FogVolumeLib.h"
 #include "SkyCubeLib.h"
 #include "LampMaskLib.h"
+#include "SunMapLib.h"
 #include "CopyRaw.h"          // g_CopyRaw: shaders/CopyRaw.hlsl as DXIL
 #include "WindDisplace.h"     // g_WindDisplace: shaders/WindDisplace.hlsl (foliage swayed by the wind)
 #include "BakeAlpha.h"        // g_BakeAlpha: shaders/BakeAlpha.hlsl as DXIL
@@ -293,7 +295,7 @@ enum TraceKind {
 	kTraceGI = 6, kTraceCacheResolve = 7, kTraceGlass = 8,
 	// the sky (Sky.hlsli): its tables, no rays
 	kTraceSkyTransmittance = 9, kTraceSkyMultiScatter = 10, kTraceSkyView = 11, kTraceCloudNoise = 12, kTraceClouds = 13,
-	kTraceCloudShadow = 14, kTraceSkyAmbient = 15, kTraceFog = 16, kTraceFogVolume = 17, kTraceSkyCube = 18, kTraceLampMask = 19, kTraceKinds = 20
+	kTraceCloudShadow = 14, kTraceSkyAmbient = 15, kTraceFog = 16, kTraceFogVolume = 17, kTraceSkyCube = 18, kTraceLampMask = 19, kTraceSunMap = 20, kTraceKinds = 21
 };
 // GI's world space radiance cache (NFXCommon.hlsli: CacheEntries x CacheEntryBytes), u2 of every trace
 constexpr UINT64 kCacheBytes = (1ull << 19) * 48;
@@ -325,7 +327,8 @@ bool CreateTraceStateObjects() {
 		ShaderCode("CloudNoiseLib", g_CloudNoiseLib, sizeof(g_CloudNoiseLib)), ShaderCode("CloudsLib", g_CloudsLib, sizeof(g_CloudsLib)),
 		ShaderCode("CloudShadowLib", g_CloudShadowLib, sizeof(g_CloudShadowLib)), ShaderCode("SkyAmbientLib", g_SkyAmbientLib, sizeof(g_SkyAmbientLib)),
 		ShaderCode("FogLib", g_FogLib, sizeof(g_FogLib)), ShaderCode("FogVolumeLib", g_FogVolumeLib, sizeof(g_FogVolumeLib)),
-		ShaderCode("SkyCubeLib", g_SkyCubeLib, sizeof(g_SkyCubeLib)), ShaderCode("LampMaskLib", g_LampMaskLib, sizeof(g_LampMaskLib))
+		ShaderCode("SkyCubeLib", g_SkyCubeLib, sizeof(g_SkyCubeLib)), ShaderCode("LampMaskLib", g_LampMaskLib, sizeof(g_LampMaskLib)),
+		ShaderCode("SunMapLib", g_SunMapLib, sizeof(g_SunMapLib))
 	};
 	// every kind: 3 records (ray generation, miss, hit group), one table row
 	if (!g_traceTables) {
@@ -425,7 +428,8 @@ bool CreateTracePipelines() {
 		ShaderCode("CloudNoise", g_CloudNoise, sizeof(g_CloudNoise)), ShaderCode("Clouds", g_Clouds, sizeof(g_Clouds)),
 		ShaderCode("CloudShadow", g_CloudShadow, sizeof(g_CloudShadow)), ShaderCode("SkyAmbient", g_SkyAmbient, sizeof(g_SkyAmbient)),
 		ShaderCode("Fog", g_Fog, sizeof(g_Fog)), ShaderCode("FogVolume", g_FogVolume, sizeof(g_FogVolume)),
-		ShaderCode("SkyCube", g_SkyCube, sizeof(g_SkyCube)), ShaderCode("LampMask", g_LampMask, sizeof(g_LampMask))
+		ShaderCode("SkyCube", g_SkyCube, sizeof(g_SkyCube)), ShaderCode("LampMask", g_LampMask, sizeof(g_LampMask)),
+		ShaderCode("SunMap", g_SunMap, sizeof(g_SunMap))
 	};
 	for (int k = 0; k < kTraceKinds; ++k) {
 		if (g_tracePso[k]) {
@@ -679,7 +683,7 @@ NFX_EXPORT int NFX_Native_Info(char* buffer, int size) {
 	s += g_pluginLoadCalled ? (g_unityD3D12 != nullptr ? "yes (D3D12v7)" : "yes (no D3D12v7)") : "no";
 	s += ", device from: " + g_deviceSource;
 	// features the C# side checks before relying on them (an older DLL lacks them)
-	s += ", features: own-glass lamp-mask dlss dlss-rr";
+	s += ", features: own-glass lamp-mask dlss dlss-rr sun-map";
 	if (g_device) {
 		D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
 		g_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options));

@@ -194,6 +194,7 @@ namespace NatureFX {
 		public float LensStreaks { get; set; }
 		public float MotionBlur { get; set; }              // own post: the shutter's share of a frame (0.5: 180°), 0 off
 		public float DofFStop { get; set; }                // own post's depth of field: the lens's f-number
+		public bool RTTransparentShadows { get; set; }     // the sun's ray traced shadow on transparent surfaces (SunShadowMap)
 		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
 		public bool MapProbes { get; set; }
 		// draw the map's markers over the picture (F8 > Map), for map authors
@@ -396,6 +397,7 @@ namespace NatureFX {
 		public float LensStreaks { get; set; }
 		public float MotionBlur { get; set; }              // own post: the shutter's share of a frame (0.5: 180°), 0 off
 		public float DofFStop { get; set; }                // own post's depth of field: the lens's f-number
+		public bool RTTransparentShadows { get; set; }     // the sun's ray traced shadow on transparent surfaces (SunShadowMap)
 		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
 		public bool MapProbes { get; set; }
 		// draw the map's markers over the picture (F8 > Map), for map authors
@@ -749,6 +751,11 @@ namespace NatureFX {
 				d.MotionBlur = 0.5f;
 				d.DofFStop = 2.8f;
 				d.ConfigVersion = 58;
+			}
+			if (d.ConfigVersion < 59) {
+				// the sun's ray traced shadow on transparent surfaces
+				d.RTTransparentShadows = true;
+				d.ConfigVersion = 59;
 			}
 		}
 

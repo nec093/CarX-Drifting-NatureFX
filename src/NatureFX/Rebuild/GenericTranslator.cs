@@ -60,6 +60,20 @@ namespace NatureFX.Rebuild {
 				m.SetFloat("_Smoothness", 0.3f);
 			}
 
+			// a transparent HDRP Shader Graph: its surface type and blend, as HDRP/Lit names them (ValidateMaterial then
+			// sets the render states and keywords from them)
+			if (!litNames && src.TryFloat(out float surface, "_SurfaceType") && surface > 0.5f) {
+				m.SetFloat("_SurfaceType", 1.0f);
+				m.SetFloat("_BlendMode", src.TryFloat(out float blend, "_BlendMode") ? blend : 0.0f);
+				m.SetFloat("_EnableFogOnTransparent", 1.0f);
+				if (src.TryFloat(out float zwrite, "_TransparentZWrite")) {
+					m.SetFloat("_TransparentZWrite", zwrite);
+				}
+				if (src.TryFloat(out float backThenFront, "_TransparentBackfaceEnable")) {
+					m.SetFloat("_TransparentBackfaceEnable", backThenFront);
+				}
+			}
+
 			bool clip = src.HasKeyword("_ALPHATEST_ON")
 			            || (src.TryFloat(out float clipOn, "_AlphaCutoffEnable", "_AlphaClip") && clipOn > 0.5f)
 			            || (src.RenderQueue >= 2450 && src.RenderQueue < 2500);
