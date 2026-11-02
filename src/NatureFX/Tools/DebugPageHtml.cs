@@ -16,7 +16,7 @@ namespace NatureFX.Tools {
 @media (prefers-color-scheme: light) { :root { --bg:#fff; --fg:#1e1e1e; --dim:#6e6e6e; --rule:#d0d0d0; --head:#f3f3f3; --bar:#b0b0b0; --sel:#e8e8e8; --warn:#9a6700; --bad:#c42b1c; --a:#0451a5; --b:#267f00; --c:#9a6700; --on:#007a65; } }
 * { box-sizing:border-box; }
 html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); }
-body { font:12px/1.4 Consolas, 'Cascadia Mono', ui-monospace, Menlo, monospace; display:grid; grid-template-columns:120px 1fr; grid-template-rows:auto 1fr; }
+body { font:12px/1.4 Consolas, 'Cascadia Mono', 'BIZ UDGothic', 'Yu Gothic UI', Meiryo, ui-monospace, Menlo, monospace; display:grid; grid-template-columns:120px 1fr; grid-template-rows:auto 1fr; }
 #bar { grid-column:1 / 3; position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--rule); padding:6px 12px; display:flex; flex-wrap:wrap; gap:4px 16px; z-index:2; }
 #bar b { font-weight:normal; color:var(--dim); }
 #bar a { color:var(--dim); }
@@ -72,6 +72,13 @@ pre { margin:0; padding:4px; height:calc(100vh - 120px); overflow:auto; border:1
 .row .pn { color:var(--dim); font-weight:normal; margin-left:6px; font-size:90%; }
 section .ghelp { padding:4px; color:var(--dim); border:1px solid var(--rule); border-top:0; }
 #lang { margin-left:auto; }
+/* Japanese: Windows' UI fonts (BIZ UDPGothic, Yu Gothic UI, Meiryo UI) for the texts, not the monospaced fallback
+   (MS Gothic); the numbers and values stay monospaced */
+html[lang=ja] #tabs button, html[lang=ja] h2, html[lang=ja] .row > span:first-child, html[lang=ja] .row > label,
+html[lang=ja] .help, html[lang=ja] .ghelp, html[lang=ja] .def span, html[lang=ja] .tools label, html[lang=ja] .tools span, html[lang=ja] button {
+  font-family:'BIZ UDPGothic', 'Yu Gothic UI', 'Meiryo UI', Meiryo, 'Hiragino Sans', 'Noto Sans JP', sans-serif; letter-spacing:0.02em; }
+html[lang=ja] .help, html[lang=ja] .ghelp { font-size:12.5px; line-height:1.6; }
+html[lang=ja] .row .pn, html[lang=ja] input { font-family:Consolas, 'Cascadia Mono', ui-monospace, monospace; }
 .sw { appearance:none; width:30px; height:15px; border:1px solid var(--dim); border-radius:8px; position:relative; cursor:pointer; margin:0; }
 .sw::after { content:''; position:absolute; top:2px; left:2px; width:9px; height:9px; border-radius:50%; background:var(--dim); transition:left .1s; }
 .sw:checked { border-color:var(--on); }
@@ -165,7 +172,7 @@ try { LANG = localStorage.getItem('nfxLang') || ((navigator.language || '').star
 const T = k => (LANG === 'ja' && META && META.ja.ui && META.ja.ui[k]) || ({ settingsTitle: 'settings (the F8 window\'s, saved as they change)', typeHint: 'a value outside a slider\'s range: type it in the box',
   filter: 'filter', changedOnly: 'changed only', default: 'default', resetToDefault: 'reset', changed: 'changed', other: 'Other settings (no plain F8 control)',
   changedCount: 'changed from the defaults' })[k] || k;
-function tabLabels() { for (const [id, label] of TABS) { const b = $('tb-' + id); if (b) b.textContent = T(id) === id ? label : T(id); } $('lang').textContent = LANG === 'ja' ? '日本語 / EN' : 'EN / 日本語'; }
+function tabLabels() { document.documentElement.lang = LANG; for (const [id, label] of TABS) { const b = $('tb-' + id); if (b) b.textContent = T(id) === id ? label : T(id); } $('lang').textContent = LANG === 'ja' ? '日本語 / EN' : 'EN / 日本語'; }
 $('tabs').innerHTML = TABS.map(([id, label]) => `<button id='tb-${id}'>${label}</button>`).join('');
 for (const [id] of TABS) $('tb-' + id).onclick = () => pick(id);
 $('lang').onclick = () => { LANG = LANG === 'ja' ? 'en' : 'ja'; try { localStorage.setItem('nfxLang', LANG); } catch (e) {} ctlKeys.settings = ''; tabLabels(); if (lastControls) controls(lastControls); };

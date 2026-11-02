@@ -182,6 +182,7 @@ namespace NatureFX.Rendering {
 					}
 					continue;
 				}
+				LogTransitions(light, hd);
 				cars_.TryGetValue(light, out var car);
 				bool beamHigh = high && car != null && car == player;
 				// every frame: the game sets its lights again now and then (a lamp switched on, its own presets): put
@@ -217,6 +218,24 @@ namespace NatureFX.Rendering {
 		private int heldLogged_;
 
 		private readonly HashSet<string> heldKinds_ = new();
+
+		// what the game does to a lamp of ours besides its values (switched off, hidden, dimmed): each change in the log,
+		// the first 40 (the beam went out on the throttle, not at a creep)
+		private readonly Dictionary<Light, string> lampStates_ = new();
+		private int transitionsLogged_;
+
+		private void LogTransitions(Light light, HDAdditionalLightData hd) {
+			if (transitionsLogged_ >= 40) {
+				return;
+			}
+			string state = $"enabled {light.enabled}, active {light.gameObject.activeInHierarchy}, dimmer {hd.lightDimmer:0.00}, intensity {light.intensity:0}, " +
+			               $"layer mask {light.renderingLayerMask}, culling {light.cullingMask}";
+			if (lampStates_.TryGetValue(light, out var before) && before != state) {
+				++transitionsLogged_;
+				KSL.API.Kino.Log.Info($"[NatureFX] Headlights: '{Path(light.transform)}' {before} -> {state}");
+			}
+			lampStates_[light] = state;
+		}
 
 		private bool Holds(Light light, Texture cookie, int type) {
 			var hd = light.GetComponent<HDAdditionalLightData>();

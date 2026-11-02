@@ -195,14 +195,18 @@ void NFX_ApplyAccumulation(inout NFXSurface s, float3 positionAWS, float3 geomNo
 	float wetMask = wet * exposure * saturate(0.65 + (large - 0.5) * 0.9 + up * 0.25) * (1.0 - track.g * 0.8);
 	float soaked = saturate(wetMask * 1.6);
 	s.baseColor *= lerp(1.0, 0.35, soaked * saturate(porosity));
-	// glossier mostly where water can lie (steep faces shed it)
-	s.smoothness = lerp(s.smoothness, lerp(0.62, 0.8, 1.0 - saturate(porosity)), soaked * lerp(0.4, 1.0, up));
-	// the water film: the level rises once the surface is soaked, the relief's low parts (its height) fill first
-	float level = saturate((wetMask - 0.5) * 2.0) * pow(up, 4.0);
-	float film = saturate((level * 1.1 - s.height * 0.6) * 5.0);
+	// glossier mostly where water can lie (steep faces shed it): soaked asphalt is a blurred sheen, not a mirror
+	s.smoothness = lerp(s.smoothness, lerp(0.55, 0.75, 1.0 - saturate(porosity)), soaked * lerp(0.4, 1.0, up));
+	// the water film: it stands only while the rain is heavy enough to outrun the drainage (a road's camber and its
+	// texture carry the water off; it drains within minutes after the rain), in the relief's low parts first. A road's
+	// stones still poke through a film a millimetre thick: a sheen over its texture, not a mirror (the whole road at
+	// mirror gloss looked like a flooded car park). Relief: the surface's height, or noise where it has no height map
+	float relief = _NFX_Surface2.x > 0.5 ? s.height : lerp(s.height, detail * 0.7 + large * 0.3, 0.7);
+	float level = saturate((wetMask - 0.7) / 0.3) * saturate(rain * 1.5) * pow(up, 4.0);
+	float film = saturate((level * 0.9 - relief * 0.8) * 4.0);
 	if (film > 0.001) {
-		s.smoothness = lerp(s.smoothness, 0.95, film);
-		s.normalWS = normalize(lerp(s.normalWS, geomNormalWS, film * 0.85));
+		s.smoothness = lerp(s.smoothness, 0.86, film);
+		s.normalWS = normalize(lerp(s.normalWS, geomNormalWS, film * 0.5));
 		if (rain > 0.0) {
 			float2 rip = NFX_Ripples(xz, time, rain);
 			s.normalWS = normalize(s.normalWS + float3(rip.x, 0.0, rip.y) * film * 0.6);
