@@ -433,7 +433,15 @@ namespace NatureFX.Rendering {
 				if (light.type != LightType.Spot) {
 					continue;
 				}
-				var rb = light.GetComponentInParent<Rigidbody>();
+				// the car's body: the first rigid body up the hierarchy heavy enough for a car (a lamp under a light part
+				// with a body of its own, a bumper or a light pod, was passed over: the game's own beam when driving)
+				Rigidbody rb = null;
+				foreach (var candidate in light.GetComponentsInParent<Rigidbody>(true)) {
+					if (candidate.mass >= MinCarMass) {
+						rb = candidate;
+						break;
+					}
+				}
 				// a lamp the game keeps apart from the car's body (a view's own headlights, on the camera's rig): the car it
 				// sits in front of and points along, the player's within 8 m
 				if (rb == null) {
@@ -447,6 +455,12 @@ namespace NatureFX.Rendering {
 					}
 				}
 				if (rb == null || rb.mass < MinCarMass) {
+					// a spot near the player's car that is not taken: in the log once (the game's own beam showed when driving)
+					var near = PlayerCar();
+					if (near != null && (light.transform.position - near.position).sqrMagnitude < 64.0f && loggedLoose_.Add(-light.GetInstanceID())) {
+						KSL.API.Kino.Log.Info($"[NatureFX] Headlights: spot '{Path(light.transform)}' by {near.name} not taken (body {(rb != null ? $"{rb.name} {rb.mass:0} kg" : "none")}, " +
+						                      $"facing {Vector3.Dot(light.transform.forward, near.transform.forward):0.00})");
+					}
 					continue;
 				}
 				var hd = light.GetComponent<HDAdditionalLightData>();

@@ -280,10 +280,17 @@ namespace NatureFX.Rendering {
 			sunShadowsOff_ = !on;
 		}
 
+		// OwnLighting.Sun: HDRP's shading of the light off (a rendering layer no renderer is on), the light kept in HDRP's
+		// lists for the exact sun pass
 		private static void SetHdrpLighting(HDAdditionalLightData light, bool on) {
-			if (light != null && (light.affectDiffuse != on || light.affectSpecular != on)) {
-				light.affectDiffuse = on;
-				light.affectSpecular = on;
+			var l = light != null ? light.GetComponent<Light>() : null;
+			if (l == null) {
+				return;
+			}
+			if (on) {
+				OwnLighting.HdrpLightOn(l);
+			} else {
+				OwnLighting.HdrpLightOff(l);
 			}
 		}
 
