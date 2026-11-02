@@ -884,6 +884,11 @@ namespace NatureFX {
 				d.OilFilm = 0.0f;
 				d.ConfigVersion = 74;
 			}
+			if (d.ConfigVersion < 75) {
+				// DXR 1.1 (inline ray queries) by default: what the user tests with
+				d.RTBackend = 1;
+				d.ConfigVersion = 75;
+			}
 		}
 
 		public static void Save() {
