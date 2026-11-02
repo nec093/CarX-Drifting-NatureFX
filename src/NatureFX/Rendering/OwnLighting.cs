@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.Rendering.HighDefinition;
+using Object = UnityEngine.Object;
 
 namespace NatureFX.Rendering {
 	// HDRP's sky light, reflections and sky handed over to the own engine (Settings.OwnSkyLighting):
@@ -13,8 +14,8 @@ namespace NatureFX.Rendering {
 	public static class OwnLighting {
 		private const int Grace = 30; // frames a composite may miss before HDRP takes over again
 
-		private static int shadowFrame_ = -1000, reflectionFrame_ = -1000, sunFrame_ = -1000;
-		private static bool wanted_, wantedSun_;
+		private static int shadowFrame_ = -1000, reflectionFrame_ = -1000, sunFrame_ = -1000, lampsFrame_ = -1000;
+		private static bool wanted_, wantedSun_, wantedLamps_;
 
 		public static bool Ambient { get; private set; }      // HDRP's indirect diffuse is off; the shadow composite adds the sky
 		public static bool Reflections { get; private set; }  // HDRP's reflections are off; the reflections composite adds them
@@ -26,16 +27,59 @@ namespace NatureFX.Rendering {
 		public static bool Sun { get; private set; }
 		public static void SunComposed() => sunFrame_ = Time.frameCount;
 
+		// 5. HDRP's lamps (point and spot lights) light nothing: the lamp masks' pass works their light out from the
+		//    G-buffer at full strength and the shadow composite adds the lit share (Settings.OwnLampLight)
+		public static bool Lamps { get; private set; }
+		public static void LampsComposed() => lampsFrame_ = Time.frameCount;
+		private static readonly System.Collections.Generic.List<HDAdditionalLightData> lampsOff_ = new();
+		private static float nextLampScan_;
+
+		// HDRP's punctual lights switched off for HDRP's lighting while Lamps (looked for once a second: lamps come and go)
+		private static void UpdateLamps() {
+			if (!Lamps) {
+				if (lampsOff_.Count > 0) {
+					foreach (var l in lampsOff_) {
+						if (l != null) {
+							l.affectDiffuse = true;
+							l.affectSpecular = true;
+						}
+					}
+					lampsOff_.Clear();
+				}
+				return;
+			}
+			if (Time.unscaledTime < nextLampScan_) {
+				return;
+			}
+			nextLampScan_ = Time.unscaledTime + 1.0f;
+			lampsOff_.RemoveAll(l => l == null);
+			foreach (var light in Object.FindObjectsByType<Light>(FindObjectsSortMode.None)) {
+				if (light.type != LightType.Point && light.type != LightType.Spot) {
+					continue;
+				}
+				var hd = light.GetComponent<HDAdditionalLightData>();
+				if (hd == null || !hd.affectDiffuse && !hd.affectSpecular) {
+					continue;
+				}
+				hd.affectDiffuse = false;
+				hd.affectSpecular = false;
+				lampsOff_.Add(hd);
+			}
+		}
+
 		// the composites say they ran (with what they need: the own sky probe)
 		public static void ShadowComposed() => shadowFrame_ = Time.frameCount;
 		public static void ReflectionComposed() => reflectionFrame_ = Time.frameCount;
 
 		// once a frame, before VolumeOverhaul.UpdateSky
-		public static void Update(bool wanted, bool wantedSun) {
+		public static void Update(bool wanted, bool wantedSun, bool wantedLamps) {
 			wanted_ = wanted && NativeEngine.SkyProbe != null;
 			wantedSun_ = wantedSun;
+			wantedLamps_ = wantedLamps;
 			int now = Time.frameCount;
 			Sun = wantedSun_ && now - sunFrame_ <= Grace;
+			Lamps = wantedLamps_ && now - lampsFrame_ <= Grace;
+			UpdateLamps();
 			ShadowsRunning = now - shadowFrame_ <= Grace;
 			Ambient = wanted_ && ShadowsRunning;
 			Reflections = wanted_ && now - reflectionFrame_ <= Grace;
@@ -50,6 +94,7 @@ namespace NatureFX.Rendering {
 		public static string Status => !wanted_ ? "off (HDRP's own sky light and reflections)"
 			: $"HDRP's sky light {(Ambient ? "from the own engine" : "HDRP's (shadow composite not running)")}, " +
 			  $"reflections {(Reflections ? "from the own engine" : "HDRP's (reflections composite not running)")}, " +
-			  $"HDRP's sky {(Sky ? "off" : "on")}, sun light {(Sun ? "from the own engine" : wantedSun_ ? "HDRP's (exact sun pass not running)" : "HDRP's")}";
+			  $"HDRP's sky {(Sky ? "off" : "on")}, sun light {(Sun ? "from the own engine" : wantedSun_ ? "HDRP's (exact sun pass not running)" : "HDRP's")}, " +
+			  $"lamps {(Lamps ? $"from the own engine ({lampsOff_.Count} of HDRP's off)" : wantedLamps_ ? "HDRP's (lamp masks not running)" : "HDRP's")}";
 	}
 }

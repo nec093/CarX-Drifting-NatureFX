@@ -45,6 +45,7 @@ namespace NatureFX {
 		public bool TimePasses { get; set; }          // the time of day runs on by itself
 		public bool OwnSkyLighting { get; set; }      // HDRP's sky light, reflections and sky from the own engine (OwnLighting)
 		public bool OwnSunLight { get; set; }         // HDRP's sun lights nothing; the shadow composite adds it (OwnLighting.Sun)
+		public bool OwnLampLight { get; set; }        // HDRP's lamps light nothing; the shadow composite adds them (OwnLighting.Lamps)
 		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
 		public float SunMaxElevation { get; set; }    // degrees at noon
@@ -262,6 +263,7 @@ namespace NatureFX {
 		public bool TimePasses { get; set; }          // the time of day runs on by itself
 		public bool OwnSkyLighting { get; set; }      // HDRP's sky light, reflections and sky from the own engine (OwnLighting)
 		public bool OwnSunLight { get; set; }         // HDRP's sun lights nothing; the shadow composite adds it (OwnLighting.Sun)
+		public bool OwnLampLight { get; set; }        // HDRP's lamps light nothing; the shadow composite adds them (OwnLighting.Lamps)
 		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
 		public float SunMaxElevation { get; set; }    // degrees at noon
@@ -816,6 +818,11 @@ namespace NatureFX {
 				// the sun's light from the own engine
 				d.OwnSunLight = true;
 				d.ConfigVersion = 65;
+			}
+			if (d.ConfigVersion < 66) {
+				// the lamps' light from the own engine
+				d.OwnLampLight = true;
+				d.ConfigVersion = 66;
 			}
 		}
 

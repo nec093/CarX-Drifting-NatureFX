@@ -461,6 +461,10 @@ namespace NatureFX {
 				"HDRP's sun lights nothing; the ray traced shadow pass adds the sun's light (worked out from the G-buffer as HDRP " +
 				"does, or its own where there is none) under the traced shadow. Only while the exact sun light runs " +
 				"(Lighting & shadows)."));
+			Other(Widgets.Switch("Lamp light from the own engine", S.OwnLampLight, v => S.OwnLampLight = v,
+				"HDRP's street lights, headlights and other lamps light nothing; the lamp masks' pass works their light out " +
+				"(cookies included) and the shadow composite adds the share each lamp's traced shadow lets through. Only " +
+				"while the lamp masks run (Lighting & shadows)."));
 			Widgets.Info($"Own lighting: {Rendering.OwnLighting.Status}");
 			Widgets.Info($"HDRP's sky: {mod_.Volume.SkyState}");
 			Widgets.Info($"Cube for HDRP: {Rendering.AtmospherePass.CubeStatus}");

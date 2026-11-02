@@ -191,6 +191,7 @@ Shader "Hidden/NatureFX/SunExact"
             float4 _NFX_LampMaskParams;        // x the new frame's share, y 1 = lamp masks in use
             float4 _NFX_LampPos[128];          // the engine's lamps (LocalLights): xyz absolute position
             float _NFX_LampCount;
+            float _NFX_OwnLamps;   // 1: HDRP's lamps light nothing for HDRP (OwnLighting.Lamps); worked out at full strength here
 
             struct LampsOut
             {
@@ -371,6 +372,11 @@ Shader "Hidden/NatureFX/SunExact"
                     float blocked = 1.0 - visible;
                     light.shadowIndex = -1;
                     light.contactShadowMask = 0;
+                    if (_NFX_OwnLamps > 0.5)
+                    {
+                        light.diffuseDimmer = 1.0;
+                        light.specularDimmer = 1.0;
+                    }
                     DirectLighting lighting = ShadeSurface_Punctual(context, posInput, builtinData, preLightData, light, bsdfData, V);
                     allDiffuse += lighting.diffuse;
                     allSpecular += lighting.specular;

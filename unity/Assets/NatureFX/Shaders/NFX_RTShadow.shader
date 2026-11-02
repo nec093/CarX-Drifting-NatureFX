@@ -83,6 +83,34 @@ Shader "Hidden/NatureFX/RTShadow"
         }
         return sum;
     }
+    // OwnLighting.Lamps where the lamps' exact light is not known (no G-buffer pass there): HDRP's lamps' diffuse light
+    // on the surface's colour, unshadowed (pre-exposed)
+    float3 OwnLampsLight(float3 pointAWS, float3 n, float3 albedoD)
+    {
+        float3 sum = 0.0;
+        int count = min((int)_NFX_LampCount, 128);
+        for (int i = 0; i < count; ++i)
+        {
+            if (_NFX_LampColor[i].w < 0.5 || _NFX_LampColor[i].w > 1.5)
+                continue;
+            float3 d = _NFX_LampPos[i].xyz - pointAWS;
+            float dist = length(d);
+            float3 toLight = d / max(dist, 1e-4);
+            float range = _NFX_LampPos[i].w;
+            float ratio = dist * dist / (range * range);
+            float window = saturate(1.0 - ratio * ratio);
+            float attenuation = window * window / max(dist * dist, 1e-4);
+            if (_NFX_LampDir[i].w > 0.0)
+            {
+                float cone = saturate(dot(-toLight, _NFX_LampDir[i].xyz) * _NFX_LampDir[i].w + _NFX_LampSpot[i].x);
+                attenuation *= cone * cone;
+            }
+            sum += _NFX_LampColor[i].rgb * attenuation * saturate(dot(n, toLight));
+        }
+        return sum * albedoD * INV_PI * GetCurrentExposureMultiplier();
+    }
+    float _NFX_OwnLamps;                    // 1: HDRP's lamps light nothing; the composite adds their lit share
+
     StructuredBuffer<float4> _NFX_SkyProbe; // the own engine's sky as an ambient probe (HDRP's packing), phase 1c
     float _NFX_SkyAmbientOn;
 
@@ -533,6 +561,28 @@ Shader "Hidden/NatureFX/RTShadow"
             }
             if (any(!isfinite(removed)))
                 removed = 0.0;
+            if (_NFX_OwnLamps > 0.5)
+            {
+                // OwnLighting.Lamps: HDRP's lamps added nothing; their lit share (the exact total less the blocked) is
+                // added, or where the G-buffer has no pixel their unshadowed diffuse light; the lights only NatureFX has
+                // (nativeAdded) as before
+                float4 lampsAllExact = LOAD_TEXTURE2D_X(_NFX_LampsTotalTex, pixel);
+                float3 lampsLitHere;
+                if (lampsAllExact.a > 0.5)
+                {
+                    lampsLitHere = max(lampsAllExact.rgb - (lampsExact.a > 0.5 ? max(lampsExact.rgb, 0.0) : 0.0), 0.0);
+                }
+                else
+                {
+                    NormalData ln;
+                    DecodeFromNormalBuffer(pixel, ln);
+                    PositionInputs lq = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
+                    float lampMetal = known ? saturate((surface.a - (surface.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0;
+                    lampsLitHere = OwnLampsLight(GetAbsolutePositionWS(lq.positionWS), ln.normalWS, (known ? surface.rgb : 0.3) * (1.0 - lampMetal));
+                }
+                color = color + lampsLitHere + nativeAdded;
+                removed = 0.0;
+            }
             float removedLum = Luminance(removed);
             if (removedLum > 0.0)
                 removed *= min(1.0, 0.95 * Luminance(color) / removedLum);
@@ -654,7 +704,7 @@ Shader "Hidden/NatureFX/RTShadow"
             float3 lampsLit = max(lampsAll - (lampsBlocked.a > 0.5 ? max(lampsBlocked.rgb, 0.0) : 0.0), 0.0);
             float3 sunAll = max(exact.rgb, 0.0);
             // (with OwnLighting.Sun HDRP added no sun: nothing of it to take away)
-            float3 restLight = max(hdrpColor - g3 - (_NFX_OwnSun > 0.5 ? 0.0 : sunAll) - lampsAll, 0.0);
+            float3 restLight = max(hdrpColor - g3 - (_NFX_OwnSun > 0.5 ? 0.0 : sunAll) - (_NFX_OwnLamps > 0.5 ? 0.0 : lampsAll), 0.0);
             float sunShade = 1.0 - (1.0 - sunVisible) * shadowStrength;
             // the sky's light from the sky as it is now (HDRP's probe is the own engine's sky, A3), not what the G-buffer
             // baked: a track's lightmaps were baked under its own weak sun (Units) and left the shade black

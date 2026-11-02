@@ -140,6 +140,7 @@ namespace NatureFX.Rendering {
 		private static readonly int SkyAmbientOnId = Shader.PropertyToID("_NFX_SkyAmbientOn");
 		private static readonly int OwnAmbientId = Shader.PropertyToID("_NFX_OwnAmbient");
 		private static readonly int OwnSunId = Shader.PropertyToID("_NFX_OwnSun");
+		private static readonly int OwnLampsId = Shader.PropertyToID("_NFX_OwnLamps");
 		public static readonly int SkyShareTexId = Shader.PropertyToID("_NFX_SkyShareTex");
 		public static readonly int SkyShareParamsId = Shader.PropertyToID("_NFX_SkyShareParams");
 
@@ -444,6 +445,7 @@ namespace NatureFX.Rendering {
 				lampProps_.SetVectorArray(LampPosId, Lights.Positions);
 			}
 			lampProps_.SetFloat(LampCountId, Lights != null ? Lights.Count : 0);
+			lampProps_.SetFloat(OwnLampsId, OwnLighting.Lamps ? 1.0f : 0.0f);
 			lampTargets_[0] = lampsExact_;
 			lampTargets_[1] = historyOut;
 			lampTargets_[2] = lampsTotal_;
@@ -667,6 +669,11 @@ namespace NatureFX.Rendering {
 			props_.SetFloat(OwnSunId, OwnLighting.Sun && exactUsed_ ? 1.0f : 0.0f);
 			if (exactUsed_ && TraceShadows) {
 				OwnLighting.SunComposed();
+			}
+			// OwnLighting.Lamps: HDRP's lamps are off; with the lamp masks' exact light (lit share added)
+			props_.SetFloat(OwnLampsId, OwnLighting.Lamps && maskUsed_ ? 1.0f : 0.0f);
+			if (maskUsed_) {
+				OwnLighting.LampsComposed();
 			}
 			// the GI's sky share for the reflections composite (its rough surfaces' sky): a the share with GI, else the
 			// one bounce factor's brightness
