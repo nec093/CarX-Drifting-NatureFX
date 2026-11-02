@@ -85,7 +85,53 @@ namespace NatureFX.Rendering {
 			// drops of 1 to 5 mm fall at 4 to 9 m/s (Gunn and Kinzer): each drop its own speed between them
 			Drive(rain_, rain * RainRate, eye + velocity_ * 0.8f + Vector3.up * 12.0f, windVelocity * 0.7f + Vector3.down * 9.0f, 4.0f);
 			Drive(snow_, snow * SnowRate, eye + velocity_ * 1.5f + Vector3.up * 8.0f, windVelocity + Vector3.down * 1.0f);
-			State = rain > 0.0f || snow > 0.0f ? $"rain {rain:P0} ({rain_.particleCount} drops), snow {snow:P0} ({snow_.particleCount} flakes)" : (on ? "waiting for rain or snow" : "off");
+			CheckRainAlive(rain);
+			State = rain > 0.0f || snow > 0.0f
+				? $"rain {rain:P0} ({rain_.particleCount} drops{RainDetail()}), snow {snow:P0} ({snow_.particleCount} flakes)"
+				: (on ? "waiting for rain or snow" : "off");
+		}
+
+		// Developer page: the drops stopped by the world's colliders (off: they fall through roofs and the car)
+		public static bool WorldCollision = true;
+		private bool collisionOn_ = true;
+		private bool collisionGaveUp_;
+		private float emptyFor_;
+
+		// Drops emitted but none alive (seen: rain at 60 %, 0 drops): the world's colliders kill them where they are made
+		// (the emitter's box inside a collider, the map's invisible walls or ceilings). After 2 s of that the drops fall
+		// without the world's colliders, and the state says so.
+		private void CheckRainAlive(float rain) {
+			bool want = WorldCollision && !collisionGaveUp_;
+			if (rain > 0.0f && rain_.isPlaying && rain_.particleCount == 0 && collisionOn_) {
+				emptyFor_ += Time.unscaledDeltaTime;
+				if (emptyFor_ > 2.0f) {
+					collisionGaveUp_ = true;
+					want = false;
+					Kino.Log.Warning("[NatureFX] Precipitation: no drop lived for 2 s with the world's collision on; the drops fall without it now");
+				}
+			} else {
+				emptyFor_ = 0.0f;
+			}
+			if (want != collisionOn_) {
+				collisionOn_ = want;
+				var collision = rain_.collision;
+				collision.enabled = want;
+				rain_.Clear();
+			}
+		}
+
+		private string RainDetail() {
+			string detail = rain_.isPlaying ? (rain_.isEmitting ? "" : ", not emitting") : ", stopped";
+			if (!collisionOn_) {
+				detail += collisionGaveUp_ ? ", world collision off: none lived with it" : ", world collision off";
+			}
+			return detail;
+		}
+
+		// after a map loads: the world's collision is tried again
+		public void ResetCollision() {
+			collisionGaveUp_ = false;
+			emptyFor_ = 0.0f;
 		}
 
 		// spread: how much slower than velocity's fall the slowest falls (each particle its own, between the two)

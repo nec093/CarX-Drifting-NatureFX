@@ -688,7 +688,9 @@ namespace NatureFX.Rendering {
 				if (sum.x > 1e-6f && sum.z > 1e-6f) {
 					// log2 of red over blue: 0 under daylight white (D65 in the linear Rec. 709 primaries)
 					float target = Mathf.Clamp(Mathf.Log(sum.x / sum.z, 2.0f), -3.0f, 3.0f);
-					target *= strength * Mathf.Clamp01((ev_ - 2.0f) / 6.0f);
+					// the eye adapts to a lamp's colour less in the dark, but not at all left the rain's and the fog's
+					// haze in sodium and halogen light orange-brown: half of it at night, all of it from dusk light up
+					target *= strength * Mathf.Lerp(0.5f, 1.0f, Mathf.Clamp01((ev_ - 2.0f) / 6.0f));
 					warm_ += (target - warm_) * (1.0f - Mathf.Exp(-Time.unscaledDeltaTime * 0.7f));
 				}
 			}

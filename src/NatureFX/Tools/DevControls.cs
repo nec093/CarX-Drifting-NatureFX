@@ -199,6 +199,8 @@ namespace NatureFX.Tools {
 				"The GI's clamp of single bright rays also goes by the brightest lamp, so a headlight's bounce shows at night. Off: the old reference. Not saved.");
 			Switch(tests, "fog-lists", "3D fog: light lists per tile", () => NativeEngine.FogLightLists, v => NativeEngine.FogLightLists = v,
 				"The same picture: off only to compare the 3D fog's time. Not saved.");
+			Switch(tests, "rain-collision", "Rain: drops stopped by the world's colliders", () => Precipitation.WorldCollision, v => Precipitation.WorldCollision = v,
+				"Off: the drops fall through roofs and the car. Turned off by itself when no drop lives with it (see Weather's precipitation state).");
 			Slider(tests, "smoke-size", "Tyre smoke: largest puff on screen (x)", () => TireSmoke.MaxScreenSize, v => TireSmoke.MaxScreenSize = v, 0.2f, 4.0f, 0.1f,
 				"Smaller is cheaper close to the smoke; too small and the smoke around the camera looks cut. Not saved.");
 

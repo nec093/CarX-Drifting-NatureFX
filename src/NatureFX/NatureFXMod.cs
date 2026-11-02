@@ -528,6 +528,7 @@ namespace NatureFX {
 
 			NatureFX.Tools.DebugPage.MarkStep("rescan: start");
 			OwnLighting.Rescan();
+			Rain.ResetCollision();
 			Capabilities.Refresh();
 			// what the bundle build may leave out (render path, lightmap modes, LOD cross fade): facts of this map
 			NatureFX.Tools.VariantProfileDump.Write(Camera.main);
