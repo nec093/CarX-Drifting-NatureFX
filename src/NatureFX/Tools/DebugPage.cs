@@ -848,6 +848,16 @@ namespace NatureFX.Tools {
 			foreach (var (name, bytes) in bigGameTextures_) {
 				gameTex.Bytes(name, bytes, true);
 			}
+			var switched = new Section("switched-textures", "Switched materials' textures (shader rebuild)");
+			try {
+				foreach (var (label, value) in mod.Replacer.TextureReport()) {
+					bool indent = label.StartsWith("  ", StringComparison.Ordinal);
+					switched.Add(label.Trim(), value, -1.0, indent);
+				}
+			} catch (Exception e) {
+				switched.Add("error", $"{e.GetType().Name}: {e.Message}");
+			}
+			switched.Add("every mip loaded (Developer switch)", Texture.streamingTextureForceLoadAll ? "on" : "off");
 			var meshes = new Section("meshes", "Meshes (vertex and index buffers)");
 			meshes.Add($"all ({meshCount_})", Mb(meshes_), meshes_);
 			meshes.Add($"made for the ray tracing scene only, NFX_RT_* ({rtMeshCount_})", Mb(rtMeshes_), rtMeshes_, true);
@@ -869,6 +879,7 @@ namespace NatureFX.Tools {
 			sections.Add(targets);
 			sections.Add(others);
 			sections.Add(gameTex);
+			sections.Add(switched);
 			sections.Add(meshes);
 			sections.Add(hdrp);
 			sections.Add(scene);

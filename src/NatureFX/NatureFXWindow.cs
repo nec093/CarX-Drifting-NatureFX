@@ -1117,6 +1117,7 @@ namespace NatureFX {
 				"streamed by the game). 0: the game's own value. The debug page shows the textures' memory.");
 			Other(Widgets.Slider("Texture streaming budget", S.TextureStreamingBudget, 0, 4096, v => S.TextureStreamingBudget = Mathf.Round(v / 64.0f) * 64.0f, "0", " MB"));
 			Widgets.Info($"Now: {TextureBudget.Status}");
+			Widgets.Switch("Load every texture mip (test: blurred textures)", Texture.streamingTextureForceLoadAll, v => Texture.streamingTextureForceLoadAll = v);
 			Widgets.Info($"Own sky: track sky textures out of video memory: {VolumeOverhaul.UnloadedSky}");
 			Widgets.EndCard();
 			Widgets.BeginCard("3D fog lamps", "The 3D fog's lamps and headlights from lists per tile of its grid (only the lights that " +

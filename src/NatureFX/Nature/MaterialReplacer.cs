@@ -218,6 +218,84 @@ namespace NatureFX.Nature {
 			}
 		}
 
+		// Debug page: the textures of the switched materials as the GPU holds them now (blurred textures with the full
+		// replacement after a map reload): how many sit below their full size mip by Unity's mip streaming, and the
+		// colour maps a translator picked smaller than the largest texture of the game's material
+		public List<(string Label, string Value)> TextureReport(int worst = 12) {
+			var rows = new List<(string, string)>();
+			int alive = 0, stale = 0, textures = 0, streamed = 0, reduced = 0, wantReduced = 0, requested = 0, smallerBase = 0;
+			var seen = new HashSet<Texture>();
+			var bad = new List<(int Level, string Text)>();
+			var smaller = new List<string>();
+			foreach (var kv in originals_) {
+				var m = kv.Key;
+				if (m == null) {
+					++stale;
+					continue;
+				}
+				++alive;
+				var shader = m.shader;
+				if (shader == null) {
+					continue;
+				}
+				for (int i = 0; i < shader.GetPropertyCount(); ++i) {
+					if (shader.GetPropertyType(i) != UnityEngine.Rendering.ShaderPropertyType.Texture) {
+						continue;
+					}
+					string prop = shader.GetPropertyName(i);
+					var t = m.GetTexture(prop);
+					if (t == null || !seen.Add(t)) {
+						continue;
+					}
+					++textures;
+					if (t is Texture2D t2 && t2.streamingMipmaps) {
+						++streamed;
+						int loaded = t2.loadedMipmapLevel, desired = t2.desiredMipmapLevel;
+						if (t2.requestedMipmapLevel > 0) {
+							++requested;
+						}
+						if (desired > 0) {
+							++wantReduced;
+						}
+						if (loaded > 0) {
+							++reduced;
+							bad.Add((loaded, $"{m.name} {prop} = {t.name} {t.width}x{t.height}: mip {loaded} loaded, {desired} wanted ({kv.Value.Shader?.name} -> {shader.name})"));
+						}
+					}
+				}
+				// the colour map now, against the largest texture the game's material had
+				var baseNow = m.HasProperty("_BaseColorMap") ? m.GetTexture("_BaseColorMap") : null;
+				if (baseNow != null) {
+					Texture largest = null;
+					string largestName = null;
+					foreach (var t in kv.Value.Textures) {
+						if (t.Value.Texture != null && (largest == null || t.Value.Texture.width * t.Value.Texture.height > largest.width * largest.height)) {
+							largest = t.Value.Texture;
+							largestName = t.Key;
+						}
+					}
+					if (largest != null && largest.width * largest.height > baseNow.width * baseNow.height * 2) {
+						++smallerBase;
+						if (smaller.Count < worst) {
+							smaller.Add($"{m.name}: colour map {baseNow.name} {baseNow.width}x{baseNow.height}, the game's {largestName} = {largest.name} {largest.width}x{largest.height} ({kv.Value.Shader?.name})");
+						}
+					}
+				}
+			}
+			rows.Add(("switched materials", $"{alive} (and {stale} of an earlier scene, gone)"));
+			rows.Add(("their textures", $"{textures}, {streamed} mip streamed"));
+			rows.Add(("below full size now", $"{reduced} loaded smaller, {wantReduced} wanted smaller by Unity, {requested} with a requested mip"));
+			bad.Sort((a, b) => b.Level.CompareTo(a.Level));
+			for (int i = 0; i < bad.Count && i < worst; ++i) {
+				rows.Add(("  smaller", bad[i].Text));
+			}
+			rows.Add(("colour map smaller than the game's largest texture", $"{smallerBase} materials"));
+			foreach (string line in smaller) {
+				rows.Add(("  picked", line));
+			}
+			return rows;
+		}
+
 		// Parking map investigation: spectators, road markings and road surfaces went missing once switched. Logs
 		// their state after the swap, a few per kind.
 		private readonly Dictionary<string, int> diagnosed_ = new();
