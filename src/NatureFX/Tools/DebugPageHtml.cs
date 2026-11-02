@@ -64,6 +64,14 @@ pre { margin:0; padding:4px; height:calc(100vh - 120px); overflow:auto; border:1
 .row .help, .row .state { grid-column:1 / 3; color:var(--dim); }
 .row .state { color:var(--fg); overflow-wrap:anywhere; }
 .row label { cursor:pointer; }
+.row.chg { box-shadow:inset 3px 0 0 var(--warn); background:color-mix(in srgb, var(--warn) 8%, transparent); }
+.row.chg > :first-child { color:var(--warn); font-weight:bold; }
+.row .def { grid-column:1 / 3; color:var(--dim); display:flex; gap:8px; align-items:center; }
+.row .def button { padding:0 6px; }
+.row .def button[hidden] { display:none; }
+.row .pn { color:var(--dim); font-weight:normal; margin-left:6px; font-size:90%; }
+section .ghelp { padding:4px; color:var(--dim); border:1px solid var(--rule); border-top:0; }
+#lang { margin-left:auto; }
 .sw { appearance:none; width:30px; height:15px; border:1px solid var(--dim); border-radius:8px; position:relative; cursor:pointer; margin:0; }
 .sw::after { content:''; position:absolute; top:2px; left:2px; width:9px; height:9px; border-radius:50%; background:var(--dim); transition:left .1s; }
 .sw:checked { border-color:var(--on); }
@@ -90,6 +98,7 @@ pre { margin:0; padding:4px; height:calc(100vh - 120px); overflow:auto; border:1
   <span><b>t</b> <span id='t'>-</span></span>
   <button id='pause' title='stop reading the game (the page keeps what it has)'>pause</button>
   <span><a href='/stats.json' target='_blank'>stats.json</a></span>
+  <button id='lang' title='English / 日本語'>EN / JP</button>
 </div>
 <nav id='tabs'></nav>
 <main>
@@ -150,8 +159,18 @@ function pick(name) {
   if (name === 'overview') { chart(); chart2(); }
   if (name === 'log') showLog();
 }
+// the language of the tabs and the settings tab (EN / JP, kept in this browser); the texts from /meta.json
+let LANG = 'en', META = null;
+try { LANG = localStorage.getItem('nfxLang') || ((navigator.language || '').startsWith('ja') ? 'ja' : 'en'); } catch (e) {}
+const T = k => (LANG === 'ja' && META && META.ja.ui && META.ja.ui[k]) || ({ settingsTitle: 'settings (the F8 window\'s, saved as they change)', typeHint: 'a value outside a slider\'s range: type it in the box',
+  filter: 'filter', changedOnly: 'changed only', default: 'default', resetToDefault: 'reset', changed: 'changed', other: 'Other settings (no plain F8 control)',
+  changedCount: 'changed from the defaults' })[k] || k;
+function tabLabels() { for (const [id, label] of TABS) { const b = $('tb-' + id); if (b) b.textContent = T(id) === id ? label : T(id); } $('lang').textContent = LANG === 'ja' ? '日本語 / EN' : 'EN / 日本語'; }
 $('tabs').innerHTML = TABS.map(([id, label]) => `<button id='tb-${id}'>${label}</button>`).join('');
 for (const [id] of TABS) $('tb-' + id).onclick = () => pick(id);
+$('lang').onclick = () => { LANG = LANG === 'ja' ? 'en' : 'ja'; try { localStorage.setItem('nfxLang', LANG); } catch (e) {} ctlKeys.settings = ''; tabLabels(); if (lastControls) controls(lastControls); };
+fetch('/meta.json', { cache: 'no-store' }).then(r => r.json()).then(m => { META = m; ctlKeys.settings = ''; tabLabels(); if (lastControls) controls(lastControls); }).catch(() => {});
+tabLabels();
 let first = 'overview';
 try { first = localStorage.getItem('nfxTab') || 'overview'; } catch (e) {}
 if (!TABS.some(t => t[0] === first)) first = 'overview';
@@ -194,68 +213,119 @@ function table(sec) {
 // being handled
 function send(id, v) { fetch(`/set?id=${encodeURIComponent(id)}&v=${v}`, { cache: 'no-store' }).catch(() => {}); }
 
+// a setting's texts in the page's language: label, help, the card's name and help
+function text(c) {
+  const pick = l => META && META[l] && META[l].settings && META[l].settings[c.name];
+  const t = (LANG === 'ja' && pick('ja')) || pick('en') || {};
+  return { label: t.label || c.label, help: t.help || c.help || '' };
+}
+function groupText(name) {
+  if (name === 'Other') return { name: T('other'), help: '' };
+  const pick = l => META && META[l] && META[l].groups && META[l].groups[name];
+  const t = (LANG === 'ja' && pick('ja')) || pick('en') || {};
+  return { name: t.name || name, help: t.help || '' };
+}
+const fmt = v => { const n = +v; return Math.abs(n) >= 100 ? n.toFixed(0) : (+n.toFixed(4)).toString(); };
+function defText(c) {
+  if (c.def === undefined) return '';
+  if (c.kind === 'switch') return c.def > 0.5 ? 'on' : 'off';
+  if (c.kind === 'chips') return c.options[Math.round(c.def)] ?? fmt(c.def);
+  return fmt(c.def);
+}
+const isChanged = c => c.def !== undefined && Math.abs(c.value - c.def) > 1e-4 * Math.max(1, Math.abs(c.def));
+
+let lastControls = null;
 function controls(list) {
+  lastControls = list;
   for (const tab of ['developer', 'settings']) build(tab, list.filter(c => (c.tab || 'developer') === tab));
+  let changed = 0;
   for (const c of list) {
-    const e = $('c-' + c.id), st = $('st-' + c.id), n = $('cn-' + c.id);
+    const e = $('c-' + c.id), st = $('st-' + c.id), n = $('cn-' + c.id), row = $('r-' + c.id);
     if (st) st.textContent = c.text || '';
-    if (n && n !== document.activeElement) n.value = +c.value;
+    if (row && c.def !== undefined) {
+      const ch = isChanged(c);
+      changed += ch ? 1 : 0;
+      row.classList.toggle('chg', ch);
+      row.dataset.chg = ch ? '1' : '';
+      const r = $('rs-' + c.id); if (r) r.hidden = !ch;
+    }
+    if (n && n !== document.activeElement) n.value = fmt(c.value);
     if (!e || e === document.activeElement && (c.kind === 'slider' || c.kind === 'number')) continue;
     if (c.kind === 'switch') e.checked = c.value > 0.5;
     if (c.kind === 'slider') e.value = c.value;
-    if (c.kind === 'number') e.value = +c.value;
+    if (c.kind === 'number') e.value = fmt(c.value);
     if (c.kind === 'chips') e.querySelectorAll('button').forEach(b => b.classList.toggle('cur', +b.dataset.i === Math.round(c.value)));
   }
+  const cc = $('setCount'); if (cc) cc.textContent = `${changed} ${T('changedCount')}`;
+  filterSettings();
 }
 
-// a tab's controls, built again only when the list changes; the settings tab has a filter on top
+// the settings tab's filter: words, and changed only
+function filterSettings() {
+  const host = $('tab-settings'), f = $('setFilter'), only = $('setChanged');
+  if (!host || !f) return;
+  const q = f.value.trim().toLowerCase(), changedOnly = only && only.checked;
+  host.querySelectorAll('section[data-g]').forEach(sec => {
+    const inGroup = !q || sec.dataset.g.includes(q);
+    let any = false;
+    sec.querySelectorAll('.row').forEach(r => {
+      const on = (inGroup || r.dataset.k.includes(q)) && (!changedOnly || r.dataset.chg === '1');
+      r.style.display = on ? '' : 'none'; any = any || on;
+    });
+    sec.style.display = any ? '' : 'none';
+  });
+}
+
+// a tab's controls, built again only when the list (or the language) changes; the settings tab has a filter on top
 const ctlKeys = {};
 function build(tab, list) {
   const key = list.map(c => c.id).join(',');
   const host = $('tab-' + tab);
   if (!host || key === ctlKeys[tab]) return;
   ctlKeys[tab] = key;
+  const settings = tab === 'settings';
+  const keep = settings && $('setFilter') ? $('setFilter').value : '', keepOnly = settings && $('setChanged') ? $('setChanged').checked : false;
   const groups = [];
   for (const c of list) { let g = groups.find(x => x.name === c.group); if (!g) groups.push(g = { name: c.group, items: [] }); g.items.push(c); }
-  const filter = tab === 'settings'
-    ? `<section class='wide'><h2>settings (the F8 window's, saved as they change)</h2><div class='tools'><label>filter <input type='text' id='setFilter'></label><span>a value outside a slider's range: type it in the box</span></div></section>`
+  const head = settings
+    ? `<section class='wide'><h2>${esc(T('settingsTitle'))}</h2><div class='tools'><label>${esc(T('filter'))} <input type='text' id='setFilter'></label>` +
+      `<label><input type='checkbox' id='setChanged'> ${esc(T('changedOnly'))}</label><span id='setCount'></span><span>${esc(T('typeHint'))}</span></div></section>`
     : '';
-  host.innerHTML = filter + groups.map(g => `<section data-g='${esc(g.name.toLowerCase())}'><h2>${esc(g.name)}</h2><div class='ctl'>` + g.items.map(c => {
-    const help = c.help ? `<div class='help'>${esc(c.help)}</div>` : '';
-    const state = `<div class='state' id='st-${c.id}'></div>`;
-    const row = `<div class='row' data-k='${esc((c.label + ' ' + (c.help || '')).toLowerCase())}'>`;
-    if (c.kind === 'switch') return `${row}<label for='c-${c.id}'>${esc(c.label)}</label><input type='checkbox' class='sw' id='c-${c.id}'>${help}</div>`;
-    if (c.kind === 'slider') return `${row}<span>${esc(c.label)}</span><span class='sl'><input type='range' id='c-${c.id}' min='${c.min}' max='${c.max}' step='${c.step}'><input type='number' class='num' id='cn-${c.id}' step='any'></span>${help}</div>`;
-    if (c.kind === 'number') return `${row}<span>${esc(c.label)}</span><span class='sl'><input type='number' class='num' id='c-${c.id}' step='${c.step > 0 ? c.step : 'any'}'></span>${help}</div>`;
-    if (c.kind === 'chips') return `${row}<span>${esc(c.label)}</span><span class='chips' id='c-${c.id}'>` + c.options.map((o, i) => `<button data-i='${i}'>${esc(o)}</button>`).join('') + `</span>${help}</div>`;
-    if (c.kind === 'button') return `${row}<span></span><button id='c-${c.id}'>${esc(c.label)}</button>${help}${state}</div>`;
-    return `${row}<div class='kv'><span>${esc(c.label)}</span><span id='st-${c.id}'></span></div></div>`;
-  }).join('') + `</div></section>`).join('');
+  host.innerHTML = head + groups.map(g => {
+    const gt = settings ? groupText(g.name) : { name: g.name, help: '' };
+    return `<section data-g='${esc((gt.name + ' ' + g.name).toLowerCase())}'><h2>${esc(gt.name)}</h2>` + (gt.help ? `<div class='ghelp'>${esc(gt.help)}</div>` : '') + `<div class='ctl'>` + g.items.map(c => {
+      const t = settings ? text(c) : { label: c.label, help: c.help || '' };
+      const help = t.help ? `<div class='help'>${esc(t.help)}</div>` : '';
+      const state = `<div class='state' id='st-${c.id}'></div>`;
+      const def = c.def !== undefined ? `<div class='def'><span>${esc(T('default'))}: ${esc(defText(c))}</span><button id='rs-${c.id}' hidden>${esc(T('resetToDefault'))}</button></div>` : '';
+      const name = settings && c.name && c.name !== t.label ? `<span class='pn'>${esc(c.name)}</span>` : '';
+      const row = `<div class='row' id='r-${c.id}' data-k='${esc((t.label + ' ' + (c.name || '') + ' ' + c.label + ' ' + t.help).toLowerCase())}'>`;
+      const label = `${esc(t.label)}${name}`;
+      if (c.kind === 'switch') return `${row}<label for='c-${c.id}'>${label}</label><input type='checkbox' class='sw' id='c-${c.id}'>${help}${def}</div>`;
+      if (c.kind === 'slider') return `${row}<span>${label}</span><span class='sl'><input type='range' id='c-${c.id}' min='${c.min}' max='${c.max}' step='${c.step}'><input type='number' class='num' id='cn-${c.id}' step='any'></span>${help}${def}</div>`;
+      if (c.kind === 'number') return `${row}<span>${label}</span><span class='sl'><input type='number' class='num' id='c-${c.id}' step='${c.step > 0 ? c.step : 'any'}'></span>${help}${def}</div>`;
+      if (c.kind === 'chips') return `${row}<span>${label}</span><span class='chips' id='c-${c.id}'>` + c.options.map((o, i) => `<button data-i='${i}'>${esc(o)}</button>`).join('') + `</span>${help}${def}</div>`;
+      if (c.kind === 'button') return `${row}<span></span><button id='c-${c.id}'>${esc(t.label)}</button>${help}${state}</div>`;
+      return `${row}<div class='kv'><span>${esc(t.label)}</span><span id='st-${c.id}'></span></div></div>`;
+    }).join('') + `</div></section>`;
+  }).join('');
   for (const c of list) {
     const e = $('c-' + c.id); if (!e) continue;
     const n = $('cn-' + c.id);
     if (c.kind === 'switch') e.onchange = () => send(c.id, e.checked ? 1 : 0);
     if (c.kind === 'slider') {
-      e.oninput = () => { if (n) n.value = +e.value; };
+      e.oninput = () => { if (n) n.value = fmt(e.value); };
       e.onchange = () => send(c.id, e.value);
       if (n) n.onchange = () => { if (n.value !== '' && isFinite(+n.value)) { e.value = n.value; send(c.id, +n.value); } };
     }
     if (c.kind === 'number') e.onchange = () => { if (e.value !== '' && isFinite(+e.value)) send(c.id, +e.value); };
     if (c.kind === 'chips') e.querySelectorAll('button').forEach(b => b.onclick = () => { send(c.id, b.dataset.i); e.querySelectorAll('button').forEach(x => x.classList.toggle('cur', x === b)); });
     if (c.kind === 'button') e.onclick = () => send(c.id, 1);
+    const r = $('rs-' + c.id); if (r) r.onclick = () => send(c.id, c.def);
   }
-  const f = $('setFilter');
-  if (f && tab === 'settings') {
-    const apply = () => {
-      const q = f.value.trim().toLowerCase();
-      host.querySelectorAll('section[data-g]').forEach(sec => {
-        const inGroup = !q || sec.dataset.g.includes(q);
-        let any = false;
-        sec.querySelectorAll('.row').forEach(r => { const on = inGroup || r.dataset.k.includes(q); r.style.display = on ? '' : 'none'; any = any || on; });
-        sec.style.display = any ? '' : 'none';
-      });
-    };
-    f.oninput = apply;
+  if (settings) {
+    $('setFilter').value = keep; $('setChanged').checked = keepOnly;
+    $('setFilter').oninput = filterSettings; $('setChanged').onchange = filterSettings;
   }
 }
 

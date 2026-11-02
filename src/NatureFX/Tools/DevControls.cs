@@ -24,6 +24,8 @@ namespace NatureFX.Tools {
 			public Func<string> Text;  // an info row's text, or a control's state line
 			public bool Saved;         // a setting of the settings file: saved after a change
 			public string Tab;         // the page's tab: "developer" (null) or "settings"
+			public string Name;        // a setting's property name (the page's texts, /meta.json)
+			public Func<float> Default; // a setting's default value (Settings.Defaults)
 		}
 
 		private static readonly List<Control> controls_ = new();
@@ -33,6 +35,7 @@ namespace NatureFX.Tools {
 		private static string reloadStatus_ = "", lastDump_ = "";
 
 		private static ISettings S => Settings.Data;
+		private static ISettings D => Settings.Defaults;
 
 		// on the server thread: a change asked for by the page
 		public static void Request(string id, float value) {
@@ -89,6 +92,16 @@ namespace NatureFX.Tools {
 				  .Append(",\"min\":").Append(c.Min.ToString("0.#####", inv)).Append(",\"max\":").Append(c.Max.ToString("0.#####", inv))
 				  .Append(",\"step\":").Append(c.Step.ToString("0.#####", inv))
 				  .Append(",\"tab\":").Append(json(c.Tab ?? "developer"))
+				  .Append(",\"name\":").Append(json(c.Name ?? ""));
+				if (c.Default != null) {
+					float def = 0.0f;
+					try {
+						def = c.Default();
+					} catch (Exception) {
+					}
+					sb.Append(",\"def\":").Append(def.ToString("0.#####", inv));
+				}
+				sb
 				  .Append(",\"help\":").Append(json(c.Help ?? "")).Append(",\"text\":").Append(json(text)).Append(",\"options\":[");
 				if (c.Options != null) {
 					for (int k = 0; k < c.Options.Length; ++k) {
@@ -142,38 +155,43 @@ namespace NatureFX.Tools {
 
 		// ---- the settings tab: every setting of the settings file, as the F8 window shows it (SettingsControls.g.cs,
 		// generated from the window), then the ones it has no plain control for, by their names (switch or number)
-		private static void Setting(string group, string name, string label, Func<float> get, Action<float> set, float min, float max, float step) {
-			Add(new Control { Group = group, Id = "set-" + name, Label = label, Kind = Kind.Slider, Get = get, Set = set, Min = min, Max = max, Step = step,
-			                  Help = name, Saved = true, Tab = "settings" });
+		private static void Setting(string group, string name, string label, Func<float> get, Action<float> set, Func<float> def, float min, float max, float step) {
+			Add(new Control { Group = group, Id = "set-" + name, Name = name, Label = label, Kind = Kind.Slider, Get = get, Set = set, Default = def,
+			                  Min = min, Max = max, Step = step, Saved = true, Tab = "settings" });
 		}
 
-		private static void SettingSwitch(string group, string name, string label, Func<bool> get, Action<bool> set) {
-			Add(new Control { Group = group, Id = "set-" + name, Label = label, Kind = Kind.Switch, Get = () => get() ? 1.0f : 0.0f, Set = v => set(v > 0.5f),
-			                  Help = name, Saved = true, Tab = "settings" });
+		private static void Setting(string group, string name, string label, Func<int> get, Action<float> set, Func<int> def, float min, float max, float step) {
+			Setting(group, name, label, () => get(), set, () => def(), min, max, step);
 		}
 
-		private static void SettingChips(string group, string name, string label, string[] options, Func<int> get, Action<int> set) {
-			Add(new Control { Group = group, Id = "set-" + name, Label = label, Kind = Kind.Chips, Options = options, Get = () => get(),
-			                  Set = v => set(Mathf.Clamp(Mathf.RoundToInt(v), 0, options.Length - 1)), Help = name, Saved = true, Tab = "settings" });
+		private static void SettingSwitch(string group, string name, string label, Func<bool> get, Action<bool> set, Func<bool> def) {
+			Add(new Control { Group = group, Id = "set-" + name, Name = name, Label = label, Kind = Kind.Switch, Get = () => get() ? 1.0f : 0.0f,
+			                  Set = v => set(v > 0.5f), Default = () => def() ? 1.0f : 0.0f, Saved = true, Tab = "settings" });
+		}
+
+		private static void SettingChips(string group, string name, string label, string[] options, Func<int> get, Action<int> set, Func<int> def) {
+			Add(new Control { Group = group, Id = "set-" + name, Name = name, Label = label, Kind = Kind.Chips, Options = options, Get = () => get(),
+			                  Set = v => set(Mathf.Clamp(Mathf.RoundToInt(v), 0, options.Length - 1)), Default = () => def(), Saved = true, Tab = "settings" });
 		}
 
 		private static void BuildSettings() {
 			BuildWindowSettings();
-			const string other = "Other settings (no plain F8 control)";
+			const string other = "Other";
 			foreach (var p in typeof(ISettings).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)) {
 				if (!p.CanRead || !p.CanWrite || byId_.ContainsKey("set-" + p.Name) || p.Name == "ConfigVersion") {
 					continue;
 				}
 				var prop = p;
 				if (prop.PropertyType == typeof(bool)) {
-					SettingSwitch(other, prop.Name, prop.Name, () => (bool)prop.GetValue(S), v => prop.SetValue(S, v));
+					SettingSwitch(other, prop.Name, prop.Name, () => (bool)prop.GetValue(S), v => prop.SetValue(S, v), () => (bool)prop.GetValue(D));
 				} else if (prop.PropertyType == typeof(float) || prop.PropertyType == typeof(int)) {
 					bool integer = prop.PropertyType == typeof(int);
 					Add(new Control {
-						Group = other, Id = "set-" + prop.Name, Label = prop.Name, Kind = Kind.Number, Step = integer ? 1.0f : 0.0f,
+						Group = other, Id = "set-" + prop.Name, Name = prop.Name, Label = prop.Name, Kind = Kind.Number, Step = integer ? 1.0f : 0.0f,
 						Get = () => integer ? (int)prop.GetValue(S) : (float)prop.GetValue(S),
 						Set = v => prop.SetValue(S, integer ? (object)Mathf.RoundToInt(v) : v),
-						Help = integer ? "whole number" : null, Saved = true, Tab = "settings",
+						Default = () => integer ? (int)prop.GetValue(D) : (float)prop.GetValue(D),
+						Saved = true, Tab = "settings",
 					});
 				}
 			}

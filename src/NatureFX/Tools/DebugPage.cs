@@ -236,6 +236,9 @@ namespace NatureFX.Tools {
 								DevControls.Request(id, value);
 							}
 							Send(stream, "200 OK", "text/plain", "ok");
+						} else if (path.StartsWith("/meta.json", StringComparison.Ordinal)) {
+							// the settings tab's texts, English and Japanese (SettingsMeta.g.cs)
+							Send(stream, "200 OK", "application/json; charset=utf-8", SettingsMeta.Json);
 						} else if (path.StartsWith("/log", StringComparison.Ordinal)) {
 							Send(stream, "200 OK", "text/plain; charset=utf-8", LogTail());
 						} else {
