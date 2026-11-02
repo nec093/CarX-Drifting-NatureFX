@@ -901,6 +901,11 @@ namespace NatureFX {
 				d.RTDenoiser = 2;
 				d.ConfigVersion = 77;
 			}
+			if (d.ConfigVersion < 78) {
+				// the debug page on by default while NatureFX is being developed (this PC only: 127.0.0.1)
+				d.DebugPage = true;
+				d.ConfigVersion = 78;
+			}
 		}
 
 		public static void Save() {
