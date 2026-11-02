@@ -396,3 +396,9 @@
   - 調査用に追加: debug page「Switched materials' textures」（mip、追跡外の NatureFX マテリアル、シェーダー別の数、差し替えなかった理由）、Developer の「Load every texture mip」。差し替え後にゲームが元の名前で付け直したテクスチャを追う Resync、レンダラーへのマテリアルの付け直し（どちらも今回の原因ではなかったが残した）。
   - 白線などの半透明の面に落ちる車の影が 0.5 秒ほどでカクつく: SunShadowMap が 16 フレームで 1 枚 → 毎フレーム全体（約 0.1 ms 見込み）。ユーザー: 直った。
   - ネイティブ: SetInstances が使えないジオメトリを飛ばすと UpdateTransforms の番号がずれた → g_instanceSlot で呼び出し側の番号から引く。
+- **11-02 HDRP の空の光・映り込み・空を独自エンジンへ（`Rendering/OwnLighting.cs`、設定 OwnSkyLighting、移行 64）**:
+  - HDRP の IndirectLightingController（VolumeOverhaul）で indirect diffuse と reflection を 0。影の合成（NFX_RTShadow、`_NFX_OwnAmbient`）は HDRP の空の光を暗くする代わりに、独自の空のプローブ × 表面の色 × GI の空の割合を足す（A4 の全再照明では G3 をすべて発光扱い）。反射の合成（NFX_RTReflect、`_NFX_OwnReflections`）は HDRP の空を引かず、トレースした反射を足し、トレースしない（ざらついた）面には独自の空のプローブ × Karis の EnvBRDF × GI の空の割合（`_NFX_SkyShareTex`）。
+  - 両方の合成が 30 フレーム以内に動いていれば HDRP の空の種類を none にして、キューブマップを作らない（AtmospherePass.Feed）。合成が止まれば HDRP に戻す。
+  - HDRP の ambient probe の代わりに独自の空のプローブ（NativeEngine.SkyProbe、同じ詰め方）を全体で使う（OwnLighting.Probe: 合成、ネイティブのトレース）。空のプローブは毎フレーム作る（以前は day > 0 のときだけ）。
+  - 空の切り替え（太陽の薄明 → 月、-7.5° / -6.5°）は sky view LUT の 6 秒のクロスフェード（NFX_NativeBridge SkyFade）。太陽は円盤が沈みきる -0.6° まで「出ている」扱い。
+  - 未確認: 合成を通らない透明な物（HDRP のまま描く半透明）は空の光と映り込みがなくなる。独自ガラスでない HDRP のガラスの合成は HDRP の空を引く前提のまま。
