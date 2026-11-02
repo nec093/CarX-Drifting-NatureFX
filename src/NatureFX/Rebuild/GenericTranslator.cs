@@ -1,7 +1,7 @@
 using UnityEngine;
 
 namespace NatureFX.Rebuild {
-	// The catch-all of the shader rebuild (docs/shader-rebuild-plan.md, stage 0): any game material the specific
+	// The catch-all of the shader rebuild (stage 0): any game material the specific
 	// translators do not know becomes a NatureFX Lit material, its colour map, tint, normal map, metalness,
 	// smoothness, alpha clip and emission found by the usual property names. HDRP/Lit sources already use the
 	// target's names and only change shader.

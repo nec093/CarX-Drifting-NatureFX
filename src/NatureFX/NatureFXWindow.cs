@@ -228,7 +228,7 @@ namespace NatureFX {
 		// tab index groups shown in the sidebar
 		private static (string Name, int[] Tabs)[] VisibleGroups => Groups;
 
-		// light and sky first (the own engine's: docs/native-atmosphere-lighting-plan.md), then what the camera does
+		// light and sky first (the own engine's), then what the camera does
 		// with the picture, the world and its cars, and the engine and tools last
 		private static readonly (string Name, int[] Tabs)[] Groups = {
 			("GENERAL", new[] { 0 }),
@@ -999,7 +999,7 @@ namespace NatureFX {
 			Widgets.EndCard();
 		}
 
-		// Shader rebuild (docs/shader-rebuild-plan.md): replacement switches, what was left and why, inventory
+		// Shader rebuild: replacement switches, what was left and why, inventory
 		private void DrawShaderRebuild() {
 			Widgets.BeginCard("Shader rebuild", "NatureFX's own shaders in place of the game's. Replaced materials also enter the ray tracing " +
 			                                    "with their real colour and smoothness.");

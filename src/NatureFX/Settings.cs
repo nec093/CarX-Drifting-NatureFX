@@ -586,7 +586,7 @@ namespace NatureFX {
 				d.ConfigVersion = 17;
 			}
 			if (d.ConfigVersion < 18) {
-				// shader rebuild, stage 0: replace every game material (docs/shader-rebuild-plan.md)
+				// shader rebuild, stage 0: replace every game material
 				d.ReplaceShaders = true;
 				d.FullReplacement = true;
 				d.ConfigVersion = 18;

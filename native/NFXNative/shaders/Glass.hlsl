@@ -222,7 +222,7 @@ NFX_ENTRY(id)
                 uint2 screen = Screen.Load2((pixel.y * (uint)ScreenSize.x + pixel.x) * 8); // PrepareScreen: 4 halves
                 float3 straight = float3(NfxUnpackHalf2(screen.x), NfxUnpackHalf2(screen.y).x);
                 // (as before the packing: this tested the screen's words (r g, b, depth) for non-zero, not the outer
-                // `own` it shadowed; kept as it was, see docs/plan-review-followups.md 7 E)
+                // `own` it shadowed; kept as it was, docs/ROADMAP.md)
                 bool3 shownBits = bool3(screen.x != 0u, (screen.y & 0xFFFFu) != 0u, (screen.y >> 16) != 0u);
                 float3 through = select(shownBits, transmission, (float3)(1.0 - result.w));
                 result.rgb += (refracted - straight) * through;

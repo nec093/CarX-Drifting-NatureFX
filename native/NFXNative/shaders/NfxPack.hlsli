@@ -1,10 +1,10 @@
-// NFXNative: the packing of the trace buffers (docs/plan-review-followups.md 7), shared by the trace shaders
+// NFXNative: the packing of the trace buffers, shared by the trace shaders
 // (NFXCommon.hlsli includes it) and the NRD pack / unpack shaders. NFX_NativeBridge.compute has the same formulas
 // (keep them in step): the layouts are an interface between the bridge, the engine's shaders and the C# strides.
 #ifndef NFX_PACK_HLSLI
 #define NFX_PACK_HLSLI
 
-// Packing of the trace buffers (docs/plan-review-followups.md 7), the same formulas as NFX_NativeBridge.compute:
+// Packing of the trace buffers, the same formulas as NFX_NativeBridge.compute:
 // a unit vector as an octahedron (HDRP's PackNormalOctQuadEncode) in two unorm16, rounded (about 3e-5 rad off)
 uint NfxPackOct16(float3 n)
 {

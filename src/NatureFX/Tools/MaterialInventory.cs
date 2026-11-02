@@ -12,7 +12,7 @@ using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
 namespace NatureFX.Tools {
-	// Shader rebuild, stage 0 (docs/shader-rebuild-plan.md): every material of the loaded scenes with its game
+	// Shader rebuild, stage 0: every material of the loaded scenes with its game
 	// shader, all property values, keywords, where it is used and what the rebuild makes of it (NFX shader or the
 	// reason it stays). One file per scene in <kino config>/NatureFX/inventory, rewritten on each load, so driving
 	// through the maps collects the data the translators of stages 1 to 4 are written from.

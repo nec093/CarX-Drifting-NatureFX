@@ -63,7 +63,7 @@ namespace NatureFX.Nature {
 		public int Resynced { get; private set; }
 		public int Unreadable { get; private set; }
 
-		// Shader rebuild (docs/shader-rebuild-plan.md): every game material the rules leave alone becomes a NatureFX
+		// Shader rebuild: every game material the rules leave alone becomes a NatureFX
 		// material too (GenericTranslator), except what later stages rebuild or what is not a surface
 		public bool Full { get; set; }
 

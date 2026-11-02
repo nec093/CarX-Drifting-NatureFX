@@ -50,7 +50,7 @@ float4 _NFX_NativeDefault; // what a result pixel holds before the engine writes
 float4 _NFX_ShaftParams;   // x scattering (1/m), y anisotropy, z max distance (m)
 float4 _NFX_NativeFrame;   // x frame index
 
-// Packing of the trace buffers (docs/plan-review-followups.md 7), the same formulas as NFXCommon.hlsli's Nfx*:
+// Packing of the trace buffers, the same formulas as NFXCommon.hlsli's Nfx*:
 // a unit vector as an octahedron in two unorm16 (rounded), halves, four unorm8 (rounded)
 uint NfxPackOct16(float3 n)
 {
