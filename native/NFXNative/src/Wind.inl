@@ -157,7 +157,7 @@ bool BuildWindBlas() {
 		scratchSize = info[n].ScratchDataSizeInBytes > scratchSize ? info[n].ScratchDataSizeInBytes : scratchSize;
 		w.updateScratch = info[n].UpdateScratchDataSizeInBytes;
 		w.positions = g_windPool.Allocate(static_cast<UINT64>(g.desc.Triangles.VertexCount) * 12);
-		w.blas = g_blasPool.Allocate(info[n].ResultDataMaxSizeInBytes);
+		w.blas = g_blasBuildPool.Allocate(info[n].ResultDataMaxSizeInBytes);  // moved to g_blasPool compacted below
 		if (!w.positions || !w.blas) {
 			return false;
 		}
@@ -196,6 +196,7 @@ bool BuildWindBlas() {
 		w.desc.Triangles.VertexBuffer.StartAddress = w.positions.Address();
 	}
 	if (!compact) {
+		// no compaction (no room for its read back): they stay in the build pool (freed from there when dropped)
 		return g_gpu.SubmitAndWait() && EnsureWindScratch();
 	}
 	// the sizes back, then each BLAS copied into a span of its compacted size; the ones as built are in no TLAS yet
@@ -219,14 +220,14 @@ bool BuildWindBlas() {
 		for (size_t n = 0; n < toBuild.size(); ++n) {
 			auto& w = g_windBlas[toBuild[n]];
 			UINT64 size = sizes[n];
-			if (size == 0 || BufferPool::Align(size) >= w.blas.bytes) {
-				continue;
-			}
-			PoolSpan compacted = g_blasPool.Allocate(size);
+			bool known = size > 0 && size <= w.blas.bytes;
+			PoolSpan compacted = g_blasPool.Allocate(known ? size : w.blas.bytes);
 			if (!compacted) {
 				continue;
 			}
-			g_gpu.list->CopyRaytracingAccelerationStructure(compacted.Address(), w.blas.Address(), D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT);
+			g_gpu.list->CopyRaytracingAccelerationStructure(compacted.Address(), w.blas.Address(),
+			                                                known ? D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT
+			                                                      : D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_CLONE);
 			uncompacted.push_back(w.blas);
 			w.blas = compacted;
 			copied = true;

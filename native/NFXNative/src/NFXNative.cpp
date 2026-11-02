@@ -575,7 +575,9 @@ bool CreateTracePipelines() {
 // two, after WaitRenderIdle when a chunk the frames read gets new data (BuildScene). Spans are freed only after
 // WaitRenderIdle (with the retired geometries), so no frame in flight still reads what is reused; a chunk with nothing
 // left in it is released.
+struct BufferPool;
 struct PoolSpan {
+	BufferPool* pool = nullptr;  // the pool it came from (Free hands it back there)
 	int chunk = -1;
 	UINT64 offset = 0;
 	UINT64 bytes = 0;  // taken (aligned)
@@ -606,6 +608,7 @@ struct BufferPool {
 		auto& ch = chunks[c];
 		ch.used += bytes;
 		PoolSpan span;
+		span.pool = this;
 		span.chunk = c;
 		span.offset = offset;
 		span.bytes = bytes;
@@ -672,8 +675,12 @@ struct BufferPool {
 		return Make(slot, 0, bytes, size);
 	}
 
-	// only once nothing in flight can read it (after WaitRenderIdle)
+	// only once nothing in flight can read it (after WaitRenderIdle); a span of another pool goes back there
 	void Free(PoolSpan& span) {
+		if (span.pool != nullptr && span.pool != this) {
+			span.pool->Free(span);
+			return;
+		}
 		if (span.chunk < 0 || span.chunk >= static_cast<int>(chunks.size()) || !chunks[span.chunk].buffer) {
 			span = PoolSpan();
 			return;
@@ -736,6 +743,9 @@ struct BufferPool {
 	}
 };
 BufferPool g_blasPool(D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+// The BLAS as built, before their compacted copies go into g_blasPool: built there they left holes of their full size
+// behind (the pool grew by a chunk with each map load); here the pool empties after each build and its chunks go
+BufferPool g_blasBuildPool(D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
 BufferPool g_dataPool(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
 // Vertex data shared between geometries: Unity's sub meshes of one mesh read the same vertex buffer from the same
@@ -1278,6 +1288,7 @@ NFX_EXPORT void NFX_Native_ClearScene() {
 	g_retiredMaterials.clear();
 	g_geometries.clear();
 	g_blasPool.Reset();
+	g_blasBuildPool.Reset();
 	g_dataPool.Reset();
 	g_sharedData.clear();
 	g_spanRefs.clear();
@@ -1786,7 +1797,7 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 		if (info.ResultDataMaxSizeInBytes == 0) {
 			continue;
 		}
-		g.blas = g_blasPool.Allocate(info.ResultDataMaxSizeInBytes);
+		g.blas = (compact ? g_blasBuildPool : g_blasPool).Allocate(info.ResultDataMaxSizeInBytes);
 		if (!g.blas) {
 			return -4;
 		}
@@ -1840,16 +1851,16 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 			for (size_t k = 0; k < compactIds.size(); ++k) {
 				auto& g = g_geometries[compactIds[k]];
 				UINT64 size = sizes[k];
-				// only when it saves something (and the size makes sense)
-				if (size == 0 || BufferPool::Align(size) >= g.blas.bytes) {
-					continue;
-				}
-				PoolSpan compacted = g_blasPool.Allocate(size);
+				// every one into g_blasPool (out of the build pool), compacted; one whose size did not come back as a
+				// clone of its full size
+				bool known = size > 0 && size <= g.blas.bytes;
+				PoolSpan compacted = g_blasPool.Allocate(known ? size : g.blas.bytes);
 				if (!compacted) {
-					continue;  // no room: the BLAS stays as built
+					continue;  // no room: the BLAS stays where it was built
 				}
 				list->CopyRaytracingAccelerationStructure(compacted.Address(), g.blas.Address(),
-				                                          D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT);
+				                                          known ? D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT
+				                                                : D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_CLONE);
 				uncompacted.push_back(g.blas);
 				g.blas = compacted;  // (not "small": windows.h defines it as char)
 				copied = true;
@@ -2030,8 +2041,8 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 	         g_geometries.size(), built, instances.size(), alphaInstances, triangles / 1e6, blasBytes / (1024.0 * 1024.0),
 	         tlasInfo.ResultDataMaxSizeInBytes / (1024.0 * 1024.0), NowMs() - start);
 	g_sceneStats = stats;
-	snprintf(stats, sizeof(stats), ", BLAS pool %.1f of %.1f MB in %d chunks, data pool %.1f of %.1f MB in %d chunks",
-	         g_blasPool.Used() / (1024.0 * 1024.0), g_blasPool.Reserved() / (1024.0 * 1024.0), g_blasPool.Chunks(),
+	snprintf(stats, sizeof(stats), ", BLAS pool %.1f of %.1f MB in %d chunks (+%d building), data pool %.1f of %.1f MB in %d chunks",
+	         g_blasPool.Used() / (1024.0 * 1024.0), g_blasPool.Reserved() / (1024.0 * 1024.0), g_blasPool.Chunks(), g_blasBuildPool.Chunks(),
 	         g_dataPool.Used() / (1024.0 * 1024.0), g_dataPool.Reserved() / (1024.0 * 1024.0), g_dataPool.Chunks());
 	g_sceneStats += stats;
 	if (g_descriptorsRefused > 0) {
@@ -3009,8 +3020,8 @@ NFX_EXPORT int NFX_Native_MemoryStats(unsigned long long* out, int capacity) {
 	UINT64 v[kCount] = {};
 	{
 		std::lock_guard<std::mutex> lock(g_sceneMutex);
-		v[0] = g_blasPool.Reserved();
-		v[1] = g_blasPool.Used();
+		v[0] = g_blasPool.Reserved() + g_blasBuildPool.Reserved();
+		v[1] = g_blasPool.Used() + g_blasBuildPool.Used();
 		v[2] = g_dataPool.Reserved();
 		v[3] = g_dataPool.Used();
 		for (const auto& g : g_geometries) {
