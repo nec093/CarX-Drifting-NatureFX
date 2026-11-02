@@ -139,6 +139,11 @@ namespace NatureFX.Rendering {
 			}
 		}
 
+		// the composites say they ran (with what they need: the own sky probe)
+		public static void ShadowComposed() => shadowFrame_ = Time.frameCount;
+		public static void ReflectionComposed() => reflectionFrame_ = Time.frameCount;
+
+		// once a frame, before VolumeOverhaul.UpdateSky
 		public static void Update(bool wanted, bool wantedSun, bool wantedLamps) {
 			wanted_ = wanted && NativeEngine.SkyProbe != null;
 			wantedSun_ = wantedSun;
