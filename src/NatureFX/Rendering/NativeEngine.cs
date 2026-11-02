@@ -1550,14 +1550,21 @@ namespace NatureFX.Rendering {
 
 		// Builds the engine's scene from what the ray tracing scene holds. clear: a new map (all geometry dropped);
 		// otherwise meshes already built are reused and only the instances are taken again.
-		public static void UploadScene(ICollection<Instance> instances, bool clear) {
+		// fresh: drop the engine's whole scene first (NFX_Native_ClearScene: every geometry, material, BLAS, buffer and
+		// descriptor) and add what the instances use again: what earlier maps left (meshes still alive, ids never
+		// reused) goes with it
+		public static void UploadScene(ICollection<Instance> instances, bool clear, bool fresh = false) {
 			if (!Ready || !Enabled) {
 				return;
 			}
 			try {
 				// meshes and materials built before stay unless they are gone (a new map): rebuilding them all made
 				// every scene change a 250 ms hitch
-				if (clear) {
+				if (fresh) {
+					NFX_Native_ClearScene();
+					geometries_.Clear();
+					materials_.Clear();
+				} else if (clear) {
 					ReleaseGone();
 				}
 				int geometriesBefore = geometries_.Count;

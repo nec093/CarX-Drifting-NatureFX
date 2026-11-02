@@ -409,6 +409,7 @@ namespace NatureFX {
 
 		private void OnSceneLoaded(Scene scene, LoadSceneMode mode) {
 			if (mode == LoadSceneMode.Single) {
+				newMap_ = true; // the own engine starts its scene over at the rescan (not for the small additive scenes)
 				NatureFX.Tools.MapDataProbe.Reset();
 				Shrubs.Unload(); // they draw the old map's meshes, destroyed with its scene
 			}
@@ -417,6 +418,8 @@ namespace NatureFX {
 		}
 
 		// Tracks load several additive scenes in a row; restart the timer so they share one rescan.
+		private bool newMap_;
+
 		private void ScheduleRescan(float delay) {
 			if (pendingRescan_ != null) {
 				StopCoroutine(pendingRescan_);
@@ -432,7 +435,8 @@ namespace NatureFX {
 			// what the bundle build may leave out (render path, lightmap modes, LOD cross fade): facts of this map
 			NatureFX.Tools.VariantProfileDump.Write(Camera.main);
 			Sun.Refresh();
-			RT.PrepareSceneForRayTracing();
+			RT.PrepareSceneForRayTracing(newMap_);
+			newMap_ = false;
 			Accumulation.CollectSceneMaterials();
 			RefreshMap(false);
 			NatureFX.Tools.MapDataProbe.Run();

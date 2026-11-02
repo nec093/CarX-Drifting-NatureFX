@@ -100,8 +100,12 @@ namespace NatureFX.Rendering {
 			proxyShader_ = proxyShader;
 		}
 
-		public void Rebuild() {
+		// fresh: after a map load, the own engine drops its whole scene first (every BLAS, buffer and descriptor;
+		// NativeEngine.UploadScene) and builds the meshes still in use again, instead of keeping what the last map
+		// left. Car changes and shader changes keep it (a full rebuild there would be a 400 ms hitch each time).
+		public void Rebuild(bool fresh = false) {
 			needsRebuild_ = false;
+			nativeFresh_ |= fresh;
 			nextOwnHandle_ = 1;
 			moving_.Clear();
 			handles_.Clear();
@@ -147,6 +151,7 @@ namespace NatureFX.Rendering {
 		private readonly Dictionary<int, NativeEngine.Instance> nativeInstances_ = new();
 		private bool nativeDirty_;
 		private bool nativeClear_;
+		private bool nativeFresh_; // kept until the engine took it (it may be off at the map load)
 
 		// glass is in the own engine's scene only (Unity's has no use for it): its handles are negative, from here
 		private int nextGlassHandle_ = -1;
@@ -176,9 +181,10 @@ namespace NatureFX.Rendering {
 			if (!nativeDirty_ && !nativeClear_) {
 				return;
 			}
-			NativeEngine.UploadScene(nativeInstances_.Values, nativeClear_);
+			NativeEngine.UploadScene(nativeInstances_.Values, nativeClear_, nativeFresh_);
 			nativeDirty_ = false;
 			nativeClear_ = false;
+			nativeFresh_ = false;
 		}
 
 		private int lowerLodCount_;

@@ -550,8 +550,10 @@ namespace NatureFX.Rendering {
 		}
 
 		// After each scene load: take the scene into the acceleration structure again
-		public void PrepareSceneForRayTracing() {
-			dxrScene_?.Rebuild();
+		// newMap: a single (not additive) scene was loaded: the own engine starts its scene over (NativeEngine.UploadScene
+		// fresh); the game's small day / night scenes keep it
+		public void PrepareSceneForRayTracing(bool newMap = false) {
+			dxrScene_?.Rebuild(newMap);
 		}
 
 		public void Destroy() {

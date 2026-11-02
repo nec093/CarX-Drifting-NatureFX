@@ -1223,6 +1223,10 @@ NFX_EXPORT void NFX_Native_ClearScene() {
 	g_geometries.clear();
 	g_blasPool.Reset();
 	g_dataPool.Reset();
+	// the build time TLAS points at BLAS just freed: rebuilt with the next scene (the render thread's own TLAS is made
+	// from g_resolved every frame, empty now: nothing is traced until then)
+	g_tlas.Reset();
+	g_tlasCapacity = 0;
 	g_instances.clear();
 	g_resolved.clear();
 	g_instanceGeometry.clear();
@@ -1544,7 +1548,8 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 	bool newData = false;
 	for (const auto& g : g_geometries) {
 		if (!g.blas && !g.released && ((g.sanitize && !g.ownIndices) || (!g.ownPositions && g.sourcePositions != 0) ||
-		                               (!g.ownNormals && g.sourceNormals != 0) || (!g.ownUvs && g.sourceUvs != 0))) {
+		                               (!g.ownNormals && g.sourceNormals != 0) || (!g.ownUvs && g.sourceUvs != 0) ||
+		                               g.ownIndices.owned || g.ownPositions.owned || g.ownNormals.owned || g.ownUvs.owned)) {
 			newData = true;
 			break;
 		}
@@ -1623,6 +1628,42 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 			return -10;
 		}
 	}
+	// NFX_Native_AddGeometryData's meshes (the CPU's copy, in upload buffers the GPU read over PCIe at every hit): into
+	// the pool too, as plain copies (ExtractUvs' formats 3 and 1 copy whole words); the BLAS below is built from the
+	// pool's copy. The upload buffers live until the list ran (uploadsHeld).
+	std::vector<ComPtr<ID3D12Resource>> uploadsHeld;
+	auto toPool = [&](DataSpan& data, UINT count, UINT stride, int format) -> bool {
+		if (!data.owned) {
+			return true;
+		}
+		ComPtr<ID3D12Resource> upload = data.owned;
+		uploadsHeld.push_back(upload);
+		DataSpan pooled;
+		if (!extract(upload->GetGPUVirtualAddress(), count, stride, format, pooled)) {
+			return true;  // no room in the pool: it stays in its upload buffer (data still holds it), as before
+		}
+		data = pooled;
+		return true;
+	};
+	for (auto& g : g_geometries) {
+		if (g.blas || g.released) {
+			continue;
+		}
+		UINT vertices = g.desc.Triangles.VertexCount;
+		bool indicesOwned = static_cast<bool>(g.ownIndices.owned), positionsOwned = static_cast<bool>(g.ownPositions.owned);
+		// indices: three 32 bit words a triangle, copied as one "vertex" of format 3 each
+		toPool(g.ownIndices, static_cast<UINT>(g.triangles), 12, 3);
+		toPool(g.ownPositions, vertices, 12, 3);
+		toPool(g.ownNormals, vertices, 12, 3);
+		toPool(g.ownUvs, vertices, 8, 1);
+		if (indicesOwned && g.ownIndices.pooled) {
+			g.desc.Triangles.IndexBuffer = g.ownIndices.Address();
+		}
+		if (positionsOwned && g.ownPositions.pooled) {
+			g.desc.Triangles.VertexBuffer.StartAddress = g.ownPositions.Address();
+		}
+	}
+
 	// the chunks written, whole, to be read (the BLAS builds below, the traces)
 	if (!written.empty()) {
 		std::vector<D3D12_RESOURCE_BARRIER> toRead;
