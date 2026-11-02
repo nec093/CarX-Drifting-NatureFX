@@ -159,7 +159,13 @@ namespace NatureFX.Rendering {
 			float aerosols = 1.0f + 2.0f * cloud + 2.0f * Weather.Current.Rain;
 			var toSun = -sun_.transform.forward;
 			RealSunY = toSun.y;
-			bool moon = moon_ != null && moon_.isActiveAndEnabled && moon_.intensity > 0.0f && toSun.y < -0.035f;
+			// the sky goes by the sun through the twilight: the air it still lights stays bright well below the horizon
+			// (civil twilight to -6°). It went to the moon at -2°, when the moon was only just rising in strength: the
+			// sky and all the light it gave (a garage's skylights) went out at once. Now the moon takes over around -7°,
+			// where its light and the twilight's are about even; a degree apart both ways so it does not flip back and forth.
+			float below = skyFromMoon_ ? MoonSkyBack : MoonSkyFrom;
+			bool moon = moon_ != null && moon_.isActiveAndEnabled && moon_.intensity > 0.0f && toSun.y < Mathf.Sin(below * Mathf.Deg2Rad);
+			skyFromMoon_ = moon;
 			var light = moon ? moon_ : sun_;
 			var dir = -light.transform.forward;
 			var c = light.color.linear * light.intensity;
@@ -179,6 +185,10 @@ namespace NatureFX.Rendering {
 				SkyLightAbove = TopOfAtmosphereLux;
 			}
 		}
+
+		// sun elevations (°) where the sky's light goes to the moon, and back to the sun
+		private const float MoonSkyFrom = -7.5f, MoonSkyBack = -6.5f;
+		private bool skyFromMoon_;
 
 		private GameObject moonObject_;
 		private Light moon_;
