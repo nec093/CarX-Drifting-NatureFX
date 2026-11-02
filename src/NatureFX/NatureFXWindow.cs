@@ -1099,6 +1099,10 @@ namespace NatureFX {
 			}
 			Widgets.Info($"Engine shaders now: {NativeEngine.ShaderStatus}");
 			Widgets.EndCard();
+			Widgets.BeginCard("GI lamp reference", "The GI's clamp of single bright rays and its cache's steps also go by the brightest " +
+				"lamp (not only the sun and the sky), so a headlight's bounce shows at night. Off: the old reference, to compare. Not saved.");
+			Widgets.Switch("Lamps in the GI's reference", LocalLights.UseLampReference, v => LocalLights.UseLampReference = v);
+			Widgets.EndCard();
 			Widgets.BeginCard("3D fog lamps", "The 3D fog's lamps and headlights from lists per tile of its grid (only the lights that " +
 				"reach into it) instead of every light at every cell. The same picture: off only to compare the time " +
 				"(Ray tracing timings: fog volume). Not saved.");

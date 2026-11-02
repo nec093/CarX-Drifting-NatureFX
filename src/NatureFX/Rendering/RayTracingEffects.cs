@@ -322,7 +322,7 @@ namespace NatureFX.Rendering {
 			foreach (string part in NativeEngine.SceneStatus.Split(new[] { ", " }, System.StringSplitOptions.RemoveEmptyEntries)) {
 				d.Scene.Add(("", part));
 			}
-			d.Scene.Add(("lamps", $"{lights_.Count} ({lights_.ShadowCount} traced, {NativeEngine.Emitters.Count} glowing surfaces)"));
+			d.Scene.Add(("lamps", $"{lights_.Count} ({lights_.ShadowCount} traced, {NativeEngine.Emitters.Count} glowing surfaces), GI lamp reference {lights_.LampReference:0.#} lx"));
 
 			bool glassOn = glass_ != null && glass_.enabled;
 			bool wet = reflection_ != null && reflection_.enabled && reflection_.WetStreaks;

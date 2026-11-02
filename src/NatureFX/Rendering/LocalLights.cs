@@ -42,10 +42,21 @@ namespace NatureFX.Rendering {
 		// (LightCount.w, GI.hlsl / NFXCommon.hlsli CacheReference): at night with the sun's alone, a headlight's bounce
 		// was cut to a few hundredth.
 		public float LampReference { get; private set; }
+		// Developer: off gives the GI its old reference (the sun and the sky only), to compare
+		public static bool UseLampReference = true;
+		// Only lights that light a room or a road count (small ones light their own housing), seen from at least 2 m,
+		// and never above a sunlit level: with 1 m and no cap, a bright lamp of short range made the reference
+		// thousands of lux, the GI's clamp no longer caught single bright rays and the cache's steps grew coarse
+		// (coloured speckles all over a garage)
+		private const float ReferenceMinRange = 3.0f;
+		private const float ReferenceMaxLux = 2000.0f;
 
 		private static float Reference(float r, float g, float b, float range) {
+			if (!UseLampReference || range < ReferenceMinRange) {
+				return 0.0f;
+			}
 			float half = 0.5f * range;
-			return Mathf.Max(r, Mathf.Max(g, b)) / Mathf.Max(1.0f, half * half);
+			return Mathf.Min(Mathf.Max(r, Mathf.Max(g, b)) / Mathf.Max(4.0f, half * half), ReferenceMaxLux);
 		}
 
 		// Once per frame: the nearest lights to the camera
