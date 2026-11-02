@@ -124,6 +124,19 @@ namespace NatureFX.Tools {
 			Add(new Control { Group = group, Label = label, Kind = Kind.Info, Text = text });
 		}
 
+		// an info row read again only every 10 s (the system's description walks the lightmaps and more: not every second)
+		private static void SlowInfo(string group, string label, Func<string> text) {
+			string cached = null;
+			float next = 0.0f;
+			Info(group, label, () => {
+				if (cached == null || Time.unscaledTime >= next) {
+					next = Time.unscaledTime + 10.0f;
+					cached = text();
+				}
+				return cached;
+			});
+		}
+
 		private static void Build() {
 			controls_.Clear();
 			byId_.Clear();
@@ -200,12 +213,12 @@ namespace NatureFX.Tools {
 				"For the shader rebuild (kino/config/NatureFX/inventory). Costs a hitch and some hundred MB of video memory at each load.", true);
 
 			const string system = "System";
-			Info(system, "capabilities", () => Capabilities.Describe());
-			Info(system, "shader bundle", () => $"{mod.Bundle.Shaders.Count} shaders, {mod.Replacer.ReplacedCount} materials replaced");
-			Info(system, "native engine", () => $"{NativeEngine.Info}; self test: {NativeEngine.TestResult}");
-			Info(system, "scene", () => NativeEngine.SceneStatus);
-			Info(system, "check", () => $"{NativeEngine.CheckStatus}; queue: {NativeEngine.QueueStatus}");
-			Info(system, "sun shadows", () => NativeEngine.SunCounters);
+			SlowInfo(system, "capabilities", () => Capabilities.Describe());
+			SlowInfo(system, "shader bundle", () => $"{mod.Bundle.Shaders.Count} shaders, {mod.Replacer.ReplacedCount} materials replaced");
+			SlowInfo(system, "native engine", () => $"{NativeEngine.Info}; self test: {NativeEngine.TestResult}");
+			SlowInfo(system, "scene", () => NativeEngine.SceneStatus);
+			SlowInfo(system, "check", () => $"{NativeEngine.CheckStatus}; queue: {NativeEngine.QueueStatus}");
+			SlowInfo(system, "sun shadows", () => NativeEngine.SunCounters);
 		}
 	}
 }

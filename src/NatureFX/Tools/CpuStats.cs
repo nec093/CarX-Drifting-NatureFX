@@ -51,17 +51,47 @@ namespace NatureFX.Tools {
 		private static readonly List<(string, float, bool)> all_ = new();
 		private static bool failed_;
 
-		// once a second on the main thread (the debug page's snapshot)
+		// the main thread's id (taken on it), and the sampling thread: a snapshot of every thread of the machine to find
+		// the game's took the main thread a frame or more each second (a 117 ms hitch every second with the page open)
+		private static uint mainThread_;
+		private static System.Threading.Thread worker_;
+		private static long lastAsked_;
+		private static readonly object lock_ = new();
+
+		// on the main thread, whenever the debug page's snapshot is made: keeps the sampling thread going (it stops a
+		// few seconds after the page is closed) and hands it the main thread's id
 		public static void Read() {
 			if (failed_) {
 				return;
 			}
-			try {
-				ReadSystem();
-				ReadThreads();
-			} catch (Exception e) {
-				failed_ = true;
-				Problem = $"{e.GetType().Name}: {e.Message}";
+			if (mainThread_ == 0) {
+				mainThread_ = GetCurrentThreadId();
+			}
+			System.Threading.Interlocked.Exchange(ref lastAsked_, DateTime.UtcNow.Ticks);
+			if (worker_ == null || !worker_.IsAlive) {
+				worker_ = new System.Threading.Thread(Sample) { IsBackground = true, Name = "NatureFX CPU stats", Priority = System.Threading.ThreadPriority.BelowNormal };
+				worker_.Start();
+			}
+		}
+
+		private static void Sample() {
+			while (DateTime.UtcNow.Ticks - System.Threading.Interlocked.Read(ref lastAsked_) < TimeSpan.TicksPerSecond * 5) {
+				try {
+					ReadSystem();
+					ReadThreads();
+				} catch (Exception e) {
+					failed_ = true;
+					Problem = $"{e.GetType().Name}: {e.Message}";
+					return;
+				}
+				System.Threading.Thread.Sleep(1000);
+			}
+		}
+
+		// the busiest threads, copied for the snapshot (the sampling thread fills them)
+		public static List<(string Name, float Percent, bool Main)> Take() {
+			lock (lock_) {
+				return new List<(string, float, bool)>(Busiest);
 			}
 		}
 
@@ -85,7 +115,7 @@ namespace NatureFX.Tools {
 			double wall100ns = lastRead_ != default ? (now - lastRead_).Ticks : 0.0; // DateTime ticks are 100 ns, as FILETIME
 			lastRead_ = now;
 			uint pid = GetCurrentProcessId();
-			uint main = GetCurrentThreadId();
+			uint main = mainThread_;
 			IntPtr snap = CreateToolhelp32Snapshot(SnapThread, 0);
 			if (snap == IntPtr.Zero || snap == new IntPtr(-1)) {
 				Problem = "no thread snapshot";
@@ -141,12 +171,14 @@ namespace NatureFX.Tools {
 			}
 			ThreadCount = seen.Count;
 			all_.Sort((a, b) => b.Item2.CompareTo(a.Item2));
-			Busiest.Clear();
-			for (int i = 0; i < all_.Count && i < 12; ++i) {
-				if (all_[i].Item2 < 0.5f && !all_[i].Item3) {
-					break;
+			lock (lock_) {
+				Busiest.Clear();
+				for (int i = 0; i < all_.Count && i < 12; ++i) {
+					if (all_[i].Item2 < 0.5f && !all_[i].Item3) {
+						break;
+					}
+					Busiest.Add(all_[i]);
 				}
-				Busiest.Add(all_[i]);
 			}
 		}
 
@@ -167,6 +199,7 @@ namespace NatureFX.Tools {
 			return main ? $"{name} (main thread)" : name;
 		}
 
-		public static string CpuName => $"{SystemInfo.processorType.Trim()}, {SystemInfo.processorCount} logical CPUs, {SystemInfo.processorFrequency} MHz";
+		private static string cpuName_;
+		public static string CpuName => cpuName_ ??= $"{SystemInfo.processorType.Trim()}, {SystemInfo.processorCount} logical CPUs, {SystemInfo.processorFrequency} MHz";
 	}
 }

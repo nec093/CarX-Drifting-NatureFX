@@ -667,7 +667,7 @@ namespace NatureFX.Tools {
 			} else {
 				load.Add("CPU, the whole machine", CpuStats.SystemPercent >= 0.0f ? $"{CpuStats.SystemPercent:0} %" : "not read yet");
 				load.Add("the game's threads", $"{CpuStats.ThreadCount} (the busiest below, in % of one core: near 100 one thread holds the frame back)");
-				foreach (var (name, percent, main) in CpuStats.Busiest) {
+				foreach (var (name, percent, main) in CpuStats.Take()) {
 					load.Add(name, $"{percent:0} %", percent, true, percent >= 90.0f ? 2 : percent >= 70.0f ? 1 : 0);
 				}
 			}

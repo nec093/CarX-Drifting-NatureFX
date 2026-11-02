@@ -204,9 +204,12 @@ namespace NatureFX {
 				return;
 			}
 			// the debug page (a browser on this PC): whether NatureFX is on or not
-			NatureFX.Tools.DebugPage.Update(this, s.DebugPage, s.DebugPagePort);
+			// the page's own work timed too (its snapshot once a second: a hitch there shows in the slow frames as
+			// 'debug page')
 			NatureFX.Tools.CpuTimings.Active = NatureFX.Tools.DebugPage.Running;
 			NatureFX.Tools.CpuTimings.BeginFrame();
+			NatureFX.Tools.CpuTimings.Section("debug page");
+			NatureFX.Tools.DebugPage.Update(this, s.DebugPage, s.DebugPagePort);
 			TextureBudget.Apply(s.TextureStreamingBudget);
 			Replacer.Resync();
 
