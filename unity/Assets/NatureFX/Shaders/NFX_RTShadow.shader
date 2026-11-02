@@ -390,7 +390,8 @@ Shader "Hidden/NatureFX/RTShadow"
             if (layer == 1 && !coated)
                 break;
             // the sun's disc keeps the sharpest lobe from a point (HDRP clamps its roughness the same way)
-            float r = layer == 0 ? max(perceptualRoughness, 0.05) : NFX_COAT_ROUGHNESS + 0.03;
+            // the coat: NFX_RayTracing.hlsl's NFX_COAT_ROUGHNESS (0.04, not included here) and the disc's spread
+            float r = layer == 0 ? max(perceptualRoughness, 0.05) : 0.07;
             float a = r * r;
             float a2 = a * a;
             float d = nh * nh * (a2 - 1.0) + 1.0;
@@ -696,7 +697,7 @@ Shader "Hidden/NatureFX/RTShadow"
             float3 bakeEstimate = albedoD * ProbeSH9(n) * GetCurrentExposureMultiplier();
             // (none with OwnLighting: HDRP's indirect diffuse multiplier, which scales the baked light too, is 0, and
             // all of G3 is the glow)
-            float3 bake = ownAmbient ? 0.0 : bakeEstimate * min(1.0, Luminance(g3) / max(Luminance(bakeEstimate), 1e-6));
+            float3 bake = ownAmbient ? (float3)0.0 : bakeEstimate * min(1.0, Luminance(g3) / max(Luminance(bakeEstimate), 1e-6));
             float3 glow = max(g3 - bake, 0.0);
             float4 lampsTotal = _NFX_SunExact.y > 0.5 ? LOAD_TEXTURE2D_X(_NFX_LampsTotalTex, pixel) : 0.0;
             float4 lampsBlocked = _NFX_SunExact.y > 0.5 ? LOAD_TEXTURE2D_X(_NFX_LampsExactTex, pixel) : 0.0;
@@ -704,7 +705,7 @@ Shader "Hidden/NatureFX/RTShadow"
             float3 lampsLit = max(lampsAll - (lampsBlocked.a > 0.5 ? max(lampsBlocked.rgb, 0.0) : 0.0), 0.0);
             float3 sunAll = max(exact.rgb, 0.0);
             // (with OwnLighting.Sun HDRP added no sun: nothing of it to take away)
-            float3 restLight = max(hdrpColor - g3 - (_NFX_OwnSun > 0.5 ? 0.0 : sunAll) - (_NFX_OwnLamps > 0.5 ? 0.0 : lampsAll), 0.0);
+            float3 restLight = max(hdrpColor - g3 - (_NFX_OwnSun > 0.5 ? (float3)0.0 : sunAll) - (_NFX_OwnLamps > 0.5 ? (float3)0.0 : lampsAll), 0.0);
             float sunShade = 1.0 - (1.0 - sunVisible) * shadowStrength;
             // the sky's light from the sky as it is now (HDRP's probe is the own engine's sky, A3), not what the G-buffer
             // baked: a track's lightmaps were baked under its own weak sun (Units) and left the shade black
@@ -736,9 +737,9 @@ Shader "Hidden/NatureFX/RTShadow"
         float3 ownSunLight = 0.0;
         if (ownSun && _NFX_RTSunDir.w > 0.0)
         {
-            PositionInputs vp = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
-            float3 V = GetWorldSpaceNormalizeViewDir(vp.positionWS);
-            ownSunLight = exactKnown ? max(exact.rgb, 0.0) : OwnSunLight(n, V, L, nd.perceptualRoughness, surface, known);
+            PositionInputs ownSunPos = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
+            float3 ownSunView = GetWorldSpaceNormalizeViewDir(ownSunPos.positionWS);
+            ownSunLight = exactKnown ? max(exact.rgb, (float3)0.0) : OwnSunLight(n, ownSunView, L, nd.perceptualRoughness, surface, known);
         }
         if (shadowStrength <= 0.0)
         {
