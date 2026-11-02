@@ -159,6 +159,37 @@ namespace NatureFX.Rendering {
 		public static Vector4[] FogSmoke { get; private set; }
 		private readonly Vector4[] fogSmoke_ = new Vector4[3 + VolX * VolY * VolZ / 4];
 
+		// The visible particles of this frame (alpha 0.02 or more), read once on the main thread (the particle API is
+		// Unity's): position, alpha, size. The grids below are rasterised from these on worker threads.
+		private Vector3[] gatherPos_ = new Vector3[0];
+		private float[] gatherAlpha_ = new float[0];
+		private float[] gatherSize_ = new float[0];
+		private int gathered_;
+		// slabs the grids are split into, one task each (each slab's cells sum their particles in the same order as
+		// one thread would: the same result)
+		private const int RasterSlabs = 8;
+
+		private void Gather(int count) {
+			if (gatherPos_.Length < count) {
+				gatherPos_ = new Vector3[buffer_.Length];
+				gatherAlpha_ = new float[buffer_.Length];
+				gatherSize_ = new float[buffer_.Length];
+			}
+			int n = 0;
+			for (int i = 0; i < count; ++i) {
+				var p = buffer_[i];
+				float alpha = p.GetCurrentColor(particles_).a / 255.0f;
+				if (alpha < 0.02f) {
+					continue;
+				}
+				gatherPos_[n] = p.position;
+				gatherAlpha_[n] = alpha;
+				gatherSize_[n] = p.GetCurrentSize(particles_);
+				++n;
+			}
+			gathered_ = n;
+		}
+
 		private void SmokeVolumeOff() {
 			Shader.SetGlobalVector(VolumeSizeId, Vector4.zero);
 			FogSmoke = null;
@@ -183,38 +214,52 @@ namespace NatureFX.Rendering {
 			var lo = new Vector3(1e9f, 1e9f, 1e9f);
 			var hi = new Vector3(-1e9f, -1e9f, -1e9f);
 			float inv = 1.0f / VolCell;
-			for (int i = 0; i < count; ++i) {
-				var p = buffer_[i];
-				float alpha = p.GetCurrentColor(particles_).a / 255.0f;
-				if (alpha < 0.02f) {
-					continue;
-				}
-				float r = Mathf.Max(p.GetCurrentSize(particles_) * 0.4f, VolCell * 0.6f);
-				// the puff's optical depth through it (about 1.4 x its alpha) spread over its width
-				float sigma = 1.4f * alpha / (2.0f * r);
-				var q = (p.position - origin) * inv;
+			int n = gathered_;
+			// the smoke's box: the puffs that reach into the grid
+			for (int i = 0; i < n; ++i) {
+				float r = Mathf.Max(gatherSize_[i] * 0.4f, VolCell * 0.6f);
+				var q = (gatherPos_[i] - origin) * inv;
 				int rc = Mathf.CeilToInt(r * inv);
-				int x0 = Mathf.Max(0, (int)q.x - rc), x1 = Mathf.Min(VolX - 1, (int)q.x + rc);
-				int y0 = Mathf.Max(0, (int)q.y - rc), y1 = Mathf.Min(VolY - 1, (int)q.y + rc);
-				int z0 = Mathf.Max(0, (int)q.z - rc), z1 = Mathf.Min(VolZ - 1, (int)q.z + rc);
-				if (x0 > x1 || y0 > y1 || z0 > z1) {
+				if ((int)q.x + rc < 0 || (int)q.x - rc > VolX - 1 || (int)q.y + rc < 0 || (int)q.y - rc > VolY - 1 ||
+				    (int)q.z + rc < 0 || (int)q.z - rc > VolZ - 1) {
 					continue;
 				}
-				float r2 = r * r * inv * inv;
-				for (int z = z0; z <= z1; ++z) {
-					for (int y = y0; y <= y1; ++y) {
-						for (int x = x0; x <= x1; ++x) {
-							float dx = x + 0.5f - q.x, dy = y + 0.5f - q.y, dz = z + 0.5f - q.z;
-							float w = 1.0f - (dx * dx + dy * dy + dz * dz) / r2;
-							if (w > 0.0f) {
-								volume_[(z * VolY + y) * VolX + x] += sigma * w * 1.5f;
+				lo = Vector3.Min(lo, gatherPos_[i] - Vector3.one * r);
+				hi = Vector3.Max(hi, gatherPos_[i] + Vector3.one * r);
+			}
+			// the cells, a slab of z per task
+			var pos = gatherPos_;
+			var alphas = gatherAlpha_;
+			var sizes = gatherSize_;
+			var volume = volume_;
+			System.Threading.Tasks.Parallel.For(0, RasterSlabs, slab => {
+				int zLo = slab * VolZ / RasterSlabs, zHi = (slab + 1) * VolZ / RasterSlabs - 1;
+				for (int i = 0; i < n; ++i) {
+					float r = Mathf.Max(sizes[i] * 0.4f, VolCell * 0.6f);
+					// the puff's optical depth through it (about 1.4 x its alpha) spread over its width
+					float sigma = 1.4f * alphas[i] / (2.0f * r);
+					var q = (pos[i] - origin) * inv;
+					int rc = Mathf.CeilToInt(r * inv);
+					int x0 = Mathf.Max(0, (int)q.x - rc), x1 = Mathf.Min(VolX - 1, (int)q.x + rc);
+					int y0 = Mathf.Max(0, (int)q.y - rc), y1 = Mathf.Min(VolY - 1, (int)q.y + rc);
+					int z0 = Mathf.Max(zLo, (int)q.z - rc), z1 = Mathf.Min(zHi, (int)q.z + rc);
+					if (x0 > x1 || y0 > y1 || z0 > z1) {
+						continue;
+					}
+					float r2 = r * r * inv * inv;
+					for (int z = z0; z <= z1; ++z) {
+						for (int y = y0; y <= y1; ++y) {
+							for (int x = x0; x <= x1; ++x) {
+								float dx = x + 0.5f - q.x, dy = y + 0.5f - q.y, dz = z + 0.5f - q.z;
+								float w = 1.0f - (dx * dx + dy * dy + dz * dz) / r2;
+								if (w > 0.0f) {
+									volume[(z * VolY + y) * VolX + x] += sigma * w * 1.5f;
+								}
 							}
 						}
 					}
 				}
-				lo = Vector3.Min(lo, p.position - Vector3.one * r);
-				hi = Vector3.Max(hi, p.position + Vector3.one * r);
-			}
+			});
 			if (lo.x > hi.x) {
 				SmokeVolumeOff();
 				return;
@@ -265,36 +310,42 @@ namespace NatureFX.Rendering {
 				smokeFar_[i] = -1e6f;
 			}
 			float inv = 1.0f / SmokeCell;
-			for (int i = 0; i < count; ++i) {
-				var p = buffer_[i];
-				float alpha = p.GetCurrentColor(particles_).a / 255.0f;
-				if (alpha < 0.02f) {
-					continue;
-				}
-				var d = p.position - center;
-				float r = Mathf.Max(p.GetCurrentSize(particles_) * 0.4f, SmokeCell);
-				float px = Vector3.Dot(d, u) * inv + SmokeCells * 0.5f, py = Vector3.Dot(d, v) * inv + SmokeCells * 0.5f;
-				float depth = Vector3.Dot(d, s);
-				// the puff's optical depth through its centre (its alpha as the shader draws it, about this much)
-				float tau = 1.4f * alpha;
-				int rc = Mathf.CeilToInt(r * inv);
-				int x0 = Mathf.Max(0, (int)px - rc), x1 = Mathf.Min(SmokeCells - 1, (int)px + rc);
-				int y0 = Mathf.Max(0, (int)py - rc), y1 = Mathf.Min(SmokeCells - 1, (int)py + rc);
-				float r2 = r * r * inv * inv;
-				for (int y = y0; y <= y1; ++y) {
-					for (int x = x0; x <= x1; ++x) {
-						float dx = x + 0.5f - px, dy = y + 0.5f - py;
-						float q = 1.0f - (dx * dx + dy * dy) / r2;
-						if (q <= 0.0f) {
-							continue;
+			int n = gathered_;
+			var pos = gatherPos_;
+			var alphas = gatherAlpha_;
+			var sizes = gatherSize_;
+			var tauMap = smokeTau_;
+			var nearMap = smokeNear_;
+			var farMap = smokeFar_;
+			// a band of rows per task
+			System.Threading.Tasks.Parallel.For(0, RasterSlabs, slab => {
+				int rowLo = slab * SmokeCells / RasterSlabs, rowHi = (slab + 1) * SmokeCells / RasterSlabs - 1;
+				for (int i = 0; i < n; ++i) {
+					var d = pos[i] - center;
+					float r = Mathf.Max(sizes[i] * 0.4f, SmokeCell);
+					float px = Vector3.Dot(d, u) * inv + SmokeCells * 0.5f, py = Vector3.Dot(d, v) * inv + SmokeCells * 0.5f;
+					float depth = Vector3.Dot(d, s);
+					// the puff's optical depth through its centre (its alpha as the shader draws it, about this much)
+					float tau = 1.4f * alphas[i];
+					int rc = Mathf.CeilToInt(r * inv);
+					int x0 = Mathf.Max(0, (int)px - rc), x1 = Mathf.Min(SmokeCells - 1, (int)px + rc);
+					int y0 = Mathf.Max(rowLo, (int)py - rc), y1 = Mathf.Min(rowHi, (int)py + rc);
+					float r2 = r * r * inv * inv;
+					for (int y = y0; y <= y1; ++y) {
+						for (int x = x0; x <= x1; ++x) {
+							float dx = x + 0.5f - px, dy = y + 0.5f - py;
+							float q = 1.0f - (dx * dx + dy * dy) / r2;
+							if (q <= 0.0f) {
+								continue;
+							}
+							int k = y * SmokeCells + x;
+							tauMap[k] += tau * q * q;
+							nearMap[k] = Mathf.Min(nearMap[k], depth - r * 0.5f);
+							farMap[k] = Mathf.Max(farMap[k], depth + r * 0.5f);
 						}
-						int k = y * SmokeCells + x;
-						smokeTau_[k] += tau * q * q;
-						smokeNear_[k] = Mathf.Min(smokeNear_[k], depth - r * 0.5f);
-						smokeFar_[k] = Mathf.Max(smokeFar_[k], depth + r * 0.5f);
 					}
 				}
-			}
+			});
 			for (int k = 0; k < smokePixels_.Length; ++k) {
 				smokePixels_[k] = smokeTau_[k] > 0.0f ? new Color(smokeTau_[k], smokeNear_[k], smokeFar_[k], 0.0f) : Color.clear;
 			}
@@ -325,6 +376,7 @@ namespace NatureFX.Rendering {
 			}
 			count = particles_.GetParticles(buffer_, count);
 			particles_.GetCustomParticleData(custom_, ParticleSystemCustomData.Custom1);
+			Gather(count);
 			// the lamps' smoke grid every other frame (the sun's map on the frames between)
 			if ((Time.frameCount & 1) == 1) {
 				UpdateSmokeVolume(count);
