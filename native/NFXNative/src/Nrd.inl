@@ -27,7 +27,7 @@ struct NrdEventData {
 	float denoisingRange;
 	float timeDelta;          // ms
 	UINT32 mode;              // event 6: 1 GI (two signals), 0 the one bounce ambient light, 2 the lamp shadows
-	UINT32 flags;             // bit 0: REBLUR's performance mode (F8 > Developer > NRD parts)
+	UINT32 flags;             // bit 0: REBLUR made cheaper (F8 > Developer > NRD parts): see NrdFast
 };
 static_assert(sizeof(NrdEventData) == 328, "NrdEventData: NativeEngine.IssueNrd writes 328 bytes");
 
@@ -584,6 +584,19 @@ void NrdStatusLine(NrdContext& c, const char* what, const NrdEventData* data, ui
 	}
 }
 
+// REBLUR made cheaper (flags bit 0, for comparing): this NRD has no performance mode any more, so its costliest
+// optional passes go: the pre-pass blur (spatial reuse before the accumulation), the stabilization pass and the
+// anti-firefly filter
+void NrdFast(nrd::ReblurSettings& reblur, const NrdEventData* data) {
+	if ((data->flags & 1u) == 0) {
+		return;
+	}
+	reblur.diffusePrepassBlurRadius = 0.0f;
+	reblur.specularPrepassBlurRadius = 0.0f;
+	reblur.maxStabilizedFrameNum = 0;
+	reblur.enableAntiFirefly = false;
+}
+
 // Render event 5: SIGMA over the sun trace that ran just before
 void NrdSigma(const NrdEventData* data) {
 	// with translucency: glass dims the sun instead of letting it all through (SunShadow.hlsl's share)
@@ -658,7 +671,6 @@ void NrdReblur(const NrdEventData* data) {
 	// long one is clamped to, followed the noise and the image flickered on a moving car. A longer fast history and
 	// a looser clamp; the long history and the anti-lag stay REBLUR's.
 	nrd::ReblurSettings reblur = {};
-	reblur.enablePerformanceMode = (data->flags & 1u) != 0;
 	reblur.maxFastAccumulatedFrameNum = 10;
 	reblur.fastHistoryClampingSigmaScale = 2.5f;
 	if (data->mode != 2) {
@@ -668,6 +680,7 @@ void NrdReblur(const NrdEventData* data) {
 		reblur.antilagSettings.luminanceSigmaScale = 4.0f;
 		reblur.antilagSettings.luminanceSensitivity = 6.0f;
 	}
+	NrdFast(reblur, data);
 	nrd::Identifier ids[2] = { 0, 1 };
 	const void* settings[] = { &reblur, &reblur };
 	uint32_t dispatched = 0;
@@ -708,13 +721,13 @@ void NrdReflection(const NrdEventData* data) {
 	// ghosted and lagged behind. A short history, quicker to throw away (anti-lag), and the smoothest surfaces
 	// (car paint's varnish, mirrors, wet roads) responsive down to a couple of frames.
 	nrd::ReblurSettings reblur = {};
-	reblur.enablePerformanceMode = (data->flags & 1u) != 0;
 	reblur.maxAccumulatedFrameNum = 16;
 	reblur.maxFastAccumulatedFrameNum = 3;
 	reblur.maxStabilizedFrameNum = 8;
 	reblur.antilagSettings.luminanceSensitivity = 2.0f;
 	reblur.responsiveAccumulationSettings.roughnessThreshold = 0.2f;
 	reblur.responsiveAccumulationSettings.minAccumulatedFrameNum = 4; // 2 left one ray's noise flickering on car paint
+	NrdFast(reblur, data);
 	nrd::Identifier id = 0;
 	const void* settings[] = { &reblur };
 	uint32_t dispatched = 0;
