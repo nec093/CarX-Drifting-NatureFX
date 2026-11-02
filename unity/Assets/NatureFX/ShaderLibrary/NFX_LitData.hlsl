@@ -166,6 +166,17 @@ void GetSurfaceAndBuiltinData(FragInputs input, float3 V, inout PositionInputs p
 		}
 		#endif
 		float keep = NFX_ApplyFoliage(s.baseColor, s.normalWS, positionAWS, V, builtinData.opacity, cutoff);
+		// measured colours: a real leaf or blade of grass sends back some 4 to 12 % of the light (its luminance), an
+		// olive green; textures are painted brighter and greener (sRGB 90, 140, 50 is 22 % and far more saturated).
+		// Above 6 % the brightness is eased (a knee: 20 % comes out at 12 %), the colour a fifth less saturated; the
+		// autumn colours keep their hue
+		if (_NFX_FoliageTone.x > 0.0) {
+			float y = dot(s.baseColor, float3(0.2126, 0.7152, 0.0722));
+			float eased = y > 0.06 ? 0.06 + (y - 0.06) * 0.43 : y;
+			float3 toned = s.baseColor * (eased / max(y, 1e-4));
+			toned = lerp(eased, toned, 0.8);
+			s.baseColor = lerp(s.baseColor, max(toned, 0.0), _NFX_FoliageTone.x);
+		}
 		#ifdef _ALPHATEST_ON
 		if (keep < 0.999) {
 			// whole bunches go: smooth noise over the card, the same in every pass (depth, shadows, G-buffer)

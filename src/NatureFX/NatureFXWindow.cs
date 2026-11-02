@@ -650,6 +650,8 @@ namespace NatureFX {
 				Other(true);
 			}
 			Widgets.Info($"Now: {Seasons.Describe()}");
+			Other(Widgets.Slider("Real leaf colour", S.FoliageColor, 0, 1, v => S.FoliageColor = v, "0.00"));
+			Widgets.Info("1: leaves and grass as dark and olive as real ones (a leaf sends back some 4 to 12 % of the light). 0: the textures' own colours.");
 			Widgets.EndCard();
 
 			Widgets.BeginCard("Rain and snow", "Falling rain and snow around the camera, with the weather: rain streaks that splash where they land and show in headlights and under street lights, drifting snowflakes. 0 turns them off.");
@@ -896,7 +898,7 @@ namespace NatureFX {
 			Widgets.EndDependent();
 			Other(Widgets.Slider("Contrast", S.Contrast, -50, 50, v => S.Contrast = v, "0"));
 			Other(Widgets.Slider("Saturation", S.Saturation, -50, 50, v => S.Saturation = v, "0"));
-			Widgets.Info("True to life: Neutral, contrast and saturation 0 (the surfaces keep their own colours).");
+			Widgets.Info("Like a camera: AgX, contrast 8, saturation 0 (highlights turn white, bright colours do not clip). Neutral keeps the surfaces' colours saturated up to white.");
 			Other(Widgets.Slider("White balance (eye)", S.WhiteBalance, 0, 1, v => S.WhiteBalance = v, "0.00"));
 			Widgets.Info("How much the eye takes the light around as white: a sunset or warm lamps less orange, a shade under a blue " +
 			             "sky less blue. 0: the camera's daylight white. Less in the dark, as the eye. Needs Own post-processing.");

@@ -18,6 +18,7 @@ float4 _NFX_Lights;         // x: sun elevation (degrees), y: unscaled time (lam
 float  _NFX_VertexColors;    // 1: the map's vertex colours drive wind and exposure ([map] vertexColors, docs/map-authoring.md 2)
 float4 _NFX_Headlights[4];   // the headlights nearest the camera: xyz absolute world position, w intensity (cd; 0 = none)
 float4 _NFX_HeadlightDirs[4]; // xyz direction, w cosine of the half cone angle (retroreflection, NFX_MaterialProfile.hlsl)
+float4 _NFX_FoliageTone;     // x: leaves and grass brought to measured colours (0 the textures' own .. 1; Settings.FoliageColor)
 float4 _NFX_Season;          // x: 0 spring, 1 summer, 2 autumn, 3 winter (blends between; < 0: no seasonal colours)
 float4 _NFX_SunDir;          // xyz: towards the sun (world), w: 1 by day .. 0 at night (back lit leaves)
 float4 _NFX_Puddles[16];     // puddle markers: xyz centre (absolute world), w how full (0 dry .. 1 after long rain)

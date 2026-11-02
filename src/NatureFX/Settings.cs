@@ -164,6 +164,9 @@ namespace NatureFX {
 		// (0 automatic: the weather preset, else the map's [defaults] season; 1 spring .. 4 winter; 5 none), the 3D
 		// grass (density multiplier, metres from the camera) and the map's decals, water, local fog and particles
 		public int Season { get; set; }
+		// leaves and grass brought to measured colours (0 the textures' own, 1 a real leaf's: some 4 to 12 % of the light
+		// back, an olive green, not a painted one; NFX_LitData)
+		public float FoliageColor { get; set; }
 		public float GrassDensity { get; set; }
 		public float GrassDistance { get; set; }
 		public float ShrubDensity { get; set; }            // the map's thickets of scanned shrubs (ShrubRenderer): density, 0 off
@@ -391,6 +394,9 @@ namespace NatureFX {
 		// (0 automatic: the weather preset, else the map's [defaults] season; 1 spring .. 4 winter; 5 none), the 3D
 		// grass (density multiplier, metres from the camera) and the map's decals, water, local fog and particles
 		public int Season { get; set; }
+		// leaves and grass brought to measured colours (0 the textures' own, 1 a real leaf's: some 4 to 12 % of the light
+		// back, an olive green, not a painted one; NFX_LitData)
+		public float FoliageColor { get; set; }
 		public float GrassDensity { get; set; }
 		public float GrassDistance { get; set; }
 		public float ShrubDensity { get; set; }            // the map's thickets of scanned shrubs (ShrubRenderer): density, 0 off
@@ -907,6 +913,15 @@ namespace NatureFX {
 				// the debug page on by default while NatureFX is being developed (this PC only: 127.0.0.1)
 				d.DebugPage = true;
 				d.ConfigVersion = 78;
+			}
+			if (d.ConfigVersion < 79) {
+				// closer to a camera's picture of the real thing: AgX (highlights go to white without a hue shift, bright
+				// colours do not clip; Neutral kept them saturated up to the shoulder, which read as rendered), a little
+				// contrast on its flat base, leaves and grass at measured colours
+				d.TonemapMode = 2;
+				d.Contrast = 8.0f;
+				d.FoliageColor = 1.0f;
+				d.ConfigVersion = 79;
 			}
 		}
 

@@ -9,6 +9,7 @@ namespace NatureFX.Map {
 		public const int None = -1;
 		private const float SecondsPerSeason = 30.0f;
 		private static readonly int SeasonId = Shader.PropertyToID("_NFX_Season");
+		private static readonly int FoliageToneId = Shader.PropertyToID("_NFX_FoliageTone");
 		private static readonly string[] Names = { "spring", "summer", "autumn", "winter" };
 
 		private static float position_ = None;
@@ -22,6 +23,8 @@ namespace NatureFX.Map {
 		}
 
 		public static void Update(ISettings s, int weatherPreset, string mapSeason, bool enabled) {
+			// leaves and grass at measured colours (NFX_LitData)
+			Shader.SetGlobalVector(FoliageToneId, new Vector4(enabled ? Mathf.Clamp01(s.FoliageColor) : 0.0f, 0.0f, 0.0f, 0.0f));
 			int target = None;
 			if (enabled) {
 				if (s.Season >= 1 && s.Season <= 4) {
