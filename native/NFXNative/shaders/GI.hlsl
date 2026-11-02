@@ -14,7 +14,9 @@
 // Compiled into GI.h.
 #include "NFXCommon.hlsli"
 
-#define NFX_SKY_UNDERSIDE 0.3
+// the sky beyond the GI's reach behind something: 0.15 of it (0.3 lit a large room under a roof with a third of the open
+// sky: its walls and floor came out white; the light bounced in comes from the GI's cache, not this share)
+#define NFX_SKY_UNDERSIDE 0.15
 
 float FarSky(float3 originAWS, float3 dir, float giDistance)
 {

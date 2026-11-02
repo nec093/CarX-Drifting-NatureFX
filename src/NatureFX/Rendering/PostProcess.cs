@@ -492,6 +492,13 @@ namespace NatureFX.Rendering {
 			if (!float.IsNaN(bright)) {
 				log2L = Mathf.Max(log2L, bright - 2.5f);
 			}
+			// and on what is lit when it fills a tenth of the view: the street lights' pools on a night road (the black sky
+			// over half the picture held the eye wide open, the lamps' pools came out white; the brightest 3 % there are
+			// only the lamps' heads)
+			float lit = sorted_[(int)(sorted_.Length * 0.90f)];
+			if (!float.IsNaN(lit)) {
+				log2L = Mathf.Max(log2L, lit - 2.5f);
+			}
 			return log2L + Mathf.Log(100.0f / 12.5f, 2.0f);
 		}
 	}
