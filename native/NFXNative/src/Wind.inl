@@ -113,7 +113,7 @@ bool BuildWindBlas() {
 		const auto& g = g_geometries[w.geometry];
 		w.desc = g.desc;
 		w.desc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
-		w.desc.Triangles.VertexBuffer.StartAddress = g.ownPositions->GetGPUVirtualAddress();
+		w.desc.Triangles.VertexBuffer.StartAddress = g.ownPositions.Address();
 		w.desc.Triangles.VertexBuffer.StrideInBytes = 12;
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
 		inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
@@ -238,7 +238,7 @@ void RecordWind(ID3D12GraphicsCommandList4* list, int slot, const std::vector<D3
 		UINT vertices = g.desc.Triangles.VertexCount;
 		float constants[28];
 		WindConstants(resolved[i].Transform, vertices, constants);
-		list->SetComputeRootShaderResourceView(0, g.ownPositions->GetGPUVirtualAddress());
+		list->SetComputeRootShaderResourceView(0, g.ownPositions.Address());
 		list->SetComputeRootUnorderedAccessView(1, w.positions->GetGPUVirtualAddress());
 		list->SetComputeRoot32BitConstants(2, 28, constants, 0);
 		list->Dispatch((vertices + 63) / 64, 1, 1);

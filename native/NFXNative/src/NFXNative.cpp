@@ -16,6 +16,7 @@
 #include <cstring>
 #include <string>
 #include <mutex>
+#include <algorithm>
 #include <vector>
 #include <map>
 
@@ -564,16 +565,20 @@ bool CreateTracePipelines() {
 	return true;
 }
 
-// ------------------------------------------------------------------ BLAS pool
-// The geometries' BLAS live in a few large buffers (64 MB chunks) at 256 byte aligned offsets instead of one committed
-// buffer each: a committed buffer takes at least 64 KB, and a small mesh's BLAS is a few KB (thousands of them on a
-// map: hundreds of MB lost to the rounding). A BLAS stays in the acceleration structure state for good, so chunks
-// need no transitions. Spans are freed only after WaitRenderIdle (with the retired geometries), so no frame in
-// flight still traces what is reused; a chunk with nothing left in it is released.
+// ------------------------------------------------------------------ buffer pools
+// The geometries' BLAS and their own data (indices, positions, normals, UVs) live in a few large buffers (64 MB
+// chunks) at 256 byte aligned offsets instead of one committed buffer each: a committed buffer takes at least 64 KB,
+// and a small mesh's BLAS or UVs are a few KB (thousands of them on a map: hundreds of MB lost to the rounding).
+// BLAS chunks stay in the acceleration structure state for good. Data chunks are written (unordered access) while a
+// scene build fills them and read (non pixel shader resource) otherwise: the build moves the whole chunk between the
+// two, after WaitRenderIdle when a chunk the frames read gets new data (BuildScene). Spans are freed only after
+// WaitRenderIdle (with the retired geometries), so no frame in flight still reads what is reused; a chunk with nothing
+// left in it is released.
 struct PoolSpan {
 	int chunk = -1;
 	UINT64 offset = 0;
-	UINT64 bytes = 0;
+	UINT64 bytes = 0;  // taken (aligned)
+	UINT64 size = 0;   // asked for
 	ID3D12Resource* resource = nullptr;  // the chunk's buffer (held by the pool)
 	D3D12_GPU_VIRTUAL_ADDRESS address = 0;
 	explicit operator bool() const { return chunk >= 0; }
@@ -581,36 +586,42 @@ struct PoolSpan {
 	ID3D12Resource* Resource() const { return resource; }
 };
 
-struct BlasPool {
+struct BufferPool {
 	static constexpr UINT64 kChunkBytes = 64ull << 20;
-	static constexpr UINT64 kAlign = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT;  // 256
+	static constexpr UINT64 kAlign = 256;  // D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT; covers raw views (16)
+	D3D12_RESOURCE_STATES createState;
+	explicit BufferPool(D3D12_RESOURCE_STATES state) : createState(state) {}
 	struct Chunk {
 		ComPtr<ID3D12Resource> buffer;
 		UINT64 size = 0, top = 0, used = 0;
 		std::vector<std::pair<UINT64, UINT64>> free;  // (offset, bytes) below top, sorted, merged
+		D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;  // what the GPU last left it in (data chunks)
 	};
 	std::vector<Chunk> chunks;
 
 	static UINT64 Align(UINT64 v) { return (v + kAlign - 1) & ~(kAlign - 1); }
 
-	PoolSpan Make(int c, UINT64 offset, UINT64 bytes) {
+	PoolSpan Make(int c, UINT64 offset, UINT64 bytes, UINT64 size) {
 		auto& ch = chunks[c];
 		ch.used += bytes;
 		PoolSpan span;
 		span.chunk = c;
 		span.offset = offset;
 		span.bytes = bytes;
+		span.size = size;
 		span.resource = ch.buffer.Get();
 		span.address = ch.buffer->GetGPUVirtualAddress() + offset;
 		return span;
 	}
 
-	PoolSpan Allocate(UINT64 bytes) {
-		bytes = Align(bytes == 0 ? kAlign : bytes);
+	// onlyIn: when not COMMON, only chunks in that state are used (a data build that could not wait for the frames
+	// in flight writes to new chunks only: they are created in it)
+	PoolSpan Allocate(UINT64 size, D3D12_RESOURCE_STATES onlyIn = D3D12_RESOURCE_STATE_COMMON) {
+		UINT64 bytes = Align(size == 0 ? kAlign : size);
 		// a freed hole (first fit), then the end of a chunk
 		for (size_t c = 0; c < chunks.size(); ++c) {
 			auto& ch = chunks[c];
-			if (!ch.buffer) {
+			if (!ch.buffer || (onlyIn != D3D12_RESOURCE_STATE_COMMON && ch.state != onlyIn)) {
 				continue;
 			}
 			for (size_t k = 0; k < ch.free.size(); ++k) {
@@ -621,23 +632,21 @@ struct BlasPool {
 					if (ch.free[k].second == 0) {
 						ch.free.erase(ch.free.begin() + static_cast<std::ptrdiff_t>(k));
 					}
-					return Make(static_cast<int>(c), offset, bytes);
+					return Make(static_cast<int>(c), offset, bytes, size);
 				}
 			}
 			if (ch.size - ch.top >= bytes) {
 				UINT64 offset = ch.top;
 				ch.top += bytes;
-				return Make(static_cast<int>(c), offset, bytes);
+				return Make(static_cast<int>(c), offset, bytes, size);
 			}
 		}
-		// a new chunk (one of its own for a BLAS larger than a chunk; a smaller chunk when the budget is tight)
-		UINT64 size = bytes > kChunkBytes ? bytes : kChunkBytes;
-		ComPtr<ID3D12Resource> buffer = CreateBuffer(size, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-		                                             D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
-		if (!buffer && size > bytes) {
-			size = bytes > (16ull << 20) ? bytes : (16ull << 20);
-			buffer = CreateBuffer(size, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-			                      D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+		// a new chunk (one of its own for a buffer larger than a chunk; a smaller chunk when the budget is tight)
+		UINT64 chunkSize = bytes > kChunkBytes ? bytes : kChunkBytes;
+		ComPtr<ID3D12Resource> buffer = CreateBuffer(chunkSize, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, createState);
+		if (!buffer && chunkSize > bytes) {
+			chunkSize = bytes > (16ull << 20) ? bytes : (16ull << 20);
+			buffer = CreateBuffer(chunkSize, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, createState);
 		}
 		if (!buffer) {
 			return PoolSpan();
@@ -656,9 +665,10 @@ struct BlasPool {
 		auto& ch = chunks[slot];
 		ch = Chunk();
 		ch.buffer = buffer;
-		ch.size = size;
+		ch.size = chunkSize;
 		ch.top = bytes;
-		return Make(slot, 0, bytes);
+		ch.state = createState;
+		return Make(slot, 0, bytes, size);
 	}
 
 	// only once nothing in flight can read it (after WaitRenderIdle)
@@ -689,7 +699,7 @@ struct BlasPool {
 			auto prev = it - 1;
 			if (prev->first + prev->second == it->first) {
 				prev->second += it->second;
-				it = ch.free.erase(it) - 1;
+				ch.free.erase(it);
 			}
 		}
 		// a hole at the end gives the space back to the top
@@ -724,7 +734,29 @@ struct BlasPool {
 		return n;
 	}
 };
-BlasPool g_blasPool;
+BufferPool g_blasPool(D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+BufferPool g_dataPool(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+// A geometry's own data: a span of g_dataPool, or a buffer of its own (NFX_Native_AddGeometryData's upload buffers)
+struct DataSpan {
+	ComPtr<ID3D12Resource> owned;
+	PoolSpan pooled;
+	explicit operator bool() const { return owned || pooled; }
+	D3D12_GPU_VIRTUAL_ADDRESS Address() const { return owned ? owned->GetGPUVirtualAddress() : pooled.Address(); }
+	ID3D12Resource* Resource() const { return owned ? owned.Get() : pooled.Resource(); }
+	UINT64 Offset() const { return owned ? 0 : pooled.offset; }
+	UINT64 Size() const { return owned ? owned->GetDesc().Width : pooled.size; }
+	static DataSpan Own(const ComPtr<ID3D12Resource>& buffer) {
+		DataSpan d;
+		d.owned = buffer;
+		return d;
+	}
+	// (a pooled span goes back with g_dataPool.Free; this only forgets it)
+	void Reset() {
+		owned.Reset();
+		pooled = PoolSpan();
+	}
+};
 
 // ------------------------------------------------------------------ scene
 
@@ -739,24 +771,24 @@ struct Geometry {
 	bool sanitize = false;
 	D3D12_GPU_VIRTUAL_ADDRESS sourceIndices = 0;
 	bool sourceIs16 = false;
-	ComPtr<ID3D12Resource> ownIndices;
+	DataSpan ownIndices;
 	bool released = false;  // NFX_Native_ReleaseGeometry: its mesh is gone
 	// what the trace shaders read at a hit (own buffers, bindless descriptors): indices, positions (the hit's
 	// normal) and the first UV set (its colour, the alpha test)
 	D3D12_GPU_VIRTUAL_ADDRESS sourcePositions = 0;  // in Unity's vertex buffer, extracted at build
 	UINT positionStride = 0;
 	int positionFormat = 0;                   // 3: three 32 bit floats, 4: four 16 bit floats
-	ComPtr<ID3D12Resource> ownPositions;      // float3 per vertex
+	DataSpan ownPositions;                    // float3 per vertex
 	D3D12_GPU_VIRTUAL_ADDRESS sourceNormals = 0;  // in Unity's vertex buffer, extracted at build
 	UINT normalStride = 0;
 	int normalFormat = 0;                     // 3: three 32 bit floats, 4: four 16 bit floats
 	ComPtr<ID3D12Resource> normalSource;      // Unity's vertex buffer, held until the normals are extracted
-	ComPtr<ID3D12Resource> ownNormals;        // float3 per vertex
+	DataSpan ownNormals;                      // float3 per vertex
 	D3D12_GPU_VIRTUAL_ADDRESS sourceUvs = 0;  // in Unity's vertex buffer (base vertex applied), extracted at build
 	UINT uvStride = 0;
 	int uvFormat = 0;                         // 1: two 32 bit floats, 2: two 16 bit floats
 	ComPtr<ID3D12Resource> uvSource;          // Unity's vertex buffer, held until the UVs are extracted
-	ComPtr<ID3D12Resource> ownUvs;            // float2 per vertex
+	DataSpan ownUvs;                          // float2 per vertex
 	UINT indexDescriptor = ~0u;
 	UINT positionDescriptor = ~0u;
 	UINT normalDescriptor = ~0u;
@@ -805,6 +837,14 @@ ComPtr<ID3D12Resource> g_tlas;
 UINT64 g_tlasCapacity = 0;
 ComPtr<ID3D12Resource> g_scratch;
 UINT64 g_scratchCapacity = 0;
+// BLAS compaction (BuildScene): each new BLAS reports its compacted size here (8 bytes each), read back, and is copied
+// into a span of that size; the build's own span goes back to the pool. Typically 40 to 60 % smaller.
+constexpr D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS kBlasFlags =
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_COMPACTION;
+ComPtr<ID3D12Resource> g_compactSizes;     // default heap, unordered access
+UINT64 g_compactSizesCapacity = 0;
+ComPtr<ID3D12Resource> g_compactReadback;  // readback heap
+UINT64 g_compactReadbackCapacity = 0;
 std::string g_sceneStats = "no scene";
 std::string g_sceneStatsWind;
 std::vector<int> g_instanceGeometry;  // per entry of g_instances
@@ -874,6 +914,28 @@ UINT RawBufferDescriptor(ID3D12Resource* buffer) {
 	desc.Buffer.NumElements = static_cast<UINT>(buffer->GetDesc().Width / 4);
 	desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
 	g_device->CreateShaderResourceView(buffer, &desc, handle);
+	return index;
+}
+
+// A raw view of a geometry's own data: its span of a pool chunk (FirstElement in 32 bit words: the span's offset is
+// 256 byte aligned, past the 16 a raw view needs), or its own buffer
+UINT RawBufferDescriptor(const DataSpan& data) {
+	if (data.owned) {
+		return RawBufferDescriptor(data.owned.Get());
+	}
+	D3D12_CPU_DESCRIPTOR_HANDLE handle;
+	UINT index = AllocateDescriptor(&handle);
+	if (index == ~0u) {
+		return index;
+	}
+	D3D12_SHADER_RESOURCE_VIEW_DESC desc = {};
+	desc.Format = DXGI_FORMAT_R32_TYPELESS;
+	desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+	desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	desc.Buffer.FirstElement = data.pooled.offset / 4;
+	desc.Buffer.NumElements = static_cast<UINT>((data.pooled.size + 3) / 4);
+	desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+	g_device->CreateShaderResourceView(data.Resource(), &desc, handle);
 	return index;
 }
 
@@ -1160,6 +1222,7 @@ NFX_EXPORT void NFX_Native_ClearScene() {
 	g_retiredMaterials.clear();
 	g_geometries.clear();
 	g_blasPool.Reset();
+	g_dataPool.Reset();
 	g_instances.clear();
 	g_resolved.clear();
 	g_instanceGeometry.clear();
@@ -1288,27 +1351,25 @@ NFX_EXPORT int NFX_Native_AddGeometryData(const float* positions, int vertexCoun
 	t.IndexCount = static_cast<UINT>(indexCount - indexCount % 3);
 	t.IndexBuffer = g.indexSource->GetGPUVirtualAddress();
 	g.triangles = t.IndexCount / 3;
-	g.ownIndices = g.indexSource;
-	g.ownPositions = g.vertexSource;
+	g.ownIndices = DataSpan::Own(g.indexSource);
+	g.ownPositions = DataSpan::Own(g.vertexSource);
 	if (normals != nullptr) {
-		g.ownNormals = CreateBuffer(vertexBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ);
+		ComPtr<ID3D12Resource> buffer = CreateBuffer(vertexBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ);
 		mapped = nullptr;
-		if (g.ownNormals && SUCCEEDED(g.ownNormals->Map(0, nullptr, &mapped)) && mapped != nullptr) {
+		if (buffer && SUCCEEDED(buffer->Map(0, nullptr, &mapped)) && mapped != nullptr) {
 			memcpy(mapped, normals, vertexBytes);
-			g.ownNormals->Unmap(0, nullptr);
-		} else {
-			g.ownNormals.Reset();
+			buffer->Unmap(0, nullptr);
+			g.ownNormals = DataSpan::Own(buffer);
 		}
 	}
 	if (uvs != nullptr) {
 		UINT64 uvBytes = static_cast<UINT64>(vertexCount) * 8;
-		g.ownUvs = CreateBuffer(uvBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ);
+		ComPtr<ID3D12Resource> buffer = CreateBuffer(uvBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ);
 		mapped = nullptr;
-		if (g.ownUvs && SUCCEEDED(g.ownUvs->Map(0, nullptr, &mapped)) && mapped != nullptr) {
+		if (buffer && SUCCEEDED(buffer->Map(0, nullptr, &mapped)) && mapped != nullptr) {
 			memcpy(mapped, uvs, uvBytes);
-			g.ownUvs->Unmap(0, nullptr);
-		} else {
-			g.ownUvs.Reset();
+			buffer->Unmap(0, nullptr);
+			g.ownUvs = DataSpan::Own(buffer);
 		}
 	}
 	g_geometries.push_back(g);
@@ -1453,7 +1514,7 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 		}
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
 		inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
-		inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+		inputs.Flags = kBlasFlags;
 		inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
 		inputs.NumDescs = 1;
 		inputs.pGeometryDescs = &g.desc;
@@ -1478,13 +1539,41 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 	g_gpu.Begin();
 	auto* list = g_gpu.list.Get();
 
-	std::vector<D3D12_RESOURCE_BARRIER> toRead;
+	// The own data goes into g_dataPool's chunks. A chunk the frames read gets new data only after they are done
+	// (it is unordered access while written); if they do not finish in time, only new chunks are written.
+	bool newData = false;
+	for (const auto& g : g_geometries) {
+		if (!g.blas && !g.released && ((g.sanitize && !g.ownIndices) || (!g.ownPositions && g.sourcePositions != 0) ||
+		                               (!g.ownNormals && g.sourceNormals != 0) || (!g.ownUvs && g.sourceUvs != 0))) {
+			newData = true;
+			break;
+		}
+	}
+	bool reuseChunks = !newData || WaitRenderIdle();
+	std::vector<int> written;  // the data chunks written in this list (unordered access until the barrier below)
+	auto allocateData = [&](UINT64 size) -> DataSpan {
+		DataSpan d;
+		d.pooled = g_dataPool.Allocate(size, reuseChunks ? D3D12_RESOURCE_STATE_COMMON : D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		if (!d.pooled) {
+			return d;
+		}
+		int c = d.pooled.chunk;
+		if (std::find(written.begin(), written.end(), c) == written.end()) {
+			written.push_back(c);
+			auto& ch = g_dataPool.chunks[c];
+			if (ch.state != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+				D3D12_RESOURCE_BARRIER b = Transition(ch.buffer.Get(), ch.state, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+				list->ResourceBarrier(1, &b);
+			}
+		}
+		return d;
+	};
 	for (auto& g : g_geometries) {
 		if (g.blas || g.released || !g.sanitize || g.ownIndices) {
 			continue;
 		}
 		UINT triangles = static_cast<UINT>(g.triangles);
-		g.ownIndices = CreateBuffer(static_cast<UINT64>(triangles) * 12, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		g.ownIndices = allocateData(static_cast<UINT64>(triangles) * 12);
 		if (!g.ownIndices) {
 			return -9;
 		}
@@ -1493,19 +1582,18 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 		list->SetComputeRootSignature(g_sanitize.root.Get());
 		list->SetPipelineState(g_sanitize.pso.Get());
 		list->SetComputeRootShaderResourceView(0, aligned);
-		list->SetComputeRootUnorderedAccessView(1, g.ownIndices->GetGPUVirtualAddress());
+		list->SetComputeRootUnorderedAccessView(1, g.ownIndices.Address());
 		list->SetComputeRoot32BitConstants(2, 4, constants, 0);
 		list->SetComputeRootShaderResourceView(3, aligned);
 		list->Dispatch((triangles + 63) / 64, 1, 1);
-		toRead.push_back(Transition(g.ownIndices.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
-		g.desc.Triangles.IndexBuffer = g.ownIndices->GetGPUVirtualAddress();
+		g.desc.Triangles.IndexBuffer = g.ownIndices.Address();
 		g.desc.Triangles.IndexFormat = DXGI_FORMAT_R32_UINT;
 		g.desc.Triangles.IndexCount = triangles * 3;
 	}
 	// positions and UVs out of Unity's vertex buffers, for the trace shaders' hit shading
-	auto extract = [&](D3D12_GPU_VIRTUAL_ADDRESS source, UINT vertices, UINT stride, int format, ComPtr<ID3D12Resource>& target) -> bool {
+	auto extract = [&](D3D12_GPU_VIRTUAL_ADDRESS source, UINT vertices, UINT stride, int format, DataSpan& target) -> bool {
 		UINT64 size = static_cast<UINT64>(vertices) * (format >= 3 ? 12 : 8);
-		target = CreateBuffer(size, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		target = allocateData(size);
 		if (!target) {
 			return false;
 		}
@@ -1514,11 +1602,10 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 		list->SetComputeRootSignature(g_extractUvs.root.Get());
 		list->SetPipelineState(g_extractUvs.pso.Get());
 		list->SetComputeRootShaderResourceView(0, aligned);
-		list->SetComputeRootUnorderedAccessView(1, target->GetGPUVirtualAddress());
+		list->SetComputeRootUnorderedAccessView(1, target.Address());
 		list->SetComputeRoot32BitConstants(2, 4, constants, 0);
 		list->SetComputeRootShaderResourceView(3, aligned);
 		list->Dispatch((vertices + 63) / 64, 1, 1);
-		toRead.push_back(Transition(target.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
 		return true;
 	};
 	for (auto& g : g_geometries) {
@@ -1536,11 +1623,28 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 			return -10;
 		}
 	}
-	if (!toRead.empty()) {
+	// the chunks written, whole, to be read (the BLAS builds below, the traces)
+	if (!written.empty()) {
+		std::vector<D3D12_RESOURCE_BARRIER> toRead;
+		for (int c : written) {
+			toRead.push_back(Transition(g_dataPool.chunks[c].buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+		}
 		list->ResourceBarrier(static_cast<UINT>(toRead.size()), toRead.data());
 	}
 
-	// BLAS: each new geometry, one after the other through a shared scratch buffer
+	// BLAS: each new geometry, one after the other through a shared scratch buffer; each reports its compacted size
+	int newBlas = 0;
+	for (size_t gi = 0; gi < g_geometries.size(); ++gi) {
+		if (!g_geometries[gi].released && !g_geometries[gi].blas && prebuild[gi].ResultDataMaxSizeInBytes > 0) {
+			++newBlas;
+		}
+	}
+	bool compact = newBlas > 0 &&
+	               EnsureBuffer(g_compactSizes, g_compactSizesCapacity, static_cast<UINT64>(newBlas) * 8, D3D12_HEAP_TYPE_DEFAULT,
+	                            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS) &&
+	               EnsureBuffer(g_compactReadback, g_compactReadbackCapacity, static_cast<UINT64>(newBlas) * 8, D3D12_HEAP_TYPE_READBACK,
+	                            D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
+	std::vector<size_t> compactIds;  // the geometries whose new BLAS report their size, in that order
 	int built = 0;
 	UINT64 blasBytes = 0;
 	for (size_t gi = 0; gi < g_geometries.size(); ++gi) {
@@ -1554,7 +1658,7 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 		}
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
 		inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
-		inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+		inputs.Flags = kBlasFlags;
 		inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
 		inputs.NumDescs = 1;
 		inputs.pGeometryDescs = &g.desc;
@@ -1570,12 +1674,77 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 		build.Inputs = inputs;
 		build.DestAccelerationStructureData = g.blas.Address();
 		build.ScratchAccelerationStructureData = g_scratch->GetGPUVirtualAddress();
-		list->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
+		if (compact) {
+			D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC post = {};
+			post.InfoType = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE;
+			post.DestBuffer = g_compactSizes->GetGPUVirtualAddress() + compactIds.size() * 8;
+			list->BuildRaytracingAccelerationStructure(&build, 1, &post);
+			compactIds.push_back(gi);
+		} else {
+			list->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
+		}
 		// (the whole chunk: the next build reuses the scratch, and a later one may sit next to this BLAS)
 		D3D12_RESOURCE_BARRIER b[2] = { UavBarrier(g.blas.Resource()), UavBarrier(g_scratch.Get()) };
 		list->ResourceBarrier(2, b);
 		blasBytes += info.ResultDataMaxSizeInBytes;
 		++built;
+	}
+
+	// Compaction: run what is recorded (the data, the builds, their sizes copied to the readback buffer), then copy
+	// each new BLAS into a span of its compacted size. The TLAS below takes the compacted ones; the build's spans were
+	// never in a TLAS the frames trace and go back to the pool once the copies ran.
+	std::vector<PoolSpan> uncompacted;
+	if (compact && !compactIds.empty()) {
+		UINT64 bytes = compactIds.size() * 8;
+		D3D12_RESOURCE_BARRIER toCopy[2] = { UavBarrier(g_compactSizes.Get()),
+		                                     Transition(g_compactSizes.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE) };
+		list->ResourceBarrier(2, toCopy);
+		list->CopyBufferRegion(g_compactReadback.Get(), 0, g_compactSizes.Get(), 0, bytes);
+		D3D12_RESOURCE_BARRIER back = Transition(g_compactSizes.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		list->ResourceBarrier(1, &back);
+		if (!g_gpu.SubmitAndWait()) {
+			return -12;
+		}
+		// the list ran: the data chunks it wrote are readable now
+		for (int c : written) {
+			g_dataPool.chunks[c].state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+		}
+		written.clear();
+		g_gpu.Begin("scene compact");
+		list = g_gpu.list.Get();
+		void* mapped = nullptr;
+		D3D12_RANGE readRange = { 0, static_cast<SIZE_T>(bytes) };
+		if (SUCCEEDED(g_compactReadback->Map(0, &readRange, &mapped)) && mapped != nullptr) {
+			const UINT64* sizes = static_cast<const UINT64*>(mapped);
+			bool copied = false;
+			for (size_t k = 0; k < compactIds.size(); ++k) {
+				auto& g = g_geometries[compactIds[k]];
+				UINT64 size = sizes[k];
+				// only when it saves something (and the size makes sense)
+				if (size == 0 || BufferPool::Align(size) >= g.blas.bytes) {
+					continue;
+				}
+				PoolSpan small = g_blasPool.Allocate(size);
+				if (!small) {
+					continue;  // no room: the BLAS stays as built
+				}
+				list->CopyRaytracingAccelerationStructure(small.Address(), g.blas.Address(),
+				                                          D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT);
+				uncompacted.push_back(g.blas);
+				g.blas = small;
+				copied = true;
+			}
+			D3D12_RANGE none = { 0, 0 };
+			g_compactReadback->Unmap(0, &none);
+			if (copied) {
+				D3D12_RESOURCE_BARRIER all = UavBarrier(nullptr);  // every copy done before the TLAS build reads them
+				list->ResourceBarrier(1, &all);
+			}
+		}
+		blasBytes = 0;
+		for (const auto& g : g_geometries) {
+			blasBytes += !g.released && g.blas ? g.blas.bytes : 0;
+		}
 	}
 
 	// TLAS over the instances, with each instance's BLAS address
@@ -1621,6 +1790,14 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 	if (!g_gpu.SubmitAndWait()) {
 		return -7;
 	}
+	// the list ran: the data chunks it wrote are readable now (until then their state stays what the GPU has)
+	for (int c : written) {
+		g_dataPool.chunks[c].state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+	}
+	// the BLAS as built, before compaction: copied, and in no TLAS any frame traces
+	for (auto& span : uncompacted) {
+		g_blasPool.Free(span);
+	}
 	// built: Unity's buffers are no longer needed; the engine's own copies stay for the trace shaders
 	int alphaInstances = 0;
 	for (auto& g : g_geometries) {
@@ -1632,16 +1809,16 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 			continue;
 		}
 		if (g.indexDescriptor == ~0u && g.ownIndices) {
-			g.indexDescriptor = RawBufferDescriptor(g.ownIndices.Get());
+			g.indexDescriptor = RawBufferDescriptor(g.ownIndices);
 		}
 		if (g.positionDescriptor == ~0u && g.ownPositions) {
-			g.positionDescriptor = RawBufferDescriptor(g.ownPositions.Get());
+			g.positionDescriptor = RawBufferDescriptor(g.ownPositions);
 		}
 		if (g.uvDescriptor == ~0u && g.ownUvs) {
-			g.uvDescriptor = RawBufferDescriptor(g.ownUvs.Get());
+			g.uvDescriptor = RawBufferDescriptor(g.ownUvs);
 		}
 		if (g.normalDescriptor == ~0u && g.ownNormals) {
-			g.normalDescriptor = RawBufferDescriptor(g.ownNormals.Get());
+			g.normalDescriptor = RawBufferDescriptor(g.ownNormals);
 		}
 	}
 
@@ -1690,6 +1867,10 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 	// (the records written below were made from the live geometries and materials only)
 	for (auto& g : g_retiredGeometries) {
 		g_blasPool.Free(g.blas);
+		g_dataPool.Free(g.ownIndices.pooled);
+		g_dataPool.Free(g.ownPositions.pooled);
+		g_dataPool.Free(g.ownNormals.pooled);
+		g_dataPool.Free(g.ownUvs.pooled);
 		FreeDescriptor(g.indexDescriptor);
 		FreeDescriptor(g.positionDescriptor);
 		FreeDescriptor(g.uvDescriptor);
@@ -1729,8 +1910,9 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 	         g_geometries.size(), built, instances.size(), alphaInstances, triangles / 1e6, blasBytes / (1024.0 * 1024.0),
 	         tlasInfo.ResultDataMaxSizeInBytes / (1024.0 * 1024.0), NowMs() - start);
 	g_sceneStats = stats;
-	snprintf(stats, sizeof(stats), ", BLAS pool %.1f of %.1f MB in %d chunks", g_blasPool.Used() / (1024.0 * 1024.0),
-	         g_blasPool.Reserved() / (1024.0 * 1024.0), g_blasPool.Chunks());
+	snprintf(stats, sizeof(stats), ", BLAS pool %.1f of %.1f MB in %d chunks, data pool %.1f of %.1f MB in %d chunks",
+	         g_blasPool.Used() / (1024.0 * 1024.0), g_blasPool.Reserved() / (1024.0 * 1024.0), g_blasPool.Chunks(),
+	         g_dataPool.Used() / (1024.0 * 1024.0), g_dataPool.Reserved() / (1024.0 * 1024.0), g_dataPool.Chunks());
 	g_sceneStats += stats;
 	if (g_descriptorsRefused > 0) {
 		snprintf(stats, sizeof(stats), ", DESCRIPTOR HEAP FULL (%u refused, %u of %u used)", g_descriptorsRefused, g_heapNext - static_cast<UINT>(g_heapFree.size()), kHeapSize);

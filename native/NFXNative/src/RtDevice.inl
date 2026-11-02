@@ -545,12 +545,12 @@ int MirrorScene() {
 	g_gpu.Begin();
 	auto* list = g_gpu.list.Get();
 	ID3D12DescriptorHeap* heaps[] = { g_heap.Get() };
-	auto copy = [&](ID3D12Resource* source, UINT64 bytes, int chunk, UINT64 offset) {
+	auto copy = [&](D3D12_GPU_VIRTUAL_ADDRESS source, UINT64 bytes, int chunk, UINT64 offset) {
 		UINT words = static_cast<UINT>(bytes / 4);
 		UINT constants[4] = { words, 0, 0, 0 };
 		list->SetComputeRootSignature(g_copyRaw.root.Get());
 		list->SetPipelineState(g_copyRaw.pso.Get());
-		list->SetComputeRootShaderResourceView(0, source->GetGPUVirtualAddress());
+		list->SetComputeRootShaderResourceView(0, source);
 		list->SetComputeRootUnorderedAccessView(1, g_rtChunks[chunk].unity->GetGPUVirtualAddress() + offset);
 		list->SetComputeRoot32BitConstants(2, 4, constants, 0);
 		list->Dispatch((words + 255) / 256, 1, 1);
@@ -574,10 +574,10 @@ int MirrorScene() {
 		r.indexOffset = base;
 		r.positionOffset = r.indexOffset + ((indexBytes + 255) & ~255ull);
 		r.uvOffset = r.positionOffset + ((positionBytes + 255) & ~255ull);
-		copy(g.ownIndices.Get(), indexBytes, r.chunk, r.indexOffset);
-		copy(g.ownPositions.Get(), positionBytes, r.chunk, r.positionOffset);
+		copy(g.ownIndices.Address(), indexBytes, r.chunk, r.indexOffset);
+		copy(g.ownPositions.Address(), positionBytes, r.chunk, r.positionOffset);
 		if (uvBytes > 0) {
-			copy(g.ownUvs.Get(), uvBytes, r.chunk, r.uvOffset);
+			copy(g.ownUvs.Address(), uvBytes, r.chunk, r.uvOffset);
 		}
 		++newGeometries;
 	}
