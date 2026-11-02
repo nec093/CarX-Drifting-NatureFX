@@ -138,6 +138,7 @@ Shader "Hidden/NatureFX/RTShadow"
     StructuredBuffer<float4> _NFX_AmbientProbe; // the sky's diffuse probe (7 float4, the SH9 constants): HDRP's, or the
                                                 // own engine's once it replaces HDRP's sky light (OwnLighting)
     float _NFX_OwnAmbient;                      // 1: HDRP's sky light is off; the composite adds the own sky's light
+    float _NFX_OwnBrdf;                         // 1: no G-buffer; what the trace does not know HDRP lit itself (OwnLighting.UntracedLit)
     float _NFX_OwnSun;                          // 1: HDRP's sun lights nothing; the composite adds the sun's light
     float _NFX_OwnSkyStrength;                  // the own sky's light on surfaces (Settings.SkyLightStrength)
     float4 _NFX_LeafParams;           // x: share of the sun leaves let through, y: 1 = light shafts, z: 1 = local light shadows,
@@ -534,6 +535,11 @@ Shader "Hidden/NatureFX/RTShadow"
         float4 surface = LOAD_TEXTURE2D_X(_NFX_SurfaceAlbedo, pixel);
         float surfaceW = LOAD_TEXTURE2D_X(_NFX_SurfaceNormal, pixel).w;
         bool known = surfaceW != 0.0;
+        // the own BSDF (no G-buffer): what the own engine does not trace (the distant forest's cards, grass) is on
+        // HDRP's lit layer (OwnLighting.UntracedLit) and holds HDRP's sun, lamps and sky light; with HDRP's sky light
+        // off everything else is black but its glow. Such a pixel keeps HDRP's light (the sun's share shadowed by the
+        // estimate) instead of the own light on a grey guess of its colour
+        bool hdrpLit = _NFX_OwnBrdf > 0.5 && _NFX_OwnAmbient > 0.5 && !known && Luminance(hdrpColor) > 1e-4;
         if (_NFX_LeafParams.z > 0.5 && !debug)
         {
             float3 localDiffuse = (known ? surface.rgb : 0.3) * (1.0 - (known ? saturate((surface.a - (surface.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0)) * INV_PI;
@@ -583,7 +589,7 @@ Shader "Hidden/NatureFX/RTShadow"
                     float lampMetal = known ? saturate((surface.a - (surface.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0;
                     lampsLitHere = OwnLampsLight(GetAbsolutePositionWS(lq.positionWS), ln.normalWS, (known ? surface.rgb : 0.3) * (1.0 - lampMetal));
                 }
-                color = color + lampsLitHere + nativeAdded;
+                color = color + (hdrpLit ? (float3)0.0 : lampsLitHere) + nativeAdded;
                 removed = 0.0;
             }
             float removedLum = Luminance(removed);
@@ -652,7 +658,7 @@ Shader "Hidden/NatureFX/RTShadow"
         // share (ambientFactor), is added in each of the ways below instead of darkening HDRP's
         bool ownAmbient = _NFX_OwnAmbient > 0.5;
         float3 ownSky = 0.0;
-        if (ownAmbient)
+        if (ownAmbient && !hdrpLit)
         {
             float ownMetal = known ? saturate((surface.a - (surface.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0;
             float3 ownAlbedo = (known ? surface.rgb : 0.3) * (1.0 - ownMetal);
@@ -735,7 +741,7 @@ Shader "Hidden/NatureFX/RTShadow"
         }
         // OwnLighting.Sun: HDRP's pixel holds no sun light; the exact one (or the own BSDF where the G-buffer has no
         // pixel) is added under the traced shadow instead of taking the shadowed share away
-        bool ownSun = _NFX_OwnSun > 0.5;
+        bool ownSun = _NFX_OwnSun > 0.5 && !hdrpLit;
         float3 ownSunLight = 0.0;
         if (ownSun && _NFX_RTSunDir.w > 0.0)
         {

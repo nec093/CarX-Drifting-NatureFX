@@ -187,6 +187,7 @@ namespace NatureFX.Nature {
 						continue;
 					}
 					var rp = new RenderParams(sub < 3 ? conifer_ : broadleaf_) { shadowCastingMode = shadows, receiveShadows = true, worldBounds = c.Mesh.bounds };
+					rp.renderingLayerMask |= NatureFX.Rendering.OwnLighting.UntracedBit; // not traced: HDRP lights it under the own BSDF
 					Graphics.RenderMesh(rp, c.Mesh, sub, Matrix4x4.identity);
 				}
 			}

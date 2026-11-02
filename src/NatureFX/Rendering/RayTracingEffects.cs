@@ -69,6 +69,12 @@ namespace NatureFX.Rendering {
 			glassVolume.isGlobal = true;
 			glassVolume.injectionPoint = CustomPassInjectionPoint.BeforePostProcess;
 
+			// before HDRP draws anything: the own sky's probe as HDRP's (OwnLighting: the renderers HDRP still lights)
+			var earlyVolume = root_.AddComponent<CustomPassVolume>();
+			earlyVolume.isGlobal = true;
+			earlyVolume.injectionPoint = CustomPassInjectionPoint.BeforeRendering;
+			earlyVolume.customPasses.Add(new AmbientFeedPass { name = "NatureFX sky probe for HDRP" });
+
 			if (TryCreateDxr(bundle, volume, glassVolume)) {
 				Kino.Log.Info($"[NatureFX] DX12 ray tracing through the own engine ({NativeEngine.Info})");
 			} else {

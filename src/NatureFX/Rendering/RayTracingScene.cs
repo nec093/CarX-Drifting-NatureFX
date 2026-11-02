@@ -139,6 +139,7 @@ namespace NatureFX.Rendering {
 			glass_ = 0;
 			OwnGlass.Slots.Clear();
 			LeftOut.Clear();
+			OwnLighting.Untraced.Clear();
 			int trees = Sync();
 			int failed = failed_;
 			Kino.Log.Info($"[NatureFX] Ray tracing scene: {InstanceCount} instances, {proxies_.Count} materials, {moving_.Count} moving, {lowerLodCount_} lower LOD renderers skipped, " +
@@ -238,6 +239,7 @@ namespace NatureFX.Rendering {
 				bool moving = !batched && r.GetComponentInParent<Rigidbody>() != null;
 				// tiny static props (bolts, signs' screws, pebbles) cost an instance each and barely show in a ray
 				if (!moving && r.bounds.size.magnitude < MinStaticSize) {
+					OwnLighting.Untraced.Add(r);
 					++skipped_;
 					handles_[r] = new List<int>();
 					continue;
@@ -525,6 +527,7 @@ namespace NatureFX.Rendering {
 
 		private List<int> AddRenderer(Renderer r, Mesh mesh, int firstSubMesh, Matrix4x4 matrix, bool moving, bool unscaled, Renderer owner) {
 			var handles = new List<int>();
+			bool traced = false, untraced = false;
 			// the glass the own engine draws is hidden from HDRP (OwnGlass): the scene reads what was there
 			var materials = OwnGlass.Originals(r) ?? r.sharedMaterials;
 			if (moving) {
@@ -571,8 +574,10 @@ namespace NatureFX.Rendering {
 				// instances and any hit work in a ray, for surfaces that show in a reflection as a blur at most
 				if (alphaTest && !moving && r.shadowCastingMode == ShadowCastingMode.Off) {
 					++skipped_;
+					untraced = true;
 					continue;
 				}
+				traced = true;
 				var overrides = owner != null ? InstanceOverrides(r, i, source, moving) : null;
 				try {
 					int handle = nextOwnHandle_++;
@@ -593,6 +598,10 @@ namespace NatureFX.Rendering {
 				} catch (Exception) {
 					++failed_;
 				}
+			}
+			// drawn by HDRP but not in the scene: the own BSDF has no colour for it (OwnLighting.UntracedLit)
+			if (untraced && !traced) {
+				OwnLighting.Untraced.Add(r);
 			}
 			return handles;
 		}

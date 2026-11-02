@@ -56,6 +56,15 @@ namespace NatureFX.Rendering {
 		private static float nextRendererScan_;
 		private static readonly System.Collections.Generic.List<Material> materials_ = new();
 		public static int TransparentRenderers { get; private set; }
+		// 7. With the own BSDF (no G-buffer: RTShadowPass.OwnBrdf) what the own engine does not trace has no colour
+		//    for it: such renderers (RayTracingScene marks them) and NatureFX's own cards (the distant forest, grass,
+		//    debris: DrawnMask) go on the same layer, so HDRP lights them, and the composite keeps HDRP's light there
+		public static readonly System.Collections.Generic.HashSet<Renderer> Untraced = new();
+		public static bool UntracedLit { get; private set; }
+		private static int ownBrdfFrame_ = -1000;
+		public static void OwnBrdfComposed() => ownBrdfFrame_ = Time.frameCount;
+		// the rendering layer to add to what NatureFX draws itself that the own engine does not trace
+		public static uint UntracedBit => UntracedLit ? (uint)TransparentLayer : 0u;
 		private static readonly System.Collections.Generic.Dictionary<Light, (uint Mask, object HdMask)> layered_ = new();
 		private static System.Reflection.PropertyInfo hdLayers_;
 		private static bool hdLayersLooked_;
@@ -195,7 +204,7 @@ namespace NatureFX.Rendering {
 					continue;
 				}
 				uint mask = r.renderingLayerMask;
-				uint want = SeeThrough(r) ? mask | TransparentLayer : mask & ~(uint)TransparentLayer;
+				uint want = SeeThrough(r) || UntracedLit && Untraced.Contains(r) ? mask | TransparentLayer : mask & ~(uint)TransparentLayer;
 				if (want != mask) {
 					rendererMasks_[r] = mask;
 					r.renderingLayerMask = want;
@@ -272,9 +281,18 @@ namespace NatureFX.Rendering {
 			Lamps = wantedLamps_ && LayersSupported && now - lampsFrame_ <= Grace;
 			UpdateLamps();
 			bool transparents = TransparentsWanted && LayersSupported && (Sun || Lamps || wanted_);
-			if (transparents != Transparents) {
+			bool untracedLit = transparents && now - ownBrdfFrame_ <= Grace;
+			if (transparents != Transparents || untracedLit != UntracedLit) {
 				Transparents = transparents;
+				UntracedLit = untracedLit;
 				Relayer();
+				// the renderers looked at again from the game's own masks
+				foreach (var kv in rendererMasks_) {
+					if (kv.Key != null) {
+						kv.Key.renderingLayerMask = kv.Value;
+					}
+				}
+				rendererMasks_.Clear();
 				pending_ = null;
 				nextRendererScan_ = 0.0f;
 			}
@@ -295,6 +313,24 @@ namespace NatureFX.Rendering {
 			  $"reflections {(Reflections ? "from the own engine" : "HDRP's (reflections composite not running)")}, " +
 			  $"HDRP's sky {(Sky ? "off" : "on")}, sun light {(Sun ? "from the own engine" : !LayersSupported && wantedSun_ ? "HDRP's (HDRP's light layers are off)" : SunUnavailable ? "HDRP's (HDRP drops a sun that lights nothing)" : wantedSun_ ? "HDRP's (exact sun pass not running)" : "HDRP's")}, " +
 			  $"lamps {(Lamps ? $"from the own engine ({lampsOff_.Count} of HDRP's off)" : wantedLamps_ ? "HDRP's (lamp masks not running)" : "HDRP's")}, " +
-			  $"see-through surfaces {(Transparents ? $"lit by HDRP ({TransparentRenderers} renderers on layer 7)" : TransparentsWanted ? "unlit" : "off")}";
+			  $"see-through surfaces {(Transparents ? $"lit by HDRP ({TransparentRenderers} renderers on layer 7{(UntracedLit ? $", {Untraced.Count} untraced ones with them" : "")})" : TransparentsWanted ? "unlit" : "off")}";
+	}
+
+	// Before HDRP draws anything: the own sky's probe bound as HDRP's ambient probe (HDRP's is black with its sky off),
+	// so what HDRP still lights on the see-through layer (OwnLighting 6 and 7: see-through surfaces, what the own
+	// engine does not trace under the own BSDF) gets the sky's light in its G-buffer or forward pass. The rest is
+	// unaffected: HDRP's indirect multiplier is 0 outside that layer (VolumeOverhaul).
+	public class AmbientFeedPass : UnityEngine.Rendering.HighDefinition.CustomPass {
+		private static readonly int AmbientProbeId = Shader.PropertyToID("_AmbientProbeData");
+
+		protected override void Execute(UnityEngine.Rendering.HighDefinition.CustomPassContext ctx) {
+			if (!OwnLighting.Transparents || !OwnLighting.Ambient || NativeEngine.SkyProbe == null) {
+				return;
+			}
+			if (ctx.hdCamera.camera.cameraType != CameraType.Game) {
+				return;
+			}
+			ctx.cmd.SetGlobalBuffer(AmbientProbeId, NativeEngine.SkyProbe);
+		}
 	}
 }

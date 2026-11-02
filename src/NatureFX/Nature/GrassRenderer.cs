@@ -264,6 +264,7 @@ namespace NatureFX.Nature {
 						continue;
 					}
 					var rp = new RenderParams(material) { shadowCastingMode = shadows, receiveShadows = true, worldBounds = c.Mesh.bounds };
+					rp.renderingLayerMask |= NatureFX.Rendering.OwnLighting.UntracedBit; // not traced: HDRP lights it under the own BSDF
 					Graphics.RenderMesh(rp, c.Mesh, subMesh, Matrix4x4.identity);
 				}
 			}

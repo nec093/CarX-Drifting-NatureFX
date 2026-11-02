@@ -34,6 +34,7 @@ namespace NatureFX.Rendering {
 		private static readonly int TraceJitter = Shader.PropertyToID("_NFX_TraceJitter");
 		private static readonly int AmbientProbeId = Shader.PropertyToID("_NFX_AmbientProbe");
 		private static readonly int HdrpAmbientProbeId = Shader.PropertyToID("_AmbientProbeData");
+		private static readonly int OwnBrdfId = Shader.PropertyToID("_NFX_OwnBrdf");
 		private static readonly int RTSunDir = Shader.PropertyToID("_NFX_RTSunDir");
 		private static readonly int RTSunColor = Shader.PropertyToID("_NFX_RTSunColor");
 		private static readonly int LeafParams = Shader.PropertyToID("_NFX_LeafParams");
@@ -725,6 +726,10 @@ namespace NatureFX.Rendering {
 			}
 			// OwnLighting.Lamps: HDRP's lamps are off; with the lamp masks' exact light (lit share added)
 			props_.SetFloat(OwnLampsId, OwnLighting.Lamps && maskUsed_ ? 1.0f : 0.0f);
+			props_.SetFloat(OwnBrdfId, ownBrdf_ && OwnLighting.UntracedLit ? 1.0f : 0.0f);
+			if (ownBrdf_) {
+				OwnLighting.OwnBrdfComposed();
+			}
 			if (maskUsed_) {
 				OwnLighting.LampsComposed();
 			}

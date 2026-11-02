@@ -171,6 +171,7 @@ namespace NatureFX.Map {
 					motionVectorMode = MotionVectorGenerationMode.Camera,
 					worldBounds = new Bounds(anchor_, Vector3.one * 400.0f),
 				};
+				rp.renderingLayerMask |= NatureFX.Rendering.OwnLighting.UntracedBit; // not traced: HDRP lights it under the own BSDF
 				for (int start = 0; start < list.Count; start += 1023) {
 					Graphics.RenderMeshInstanced(rp, shapes_[k], 0, list, Mathf.Min(1023, list.Count - start), start);
 				}
