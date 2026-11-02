@@ -570,6 +570,13 @@ namespace NatureFX.Rendering {
 					handles.Add(handle);
 					AddNative(handle, mesh, subMesh, matrix, alphaTest, owner == null ? "tree" : unscaled ? "skinned" : moving ? "car" : "static",
 						moving ? r.transform : null, unscaled, proxy, overrides);
+					// drawn only into the shadow maps (or not at all): it casts its shadow, but it is no ground to lay
+					// anything on (debris floated on such hidden shadow casters along a garage's walls)
+					if (r.shadowCastingMode == ShadowCastingMode.ShadowsOnly || r.forceRenderingOff) {
+						var hidden = nativeInstances_[handle];
+						hidden.NotDrawn = true;
+						nativeInstances_[handle] = hidden;
+					}
 					++InstanceCount;
 					if (moving) {
 						moving_.Add((handle, r.transform, unscaled));

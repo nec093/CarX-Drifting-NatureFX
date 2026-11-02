@@ -832,6 +832,16 @@ namespace NatureFX.Tools {
 			world.Try("ground map", () => GroundMap.Status);
 			world.Try("painted dirt", () => mod.Paint.Status);
 			world.Try("debris", () => mod.Debris.Status);
+			world.Try("ground (what debris lies on)", () => $"{NativeEngine.GroundCount} instances");
+			try {
+				var grounds = new List<(string Name, float Size)>(NativeEngine.GroundInstances);
+				grounds.Sort((a, b) => b.Size.CompareTo(a.Size));
+				for (int i = 0; i < grounds.Count && i < 10; ++i) {
+					world.Add("ground", $"{grounds[i].Name}, {grounds[i].Size:0} m", -1.0, true);
+				}
+			} catch (Exception) {
+				// the scene changing under it: next time
+			}
 			world.Try("decals, water", () => $"decals {mod.Decals.Count}, puddles {mod.Water.PuddleCount} (water {mod.Water.Level:P0}), water surfaces {mod.Water.SurfaceCount}");
 
 			// the "rest": the game's textures and meshes, HDRP's features

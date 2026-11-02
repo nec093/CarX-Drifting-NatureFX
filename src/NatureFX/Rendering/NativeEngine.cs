@@ -144,7 +144,12 @@ namespace NatureFX.Rendering {
 			public bool Wind;          // NatureFX/Foliage: swayed by the wind as it is drawn (Wind.inl)
 			public Transform Follow;   // moving instances: their transform now
 			public bool Unscaled;      // baked skinned meshes: position and rotation only
+			public bool NotDrawn;      // the renderer only casts shadows (or is not drawn): never the ground
 		}
+
+		// the debug page: what the ground map stands on (the largest ground instances of the last upload)
+		public static readonly List<(string Name, float Size)> GroundInstances = new();
+		public static int GroundCount { get; private set; }
 
 		public static bool Ready { get; private set; }
 
@@ -1300,7 +1305,7 @@ namespace NatureFX.Rendering {
 		private static bool Ground(Instance instance) {
 			// leaves and grass cards are never the ground, however wide a combined mesh of them is (a map's combined
 			// grass cards, flat and many metres across, would put the ground at their tips)
-			if (instance.Glass || instance.Follow != null || instance.Mesh == null || instance.AlphaTest || instance.Wind) {
+			if (instance.Glass || instance.Follow != null || instance.Mesh == null || instance.AlphaTest || instance.Wind || instance.NotDrawn) {
 				return false;
 			}
 			if (instance.Kind == "terrain") {
@@ -1658,6 +1663,8 @@ namespace NatureFX.Rendering {
 				var flags = new int[instances.Count];
 				var materials = new int[instances.Count];
 				uploaded_.Clear();
+				GroundInstances.Clear();
+				GroundCount = 0;
 				int n = 0, rejected = 0;
 				foreach (var source in instances) {
 					var instance = source;
@@ -1678,6 +1685,11 @@ namespace NatureFX.Rendering {
 					transforms[o + 8] = m.m20; transforms[o + 9] = m.m21; transforms[o + 10] = m.m22; transforms[o + 11] = m.m23;
 					ids[n] = id;
 					bool ground = Ground(instance);
+					if (ground) {
+						++GroundCount;
+						var gb = instance.Mesh.bounds;
+						GroundInstances.Add(($"{instance.Mesh.name} / {(instance.Material != null ? instance.Material.name : "-")} ({instance.Kind}{(Road(instance) ? ", road" : "")})", gb.size.magnitude));
+					}
 					flags[n] = (instance.AlphaTest ? 1 : 0) | (instance.Glass ? 2 : 0) | (instance.Wind ? 4 : 0) | (instance.Follow != null ? 8 : 0)
 					           | (ground ? 16 : 0) | (ground && Road(instance) ? 32 : 0);
 					materials[n] = MaterialId(instance.Material, instance.Color, instance.Finish);
