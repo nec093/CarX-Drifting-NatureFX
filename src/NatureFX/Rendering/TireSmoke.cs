@@ -513,7 +513,8 @@ namespace NatureFX.Rendering {
 			renderer.sortMode = ParticleSystemSortMode.Distance;
 			renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
 			renderer.receiveShadows = false;
-			renderer.maxParticleSize = 4.0f;
+			renderer.maxParticleSize = MaxScreenSize;
+			smokeRenderer_ = renderer;
 			renderer.SetActiveVertexStreams(new List<ParticleSystemVertexStream> {
 				ParticleSystemVertexStream.Position, ParticleSystemVertexStream.Normal, ParticleSystemVertexStream.Color,
 				ParticleSystemVertexStream.UV, ParticleSystemVertexStream.StableRandomX, ParticleSystemVertexStream.Custom1XY
@@ -598,7 +599,15 @@ namespace NatureFX.Rendering {
 			pool_.Clear();
 		}
 
+		// The largest a puff may be drawn, as a share of the screen (Developer > Tyre smoke). At 4 (four screens) a puff
+		// beside the camera filled the screen, 20 to 50 of them over each other: the worst of the smoke's GPU cost.
+		public static float MaxScreenSize = 0.8f;
+		private ParticleSystemRenderer smokeRenderer_;
+
 		public void Update(bool on, float amount) {
+			if (smokeRenderer_ != null && smokeRenderer_.maxParticleSize != MaxScreenSize) {
+				smokeRenderer_.maxParticleSize = MaxScreenSize;
+			}
 			if (root_ == null) {
 				return;
 			}

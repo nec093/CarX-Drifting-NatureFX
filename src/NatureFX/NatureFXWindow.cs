@@ -1103,6 +1103,10 @@ namespace NatureFX {
 				"lamp (not only the sun and the sky), so a headlight's bounce shows at night. Off: the old reference, to compare. Not saved.");
 			Widgets.Switch("Lamps in the GI's reference", LocalLights.UseLampReference, v => LocalLights.UseLampReference = v);
 			Widgets.EndCard();
+			Widgets.BeginCard("Tyre smoke", "The largest a puff of tyre smoke may be drawn, as a share of the screen (was 4). Smaller is " +
+				"cheaper for the GPU close to the smoke; too small and the smoke around the camera looks cut. Not saved.");
+			Widgets.Slider("Largest puff on screen", TireSmoke.MaxScreenSize, 0.2f, 4.0f, v => TireSmoke.MaxScreenSize = v, "0.0", "x");
+			Widgets.EndCard();
 			Widgets.BeginCard("3D fog lamps", "The 3D fog's lamps and headlights from lists per tile of its grid (only the lights that " +
 				"reach into it) instead of every light at every cell. The same picture: off only to compare the time " +
 				"(Ray tracing timings: fog volume). Not saved.");
