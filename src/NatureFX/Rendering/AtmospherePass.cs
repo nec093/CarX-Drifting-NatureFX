@@ -73,13 +73,26 @@ namespace NatureFX.Rendering {
 		// HDRP's own ambient probe (what it made of its sky) against the engine's, straight up: whether HDRP lights
 		// with the cube at all
 		public static string ProbeStatus { get; private set; } = "not read yet";
-		private static float nextProbeRead_;
+		private static float nextProbeRead_, nextStatusRead_;
 
 		private static void ReadProbes(GraphicsBuffer hdrp) {
 			if (hdrp == null || NativeEngine.SkyProbe == null || Time.unscaledTime < nextProbeRead_) {
 				return;
 			}
-			nextProbeRead_ = Time.unscaledTime + 2.0f;
+			// often: the sky's hand-over (SunController.SkyMeasured) matches the sky's brightness by these readings
+			nextProbeRead_ = Time.unscaledTime + 0.1f;
+			int generation = SunController.SkyGeneration;
+			float rawAbove = SunController.SkyLightAboveRaw, scale = SunController.SkyScale;
+			UnityEngine.Rendering.AsyncGPUReadback.Request(NativeEngine.SkyProbe, s => {
+				if (!s.hasError) {
+					var up = Up(s.GetData<Vector4>());
+					SunController.SkyMeasured(generation, 0.2126f * up.x + 0.7152f * up.y + 0.0722f * up.z, rawAbove, scale);
+				}
+			});
+			if (Time.unscaledTime < nextStatusRead_) {
+				return;
+			}
+			nextStatusRead_ = Time.unscaledTime + 2.0f;
 			UnityEngine.Rendering.AsyncGPUReadback.Request(hdrp, a => {
 				if (a.hasError) {
 					return;
@@ -267,7 +280,12 @@ namespace NatureFX.Rendering {
 			}
 			var cloudSize = new Vector4(cw, ch, 1.0f / cw, 1.0f / ch);
 			// the engine's sky light: by day, and at night lit by the moon; without the moon HDRP's night sky light stays
-			float day = SunController.SkyLightIsMoon ? 1.0f : Mathf.SmoothStep(0.0f, 1.0f, Mathf.InverseLerp(-0.1f, 0.0f, SunController.RealSunY));
+			// the sky's light by the sun goes with the twilight itself (the sky tables dim it as the sun sinks); only past
+			// the astronomical twilight (-12 to -18°, a sky lit by no light at all: moonlight off) it fades out. It faded
+			// between -5.7° and 0° before: with the sky by the sun down to -7.5° (SunController), the sky's ambient light
+			// was gone from -5.7° until the moon took over, then came back at once.
+			float day = SunController.SkyLightIsMoon ? 1.0f
+				: Mathf.SmoothStep(0.0f, 1.0f, Mathf.InverseLerp(Mathf.Sin(-18.0f * Mathf.Deg2Rad), Mathf.Sin(-12.0f * Mathf.Deg2Rad), SunController.RealSunY));
 			if (FeedHdrp && SkyCube == null) {
 				SkyCube = new RenderTexture(NativeEngine.SkyCubeSize, NativeEngine.SkyCubeSize, 0, GraphicsFormat.R16G16B16A16_SFloat) {
 					dimension = TextureDimension.Cube, useMipMap = false, name = "NFX_SkyCube", hideFlags = HideFlags.DontSave

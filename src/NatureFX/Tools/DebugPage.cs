@@ -762,6 +762,16 @@ namespace NatureFX.Tools {
 				foreach (var (label, value) in stats.Scene) {
 					scene.Add(label.Length > 0 ? label : "", value);
 				}
+				try {
+					var left = new List<KeyValuePair<string, int>>(RayTracingScene.LeftOut);
+					left.Sort((a, b) => b.Value.CompareTo(a.Value));
+					scene.Add("see-through, rays pass (not glass)", $"{left.Count} materials");
+					for (int i = 0; i < left.Count && i < 15; ++i) {
+						scene.Add("passed", $"{left[i].Key}: {left[i].Value}", -1.0, true);
+					}
+				} catch (Exception) {
+					// rebuilt under it: next time
+				}
 				foreach (var (name, on) in stats.Features) {
 					features.Add(name, on ? "on" : "off", -1.0, false, 0);
 				}

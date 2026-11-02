@@ -177,12 +177,62 @@ namespace NatureFX.Rendering {
 			SkyLightDir = dir;
 			SkyLightGround = new Vector3(c.r, c.g, c.b);
 			SkyLightRadius = 0.0047f; // the sun's and the moon's are nearly the same (0.53 degrees across)
+			float above;
 			if (moon) {
 				var t = AtmosphereTransmittance(height, Mathf.Asin(Mathf.Clamp(dir.y, -1.0f, 1.0f)) * Mathf.Rad2Deg, aerosols);
 				float lum = Mathf.Max(0.2126f * t.x + 0.7152f * t.y + 0.0722f * t.z, 0.02f);
-				SkyLightAbove = (0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b) / lum;
+				above = (0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b) / lum;
 			} else {
-				SkyLightAbove = TopOfAtmosphereLux;
+				above = TopOfAtmosphereLux;
+			}
+			HandOver(moon, above);
+			SkyLightAboveRaw = above;
+			SkyLightAbove = above * SkyScale;
+		}
+
+		// ---- the sky's hand-over between the sun's twilight and the moon
+		// One light makes the own engine's sky (and the ambient light it gives). At the hand-over the sky would jump to
+		// whatever the new light makes of it; instead the new light's strength is first scaled so the sky stays as bright
+		// as it was (the engine's sky probe, straight up, read back: AtmospherePass.ReadProbes), and the scale then eases
+		// back to 1 over some seconds: the change is spread out instead of a step.
+		public static float SkyLightAboveRaw { get; private set; }
+		public static float SkyScale { get; private set; } = 1.0f;
+		public static int SkyGeneration { get; private set; }   // a new one at each hand-over: older readings are dropped
+		private const float SkyEaseSeconds = 4.0f;              // the scale's time constant (real seconds)
+		private static bool lastMoon_;
+		private static bool handOverPending_;                   // waiting for the first reading of the new light
+		private static float skyBefore_ = -1.0f;                // the old light's last reading (sky up, luminance)
+		private static float lastReading_ = -1.0f;
+		private static readonly float[] perUnit_ = { -1.0f, -1.0f }; // reading per unit of light: [sun, moon]
+
+		private static void HandOver(bool moon, float above) {
+			if (moon != lastMoon_) {
+				lastMoon_ = moon;
+				++SkyGeneration;
+				skyBefore_ = lastReading_;
+				handOverPending_ = skyBefore_ > 0.0f;
+				// a first guess from the last time this light was measured (no reading yet: as it is, for a frame or two)
+				float known = perUnit_[moon ? 1 : 0];
+				SkyScale = handOverPending_ && known > 0.0f && above > 0.0f ? Mathf.Clamp(skyBefore_ / (known * above), 1e-3f, 1e3f) : 1.0f;
+				return;
+			}
+			if (!handOverPending_ && SkyScale != 1.0f) {
+				float k = Mathf.Exp(-Time.unscaledDeltaTime / SkyEaseSeconds);
+				SkyScale = Mathf.Abs(Mathf.Log(SkyScale)) < 0.01f ? 1.0f : Mathf.Exp(Mathf.Log(SkyScale) * k);
+			}
+		}
+
+		// AtmospherePass: the engine's sky probe straight up (luminance), as made with the light state handed in at the request
+		public static void SkyMeasured(int generation, float reading, float rawAbove, float scale) {
+			if (generation != SkyGeneration || reading <= 0.0f || rawAbove <= 0.0f || scale <= 0.0f) {
+				return;
+			}
+			lastReading_ = reading;
+			float unit = reading / (rawAbove * scale);
+			perUnit_[lastMoon_ ? 1 : 0] = unit;
+			if (handOverPending_) {
+				handOverPending_ = false;
+				SkyScale = Mathf.Clamp(skyBefore_ / (unit * SkyLightAboveRaw), 1e-3f, 1e3f);
 			}
 		}
 

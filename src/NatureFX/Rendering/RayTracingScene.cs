@@ -138,6 +138,7 @@ namespace NatureFX.Rendering {
 			native_ = 0;
 			glass_ = 0;
 			OwnGlass.Slots.Clear();
+			LeftOut.Clear();
 			int trees = Sync();
 			int failed = failed_;
 			Kino.Log.Info($"[NatureFX] Ray tracing scene: {InstanceCount} instances, {proxies_.Count} materials, {moving_.Count} moving, {lowerLodCount_} lower LOD renderers skipped, " +
@@ -467,6 +468,9 @@ namespace NatureFX.Rendering {
 		// Surfaces that are not real geometry for rays: anything drawn transparent (render queue, or HDRP's
 		// surface type when the queue says opaque) and the cars' fake contact shadow (CarX "CarBlobshadow", a dark
 		// box under the car that showed as a black platform in reflections).
+		// see-through materials neither glass nor solid: the rays pass them (name (shader, queue) -> slots), last rebuild
+		public static readonly Dictionary<string, int> LeftOut = new();
+
 		private static bool Solid(Material m) {
 			if (m.renderQueue >= (int)RenderQueue.Transparent) {
 				return false;
@@ -539,7 +543,12 @@ namespace NatureFX.Rendering {
 				}
 				if (!Solid(source)) {
 					// glass, particles, decals, fake shadows do not block light; glass goes to the own engine to mirror
-					if (Glass(source)) {
+					if (!Glass(source)) {
+						// the debug page: what rays pass through (reflections see the sky where it was)
+						string key = $"{source.name} ({(source.shader != null ? source.shader.name : "-")}, queue {source.renderQueue})";
+						LeftOut.TryGetValue(key, out int seen);
+						LeftOut[key] = seen + 1;
+					} else {
 						int glassHandle = nextGlassHandle_--;
 						AddNative(glassHandle, mesh, subMesh, matrix, false, "glass", moving ? r.transform : null, unscaled, GetProxy(source),
 							owner != null ? InstanceOverrides(r, i, source, moving) : null);
