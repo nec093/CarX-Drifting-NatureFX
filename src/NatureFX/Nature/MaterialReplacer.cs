@@ -328,6 +328,45 @@ namespace NatureFX.Nature {
 				}
 			}
 			rows.Add(("renderers of switched materials with a property block", $"{blocks}, {blockTextures} colour textures set there"));
+			// every material the scene draws now, by shader: NatureFX shaders this replacer no longer tracks (switched by
+			// an earlier load, their snapshot lost) would show here as untracked
+			var byShader = new Dictionary<string, int>();
+			var counted = new HashSet<Material>();
+			int untracked = 0;
+			var untrackedRows = new List<string>();
+			foreach (var r in Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None)) {
+				if (r == null) {
+					continue;
+				}
+				foreach (var m in r.sharedMaterials) {
+					if (m == null || !counted.Add(m)) {
+						continue;
+					}
+					string sn = m.shader != null ? m.shader.name : "(none)";
+					byShader.TryGetValue(sn, out int c);
+					byShader[sn] = c + 1;
+					if (sn.StartsWith("NatureFX/", StringComparison.Ordinal) && !originals_.ContainsKey(m)) {
+						++untracked;
+						if (untrackedRows.Count < worst) {
+							var bt = m.HasProperty("_BaseColorMap") ? m.GetTexture("_BaseColorMap") : null;
+							string mip = bt is Texture2D b2 && b2.streamingMipmaps ? $", mip {b2.loadedMipmapLevel} loaded / {b2.desiredMipmapLevel} wanted" : "";
+							untrackedRows.Add($"{m.name} ({sn}) @ {ObjectPath(r.transform)}: colour {(bt != null ? $"{bt.name} {bt.width}x{bt.height}{mip}" : "none")}");
+						}
+					}
+				}
+			}
+			rows.Add(("materials drawn now", $"{counted.Count}; NatureFX shaders not tracked (switched earlier, no snapshot): {untracked}"));
+			foreach (string line in untrackedRows) {
+				rows.Add(("  untracked", line));
+			}
+			var shaders = new List<KeyValuePair<string, int>>(byShader);
+			shaders.Sort((a, b) => b.Value.CompareTo(a.Value));
+			for (int i = 0; i < shaders.Count && i < 15; ++i) {
+				rows.Add(("  shader", $"{shaders[i].Key}: {shaders[i].Value}"));
+			}
+			foreach (var kv in Deferred) {
+				rows.Add(("  left as it is", $"{kv.Value}: {kv.Key}"));
+			}
 			rows.Add(("colour map smaller than the game's largest texture", $"{smallerBase} materials"));
 			foreach (string line in smaller) {
 				rows.Add(("  picked", line));
