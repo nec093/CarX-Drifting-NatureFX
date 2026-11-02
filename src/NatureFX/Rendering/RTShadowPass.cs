@@ -397,6 +397,7 @@ namespace NatureFX.Rendering {
 			CoreUtils.SetRenderTarget(cmd, sunExact_, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, SunExactMaterial, props_, 0);
 			ExactFrame = Time.frameCount;
+			CheckOwnSun(cmd);
 			// DLSS Ray Reconstruction's albedos, from the same G-buffer
 			if (Dlaa.RayReconstruction) {
 				EnsureGuides();
@@ -752,6 +753,45 @@ namespace NatureFX.Rendering {
 			fogVolume_?.Release();
 			fogHistoryA_ = fogHistoryB_ = fogVolume_ = null;
 			skyView_ = skyTransmittance_ = clouds_ = cloudShadow_ = cloudHistoryA_ = cloudHistoryB_ = null;
+		}
+
+		// OwnLighting.Sun leaves HDRP's sun in place but lighting nothing; should HDRP drop such a light from its lists,
+		// the exact sun pass would find none and the sun would be gone. Every 2 s with the sun well up: the middle of the
+		// exact sun target read back; G-buffer pixels there and none of them with any sun on it twice in a row means
+		// exactly that, and the sun goes back to HDRP for this session (OwnLighting.SunUnavailable)
+		private float nextSunCheck_;
+		private int sunZero_;
+		private void CheckOwnSun(CommandBuffer cmd) {
+			if (!OwnLighting.Sun || SunDirection.w <= 0.0f || SunDirection.y < 0.15f || Time.unscaledTime < nextSunCheck_ || sunExact_ == null) {
+				return;
+			}
+			nextSunCheck_ = Time.unscaledTime + 2.0f;
+			int w = Mathf.Min(64, sunExact_.rt.width), h = Mathf.Min(64, sunExact_.rt.height);
+			int x = Mathf.Max(0, sunExact_.rt.width / 2 - w / 2), y = Mathf.Max(0, sunExact_.rt.height / 2 - h / 2);
+			cmd.RequestAsyncReadback(sunExact_.rt, 0, x, w, y, h, 0, 1, r => {
+				if (r.hasError) {
+					return;
+				}
+				var data = r.GetData<ushort>();
+				int known = 0, lit = 0;
+				for (int i = 0; i + 3 < data.Length; i += 4) {
+					if (Mathf.HalfToFloat(data[i + 3]) < 0.5f) {
+						continue;
+					}
+					++known;
+					if (Mathf.HalfToFloat(data[i]) + Mathf.HalfToFloat(data[i + 1]) + Mathf.HalfToFloat(data[i + 2]) > 1e-7f) {
+						++lit;
+					}
+				}
+				if (known < 200) {
+					return;
+				}
+				sunZero_ = lit == 0 ? sunZero_ + 1 : 0;
+				if (sunZero_ >= 2) {
+					OwnLighting.SunUnavailable = true;
+					KSL.API.Kino.Log.Warning("[NatureFX] Own sun light: HDRP gives the exact sun pass no sun while its own lighting of it is off; the sun stays HDRP's");
+				}
+			});
 		}
 	}
 }

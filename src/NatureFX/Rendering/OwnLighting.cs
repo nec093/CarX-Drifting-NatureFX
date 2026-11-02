@@ -26,6 +26,8 @@ namespace NatureFX.Rendering {
 		//    the shadowed share of HDRP's away (Settings.OwnSunLight)
 		public static bool Sun { get; private set; }
 		public static void SunComposed() => sunFrame_ = Time.frameCount;
+		// HDRP dropped the sun lighting nothing from its lists (RTShadowPass.CheckOwnSun): HDRP's own for this session
+		public static bool SunUnavailable;
 
 		// 5. HDRP's lamps (point and spot lights) light nothing: the lamp masks' pass works their light out from the
 		//    G-buffer at full strength and the shadow composite adds the lit share (Settings.OwnLampLight)
@@ -77,7 +79,7 @@ namespace NatureFX.Rendering {
 			wantedSun_ = wantedSun;
 			wantedLamps_ = wantedLamps;
 			int now = Time.frameCount;
-			Sun = wantedSun_ && now - sunFrame_ <= Grace;
+			Sun = wantedSun_ && !SunUnavailable && now - sunFrame_ <= Grace;
 			Lamps = wantedLamps_ && now - lampsFrame_ <= Grace;
 			UpdateLamps();
 			ShadowsRunning = now - shadowFrame_ <= Grace;
@@ -94,7 +96,7 @@ namespace NatureFX.Rendering {
 		public static string Status => !wanted_ ? "off (HDRP's own sky light and reflections)"
 			: $"HDRP's sky light {(Ambient ? "from the own engine" : "HDRP's (shadow composite not running)")}, " +
 			  $"reflections {(Reflections ? "from the own engine" : "HDRP's (reflections composite not running)")}, " +
-			  $"HDRP's sky {(Sky ? "off" : "on")}, sun light {(Sun ? "from the own engine" : wantedSun_ ? "HDRP's (exact sun pass not running)" : "HDRP's")}, " +
+			  $"HDRP's sky {(Sky ? "off" : "on")}, sun light {(Sun ? "from the own engine" : SunUnavailable ? "HDRP's (HDRP drops a sun that lights nothing)" : wantedSun_ ? "HDRP's (exact sun pass not running)" : "HDRP's")}, " +
 			  $"lamps {(Lamps ? $"from the own engine ({lampsOff_.Count} of HDRP's off)" : wantedLamps_ ? "HDRP's (lamp masks not running)" : "HDRP's")}";
 	}
 }
