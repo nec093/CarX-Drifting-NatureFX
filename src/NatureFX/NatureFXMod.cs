@@ -68,6 +68,13 @@ namespace NatureFX {
 		internal readonly CameraVolumetrics HdrpSsaoOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.SSAO, "the own engine's GI shades the ambient light", false);
 		internal readonly CameraVolumetrics HdrpSsgiOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.SSGI, "the own engine's GI bounces the light", false);
 		internal readonly CameraVolumetrics HdrpContactOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.ContactShadows, "the own engine traces the shadows", false);
+		// HDRP's shadow maps and baked shadow masks: HDRP's sun and lamps light no opaque surface while the own engine
+		// lights them and traces their shadows (a lamp's shadow map was still drawn every frame for nothing)
+		internal readonly CameraVolumetrics HdrpShadowMapsOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.ShadowMaps, "the own engine lights the sun and lamps and traces their shadows", false);
+		internal readonly CameraVolumetrics HdrpShadowmaskOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.Shadowmask, "the own engine lights the sun and lamps and traces their shadows", false);
+		// HDRP's bloom and screen space lens flare (strength 0 already): the own post-processing draws both
+		internal readonly CameraVolumetrics HdrpBloomOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.Bloom, "the own post-processing draws the bloom", false);
+		internal readonly CameraVolumetrics HdrpFlareOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.LensFlareScreenSpace, "the own post-processing draws the lens flare", false);
 		internal readonly LensEffects Lens = new();
 		internal readonly PostProcess Post = new();
 		internal readonly GameParticles GameFx = new();
@@ -191,7 +198,7 @@ namespace NatureFX {
 			CameraFog.Restore();
 			CameraClouds.Restore();
 			OwnLighting.Update(false, false, false); // HDRP's lamps light again
-			foreach (var off in new[] { HdrpFogOff, HdrpCloudsOff, HdrpScatterOff, HdrpSsrOff, HdrpProbesOff, HdrpPlanarOff, HdrpSkyReflOff, HdrpSsaoOff, HdrpSsgiOff, HdrpContactOff }) {
+			foreach (var off in new[] { HdrpFogOff, HdrpCloudsOff, HdrpScatterOff, HdrpSsrOff, HdrpProbesOff, HdrpPlanarOff, HdrpSkyReflOff, HdrpSsaoOff, HdrpSsgiOff, HdrpContactOff, HdrpShadowMapsOff, HdrpShadowmaskOff, HdrpBloomOff, HdrpFlareOff }) {
 				off.Restore();
 			}
 			GroundMap.Release();
@@ -231,6 +238,7 @@ namespace NatureFX {
 			OwnLighting.Update(s.Enabled && s.NativeSky && s.OwnSkyLighting && NativeEngine.Active, s.Enabled && s.OwnSunLight && NativeEngine.Active,
 				s.Enabled && s.OwnLampLight && NativeEngine.Active);
 			OwnLighting.SkyStrength = Mathf.Max(0.0f, s.SkyLightStrength);
+			OwnLighting.TransparentsWanted = s.Enabled && s.OwnTransparentLight;
 			bool own = s.Enabled && s.OwnSkyLighting && NativeEngine.Active;
 			HdrpFogOff.Update(cam, own && nativeFog && !hdrpVolumetric);
 			HdrpCloudsOff.Update(cam, own && s.NativeSky);
@@ -242,6 +250,11 @@ namespace NatureFX {
 			HdrpSsaoOff.Update(cam, OwnLighting.Ambient);
 			HdrpSsgiOff.Update(cam, OwnLighting.Ambient);
 			HdrpContactOff.Update(cam, own && OwnLighting.ShadowsRunning);
+			// only with both the sun and the lamps the own engine's: either HDRP's own still needs its shadows
+			HdrpShadowMapsOff.Update(cam, OwnLighting.Sun && OwnLighting.Lamps);
+			HdrpShadowmaskOff.Update(cam, OwnLighting.Sun && OwnLighting.Lamps);
+			HdrpBloomOff.Update(cam, s.Enabled && PostProcess.Active);
+			HdrpFlareOff.Update(cam, s.Enabled && PostProcess.Active);
 			Volume.UpdateSky(Sun.Sun, s.Enabled && s.SunOverride, s.Enabled && s.NativeSky);
 			Weather.UpdateIce(s.Enabled && s.Accumulation, Sun.Sun);
 			PhotoMode.Update(cam);
@@ -493,6 +506,7 @@ namespace NatureFX {
 			pendingRescan_ = null;
 
 			NatureFX.Tools.DebugPage.MarkStep("rescan: start");
+			OwnLighting.Rescan();
 			Capabilities.Refresh();
 			// what the bundle build may leave out (render path, lightmap modes, LOD cross fade): facts of this map
 			NatureFX.Tools.VariantProfileDump.Write(Camera.main);

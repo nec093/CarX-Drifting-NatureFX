@@ -36,6 +36,48 @@ namespace NatureFX.Rendering {
 		private Exposure exposure_;
 		private VisualEnvironment environment_;
 		private IndirectLightingController indirect_;
+
+		// a layer mask parameter of a volume component, whatever its type in this HDRP version (by reflection: a
+		// LightLayerEnumParameter or RenderingLayerMaskEnumParameter, its value an enum or a mask struct)
+		private static readonly System.Collections.Generic.Dictionary<string, (System.Reflection.FieldInfo Field, System.Reflection.MethodInfo Override, System.Type Value)> layerParams_ = new();
+		private static void SetLayers(VolumeComponent component, string name, uint mask) {
+			try {
+				if (!layerParams_.TryGetValue(name, out var p)) {
+					var field = component.GetType().GetField(name);
+					System.Reflection.MethodInfo over = null;
+					System.Type valueType = null;
+					if (field != null) {
+						var parameterType = field.FieldType;
+						var valueProp = parameterType.GetProperty("value");
+						valueType = valueProp?.PropertyType;
+						over = valueType != null ? parameterType.GetMethod("Override", new[] { valueType }) : null;
+					}
+					p = (field, over, valueType);
+					layerParams_[name] = p;
+				}
+				if (p.Field == null || p.Override == null) {
+					return;
+				}
+				object value;
+				if (p.Value.IsEnum) {
+					value = System.Enum.ToObject(p.Value, unchecked((int)mask));
+				} else if (p.Value == typeof(uint)) {
+					value = mask;
+				} else if (p.Value == typeof(int)) {
+					value = unchecked((int)mask);
+				} else {
+					// a struct with an implicit conversion from uint (RenderingLayerMask)
+					var convert = p.Value.GetMethod("op_Implicit", new[] { typeof(uint) });
+					if (convert == null) {
+						return;
+					}
+					value = convert.Invoke(null, new object[] { mask });
+				}
+				p.Override.Invoke(p.Field.GetValue(component), new[] { value });
+			} catch (System.Exception) {
+				// left as it is: the see-through surfaces get no sky light
+			}
+		}
 		private SkySettings skyDim_;          // the track's sky type in our profile, its brightness turned down at night
 		private float skyBase_ = 1.0f;        // the track's own sky brightness (multiplier), read while ours is off
 		private float lastSkyElevation_ = float.NaN;
@@ -280,6 +322,9 @@ namespace NatureFX.Rendering {
 			indirect_.indirectDiffuseLightingMultiplier.Override(OwnLighting.Ambient ? 0.0f : 1.0f);
 			indirect_.reflectionLightingMultiplier.Override(OwnLighting.Reflections ? 0.0f : 1.0f);
 			indirect_.reflectionProbeIntensityMultiplier.Override(OwnLighting.Reflections ? 0.0f : 1.0f);
+			// the see-through surfaces' layer keeps HDRP's sky light (the own sky's probe, bound by RTShadowPass): HDRP's
+			// multiplier only scales the layers named here
+			SetLayers(indirect_, "indirectDiffuseLightingLayers", OwnLighting.Transparents ? ~OwnLighting.TransparentMask : ~0u);
 			DimSky(env, night);
 			string trackName = trackSky_ >= 0 && SkyTypes() != null && SkyTypes().TryGetValue(trackSky_, out var t) ? t.Name : $"type {trackSky_}";
 			// what HDRP renders with in the end, and what the track had

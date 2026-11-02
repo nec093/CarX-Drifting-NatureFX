@@ -464,6 +464,10 @@ namespace NatureFX {
 				"HDRP's street lights, headlights and other lamps light nothing; the lamp masks' pass works their light out " +
 				"(cookies included) and the shadow composite adds the share each lamp's traced shadow lets through. Only " +
 				"while the lamp masks run (Lighting & shadows)."));
+			Other(Widgets.Switch("Light on see-through surfaces", S.OwnTransparentLight, v => S.OwnTransparentLight = v,
+				"What HDRP draws see-through after the ray traced composite (fences, signs, particles that take light) keeps " +
+				"HDRP's sun and lamps and gets the own engine's sky light: HDRP's lights are put on a rendering layer only " +
+				"those surfaces are on. Off: they get none of it while the own engine lights the rest."));
 			Widgets.Info($"Own lighting: {Rendering.OwnLighting.Status}");
 			Widgets.Info($"HDRP's sky: {mod_.Volume.SkyState}");
 			Widgets.Info($"Cube for HDRP: {Rendering.AtmospherePass.CubeStatus}");

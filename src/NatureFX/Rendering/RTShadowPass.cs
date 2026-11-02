@@ -33,6 +33,7 @@ namespace NatureFX.Rendering {
 		private static readonly int DenoiseMode = Shader.PropertyToID("_NFX_DenoiseMode");
 		private static readonly int TraceJitter = Shader.PropertyToID("_NFX_TraceJitter");
 		private static readonly int AmbientProbeId = Shader.PropertyToID("_NFX_AmbientProbe");
+		private static readonly int HdrpAmbientProbeId = Shader.PropertyToID("_AmbientProbeData");
 		private static readonly int RTSunDir = Shader.PropertyToID("_NFX_RTSunDir");
 		private static readonly int RTSunColor = Shader.PropertyToID("_NFX_RTSunColor");
 		private static readonly int LeafParams = Shader.PropertyToID("_NFX_LeafParams");
@@ -652,6 +653,11 @@ namespace NatureFX.Rendering {
 			props_.SetVector(LeafParams, new Vector4(TraceShadows ? LeafTranslucency : 0.0f, shafts ? 1.0f : 0.0f, localShadows ? 1.0f : 0.0f,
 				giUsed_ ? Mathf.Max(0.001f, GIIntensity) : 0.0f));
 			props_.SetBuffer(AmbientProbeId, probe); // GI: the sky light HDRP gave, which the sky's share scales
+			// OwnLighting.Transparents: what HDRP draws see-through after this takes its sky light from HDRP's probe,
+			// black with HDRP's sky off: the own sky's (the same SH packing) in its place for the rest of the frame
+			if (OwnLighting.Transparents && OwnLighting.Ambient) {
+				ctx.cmd.SetGlobalBuffer(HdrpAmbientProbeId, probe);
+			}
 			props_.SetTexture(SkyViewTex, skyUsed ? skyView_ : color_);
 			props_.SetTexture(SkyTransmittanceTex, skyUsed ? skyTransmittance_ : color_);
 			props_.SetTexture(CloudTex, skyUsed && cloudsUsed_ ? cloudHistoryA_ : color_);

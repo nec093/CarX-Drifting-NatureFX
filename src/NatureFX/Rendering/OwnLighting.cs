@@ -41,6 +41,21 @@ namespace NatureFX.Rendering {
 		// renderer is on (affectDiffuse / affectSpecular off made HDRP drop the light from its lists, and the exact
 		// passes found no sun: RTShadowPass.CheckOwnSun). The exact passes do not look at layers.
 		private const int UnusedLayer = 1 << 30;
+		// 6. What HDRP draws see-through after the composites (fences, signs, lit particles) is not in the G-buffer the
+		//    own engine lights: HDRP's sun and lamps go on a rendering layer only those renderers are put on (the game's
+		//    opaque ones are taken off it), and HDRP's ambient multiplier leaves that layer out, with the own sky's
+		//    probe bound as HDRP's (RTShadowPass). Bit 7: within the light layers every HDRP version keeps.
+		private const int TransparentLayer = 1 << 7;
+		public static bool TransparentsWanted;
+		public static bool Transparents { get; private set; }
+		public static uint TransparentMask => TransparentLayer;
+		private static int LightLayer => Transparents ? TransparentLayer : UnusedLayer;
+		private static readonly System.Collections.Generic.Dictionary<Renderer, uint> rendererMasks_ = new();
+		private static Renderer[] pending_;
+		private static int pendingAt_;
+		private static float nextRendererScan_;
+		private static readonly System.Collections.Generic.List<Material> materials_ = new();
+		public static int TransparentRenderers { get; private set; }
 		private static readonly System.Collections.Generic.Dictionary<Light, (uint Mask, object HdMask)> layered_ = new();
 		private static System.Reflection.PropertyInfo hdLayers_;
 		private static bool hdLayersLooked_;
@@ -83,12 +98,7 @@ namespace NatureFX.Rendering {
 			if (hd != null && hdLayers_ != null && hdLayers_.CanWrite) {
 				try {
 					hdMask = hdLayers_.GetValue(hd);
-					var type = hdLayers_.PropertyType;
-					object value = type.IsEnum ? System.Enum.ToObject(type, UnusedLayer)
-						: type == typeof(uint) ? (object)(uint)UnusedLayer : type == typeof(int) ? UnusedLayer : null;
-					if (value != null) {
-						hdLayers_.SetValue(hd, value);
-					} else {
+					if (!SetHdLayer(hd, LightLayer)) {
 						hdMask = null;
 					}
 				} catch (System.Exception) {
@@ -96,7 +106,116 @@ namespace NatureFX.Rendering {
 				}
 			}
 			layered_[light] = ((uint)light.renderingLayerMask, hdMask);
-			light.renderingLayerMask = UnusedLayer;
+			light.renderingLayerMask = LightLayer;
+		}
+
+		private static bool SetHdLayer(HDAdditionalLightData hd, int layer) {
+			var type = hdLayers_.PropertyType;
+			object value = type.IsEnum ? System.Enum.ToObject(type, layer)
+				: type == typeof(uint) ? (object)(uint)layer : type == typeof(int) ? layer : null;
+			if (value == null) {
+				return false;
+			}
+			hdLayers_.SetValue(hd, value);
+			return true;
+		}
+
+		// the lights already off moved to the layer now used (see-through surfaces lit or not)
+		private static void Relayer() {
+			foreach (var kv in layered_) {
+				var light = kv.Key;
+				if (light == null) {
+					continue;
+				}
+				light.renderingLayerMask = LightLayer;
+				var hd = light.GetComponent<HDAdditionalLightData>();
+				if (hd != null && kv.Value.HdMask != null && hdLayers_ != null) {
+					try {
+						SetHdLayer(hd, LightLayer);
+					} catch (System.Exception) {
+					}
+				}
+			}
+		}
+
+		// see-through only: every material drawn after the opaque ones (a renderer with an opaque one too is left off:
+		// its opaque part would be lit twice)
+		private static bool SeeThrough(Renderer r) {
+			r.GetSharedMaterials(materials_);
+			bool any = false;
+			foreach (var m in materials_) {
+				if (m == null) {
+					continue;
+				}
+				if (m.renderQueue <= 2500) {
+					return false;
+				}
+				any = true;
+			}
+			return any;
+		}
+
+		// the renderers on the see-through layer (or off it), a few hundred a frame; all looked at again every 10 s
+		// and after a scene load (Rescan)
+		private static void UpdateRenderers() {
+			if (!Transparents) {
+				if (rendererMasks_.Count > 0) {
+					foreach (var kv in rendererMasks_) {
+						if (kv.Key != null) {
+							kv.Key.renderingLayerMask = kv.Value;
+						}
+					}
+					rendererMasks_.Clear();
+				}
+				pending_ = null;
+				TransparentRenderers = 0;
+				return;
+			}
+			if (pending_ == null) {
+				if (Time.unscaledTime < nextRendererScan_) {
+					return;
+				}
+				nextRendererScan_ = Time.unscaledTime + 10.0f;
+				pending_ = Object.FindObjectsByType<Renderer>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+				pendingAt_ = 0;
+				var dead = new System.Collections.Generic.List<Renderer>();
+				foreach (var r in rendererMasks_.Keys) {
+					if (r == null) {
+						dead.Add(r);
+					}
+				}
+				foreach (var r in dead) {
+					rendererMasks_.Remove(r);
+				}
+			}
+			int end = System.Math.Min(pending_.Length, pendingAt_ + 400);
+			for (; pendingAt_ < end; ++pendingAt_) {
+				var r = pending_[pendingAt_];
+				if (r == null || rendererMasks_.ContainsKey(r)) {
+					continue;
+				}
+				uint mask = r.renderingLayerMask;
+				uint want = SeeThrough(r) ? mask | TransparentLayer : mask & ~(uint)TransparentLayer;
+				if (want != mask) {
+					rendererMasks_[r] = mask;
+					r.renderingLayerMask = want;
+				}
+			}
+			if (pendingAt_ >= pending_.Length) {
+				pending_ = null;
+				int n = 0;
+				foreach (var kv in rendererMasks_) {
+					if (kv.Key != null && (kv.Value & TransparentLayer) == 0) {
+						++n;
+					}
+				}
+				TransparentRenderers = n;
+			}
+		}
+
+		// a scene load: look at the renderers again now
+		public static void Rescan() {
+			nextRendererScan_ = 0.0f;
 		}
 
 		public static void HdrpLightOn(Light light) {
@@ -152,6 +271,14 @@ namespace NatureFX.Rendering {
 			Sun = wantedSun_ && !SunUnavailable && LayersSupported && now - sunFrame_ <= Grace;
 			Lamps = wantedLamps_ && LayersSupported && now - lampsFrame_ <= Grace;
 			UpdateLamps();
+			bool transparents = TransparentsWanted && LayersSupported && (Sun || Lamps || wanted_);
+			if (transparents != Transparents) {
+				Transparents = transparents;
+				Relayer();
+				pending_ = null;
+				nextRendererScan_ = 0.0f;
+			}
+			UpdateRenderers();
 			ShadowsRunning = now - shadowFrame_ <= Grace;
 			Ambient = wanted_ && ShadowsRunning;
 			Reflections = wanted_ && now - reflectionFrame_ <= Grace;
@@ -167,6 +294,7 @@ namespace NatureFX.Rendering {
 			: $"HDRP's sky light {(Ambient ? "from the own engine" : "HDRP's (shadow composite not running)")}, " +
 			  $"reflections {(Reflections ? "from the own engine" : "HDRP's (reflections composite not running)")}, " +
 			  $"HDRP's sky {(Sky ? "off" : "on")}, sun light {(Sun ? "from the own engine" : !LayersSupported && wantedSun_ ? "HDRP's (HDRP's light layers are off)" : SunUnavailable ? "HDRP's (HDRP drops a sun that lights nothing)" : wantedSun_ ? "HDRP's (exact sun pass not running)" : "HDRP's")}, " +
-			  $"lamps {(Lamps ? $"from the own engine ({lampsOff_.Count} of HDRP's off)" : wantedLamps_ ? "HDRP's (lamp masks not running)" : "HDRP's")}";
+			  $"lamps {(Lamps ? $"from the own engine ({lampsOff_.Count} of HDRP's off)" : wantedLamps_ ? "HDRP's (lamp masks not running)" : "HDRP's")}, " +
+			  $"see-through surfaces {(Transparents ? $"lit by HDRP ({TransparentRenderers} renderers on layer 7)" : TransparentsWanted ? "unlit" : "off")}";
 	}
 }

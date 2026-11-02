@@ -46,6 +46,7 @@ namespace NatureFX {
 		public bool OwnSkyLighting { get; set; }      // HDRP's sky light, reflections and sky from the own engine (OwnLighting)
 		public bool OwnSunLight { get; set; }         // HDRP's sun lights nothing; the shadow composite adds it (OwnLighting.Sun)
 		public bool OwnLampLight { get; set; }        // HDRP's lamps light nothing; the shadow composite adds them (OwnLighting.Lamps)
+		public bool OwnTransparentLight { get; set; } // HDRP's sun, lamps and the own sky light still light what is drawn see-through (OwnLighting.Transparents)
 		public float SkyLightStrength { get; set; }   // the own sky's light on surfaces (OwnLighting.Ambient): the shade's brightness
 		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
@@ -266,6 +267,7 @@ namespace NatureFX {
 		public bool OwnSkyLighting { get; set; }      // HDRP's sky light, reflections and sky from the own engine (OwnLighting)
 		public bool OwnSunLight { get; set; }         // HDRP's sun lights nothing; the shadow composite adds it (OwnLighting.Sun)
 		public bool OwnLampLight { get; set; }        // HDRP's lamps light nothing; the shadow composite adds them (OwnLighting.Lamps)
+		public bool OwnTransparentLight { get; set; } // HDRP's sun, lamps and the own sky light still light what is drawn see-through (OwnLighting.Transparents)
 		public float SkyLightStrength { get; set; }   // the own sky's light on surfaces (OwnLighting.Ambient): the shade's brightness
 		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
@@ -837,6 +839,11 @@ namespace NatureFX {
 				// the low beam for driving on the left (Japan), as it was
 				d.HeadlightStandard = 0;
 				d.ConfigVersion = 68;
+			}
+			if (d.ConfigVersion < 69) {
+				// see-through surfaces lit again under the own engine's lighting
+				d.OwnTransparentLight = true;
+				d.ConfigVersion = 69;
 			}
 		}
 

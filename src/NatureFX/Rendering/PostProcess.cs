@@ -42,6 +42,9 @@ namespace NatureFX.Rendering {
 		public float FlareGhosts, FlareStreaks; // the lens flare (0: none), as LensEffects weighs it
 		public float MotionBlur;           // the shutter's share of a frame (0: none)
 		public bool DepthOfField;
+		// only the meter for the eye adaptation (the own post-processing off, HDRP's draws the picture with the
+		// exposure worked out here): the exposure no longer goes back to HDRP's histogram with it
+		public bool MeterOnly;
 		public float FStop = 2.8f, Focus = 10.0f; // the lens's f-number, the focus distance (m)
 
 		// the meter's last reading: log2 luminance per cell, and when it came
@@ -146,6 +149,12 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			var cmd = ctx.cmd;
+			if (MeterOnly) {
+				props_.Clear();
+				props_.SetFloat(PlainId, 0.0f);
+				Measure(cmd, ctx.cameraColorBuffer);
+				return;
+			}
 			Dlaa.NotePost(ctx.hdCamera.camera);
 			int renderWidth = ctx.hdCamera.actualWidth, renderHeight = ctx.hdCamera.actualHeight;
 			CustomPassUtils.Copy(ctx, ctx.cameraColorBuffer, source_);
@@ -197,26 +206,7 @@ namespace NatureFX.Rendering {
 				source = current;
 			}
 
-			// meter
-			props_.SetTexture(SourceId, source);
-			props_.SetVector(TargetSizeId, Size(MeterW, MeterH));
-			CoreUtils.SetRenderTarget(cmd, meter_, ClearFlag.None);
-			CoreUtils.DrawFullScreen(cmd, Material, props_, PassMeter);
-			if (!pending_) {
-				pending_ = true;
-				int frame = Time.frameCount;
-				cmd.RequestAsyncReadback(meter_, request => {
-					pending_ = false;
-					if (request.hasError) {
-						return;
-					}
-					var data = request.GetData<float>();
-					if (data.Length >= Meter.Length) {
-						NativeArray<float>.Copy(data, Meter, Meter.Length);
-						MeterFrame = frame;
-					}
-				});
-			}
+			Measure(cmd, source);
 
 			// bloom: down the chain, then up it
 			int levels = Bloom > 0.0f ? BloomLevels : 0;
@@ -252,6 +242,29 @@ namespace NatureFX.Rendering {
 			Draw(cmd, target, PassFinal, Size(width, height));
 			if (upscaled) {
 				cmd.SetGlobalTexture(UpscaledFinalId, fullFinal_);
+			}
+		}
+
+		// the meter (64x36 cells of the picture's light), read back without waiting
+		private void Measure(CommandBuffer cmd, RTHandle source) {
+			props_.SetTexture(SourceId, source);
+			props_.SetVector(TargetSizeId, Size(MeterW, MeterH));
+			CoreUtils.SetRenderTarget(cmd, meter_, ClearFlag.None);
+			CoreUtils.DrawFullScreen(cmd, Material, props_, PassMeter);
+			if (!pending_) {
+				pending_ = true;
+				int frame = Time.frameCount;
+				cmd.RequestAsyncReadback(meter_, request => {
+					pending_ = false;
+					if (request.hasError) {
+						return;
+					}
+					var data = request.GetData<float>();
+					if (data.Length >= Meter.Length) {
+						NativeArray<float>.Copy(data, Meter, Meter.Length);
+						MeterFrame = frame;
+					}
+				});
 			}
 		}
 	}
@@ -364,17 +377,32 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			bool active = on && s.NativePost && pass_ != null;
+			// the own post-processing off: its eye adaptation still runs (only the meter), HDRP's post-processing draws
+			// the picture at the exposure worked out here
+			bool meterOnly = on && !active && pass_ != null && s.ExposureMode == 1;
 			Active = active;
-			volume_.enabled = active;
+			volume_.enabled = active || meterOnly;
+			tonemapping_.active = active;
+			bloom_.active = active;
+			color_.active = active;
 			if (pass_ != null) {
-				pass_.enabled = active;
+				pass_.enabled = active || meterOnly;
+				pass_.MeterOnly = meterOnly;
 			}
 			if (!active) {
-				OwnExposure = false;
 				HdrpBlur(false);
 				Dlaa.Wanted = false;
+			}
+			if (!active && !meterOnly) {
+				OwnExposure = false;
+				exposure_.active = false;
 				ev_ = float.NaN;
 				Status = pass_ == null ? "not in the shader bundle (HDRP's post-processing)" : "off (HDRP's post-processing)";
+				return;
+			}
+			if (meterOnly) {
+				Adapt(s);
+				Status = FormattableString.Invariant($"HDRP's post-processing; own exposure {ev_:0.00} EV100, eye adaptation");
 				return;
 			}
 			pass_.Bloom = s.PostBloom;
@@ -393,8 +421,15 @@ namespace NatureFX.Rendering {
 			Dlaa.Wanted = s.Dlaa;
 			Dlaa.Quality = s.DlssQuality;
 			Dlaa.RayReconstructionWanted = s.DlssRayReconstruction;
+			Adapt(s);
+			string[] curves = { "ACES", "Neutral", "AgX", "none" };
+			Status = s.ExposureMode == 1
+				? FormattableString.Invariant($"own: exposure {ev_:0.00} EV100, eye adaptation, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
+				: FormattableString.Invariant($"own: the game's exposure, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}");
+		}
 
-			// eye adaptation (with the game's exposure chosen, HDRP keeps it)
+		// eye adaptation (with the game's exposure chosen, HDRP keeps it)
+		private void Adapt(ISettings s) {
 			exposure_.active = s.ExposureMode == 1;
 			if (s.ExposureMode == 1 && float.IsNaN(ev_) && !float.IsNaN(HdrpEV)) {
 				// taking over: from where HDRP's exposure is (it adapted until now), not a jump to the first reading
@@ -435,12 +470,9 @@ namespace NatureFX.Rendering {
 			// until the first reading HDRP keeps its own (a fixed exposure of nothing would flash the first frames)
 			exposure_.active = s.ExposureMode == 1 && !float.IsNaN(ev_);
 			if (!float.IsNaN(ev_)) {
-				exposure_.fixedExposure.Override(ev_);
+				// the compensation: the own final pass's with the own post-processing, HDRP's fixed exposure without it
+				exposure_.fixedExposure.Override(pass_ != null && pass_.MeterOnly ? ev_ - s.Exposure : ev_);
 			}
-			string[] curves = { "ACES", "Neutral", "AgX", "none" };
-			Status = s.ExposureMode == 1
-				? FormattableString.Invariant($"own: exposure {ev_:0.00} EV100, eye adaptation, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
-				: FormattableString.Invariant($"own: the game's exposure, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}");
 		}
 
 		// HDRP's motion blur and depth of field off on the game's camera while the own ones run (its frame settings,
