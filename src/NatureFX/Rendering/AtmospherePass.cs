@@ -237,7 +237,7 @@ namespace NatureFX.Rendering {
 			bool reset = (camPos - lastCamera_).sqrMagnitude > 50.0f * 50.0f;
 			var dir = SunController.SkyLightDir;
 			var ground = SunController.SkyLightGround;
-			var lightDir = new Vector4(dir.x, dir.y, dir.z, dir.y > 0.0f ? 1.0f : 0.0f);
+			var lightDir = new Vector4(dir.x, dir.y, dir.z, dir.y > SunController.DiscGoneY ? 1.0f : 0.0f);
 			var lightGround = new Vector4(ground.x, ground.y, ground.z, 0.0f);
 			// the frame's constants (the ray traced shadow pass, if it runs, adds its own ambient values)
 			var hdrpProbe = HdrpBindings.AmbientProbe(ctx.hdCamera);

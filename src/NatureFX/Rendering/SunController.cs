@@ -186,7 +186,6 @@ namespace NatureFX.Rendering {
 				above = TopOfAtmosphereLux;
 			}
 			HandOver(moon, above);
-			SkyLightGround *= GroundFade(moon);
 			SkyLightAboveRaw = above;
 			SkyLightAbove = above * SkyScale;
 		}
@@ -199,6 +198,9 @@ namespace NatureFX.Rendering {
 		public static float SkyScale => 1.0f;
 		public static int SkyGeneration { get; private set; }
 		private static bool lastMoon_;
+		// the sine of the elevation where the sun's disc has sunk whole (its light dimmed to nothing, -0.5°): the engine
+		// counts the sun as up above it
+		public static readonly float DiscGoneY = Mathf.Sin(-0.6f * Mathf.Deg2Rad);
 
 		private static float handOverAt_ = -1000.0f;
 
@@ -208,11 +210,6 @@ namespace NatureFX.Rendering {
 				++SkyGeneration;
 				handOverAt_ = Time.unscaledTime;
 			}
-		}
-
-		// the moon's direct light for the own engine comes in with the sky's fade (it was there at once at the hand-over)
-		private static float GroundFade(bool moon) {
-			return moon ? Mathf.SmoothStep(0.0f, 1.0f, (Time.unscaledTime - handOverAt_) / NativeEngine.SkyFadeSeconds) : 1.0f;
 		}
 
 		// AtmospherePass's sky probe readings (kept for the debug page; the hand-over no longer needs them)

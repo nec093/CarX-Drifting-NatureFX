@@ -197,7 +197,9 @@ namespace NatureFX.Rendering {
 				if (engineLight.useColorTemperature) {
 					color *= Mathf.CorrelatedColorTemperatureToRGB(engineLight.colorTemperature);
 				}
-				sunDirection_ = new Vector4(toSun.x, toSun.y, toSun.z, toSun.y > 0.0f ? 1.0f : 0.0f);
+				// up while any of its disc is (SunController dims it to nothing by -0.5°): up only above 0°, the engine
+				// stopped lighting with it while HDRP's sun, which the composite takes away, still shone (a dark minute at 18:00)
+				sunDirection_ = new Vector4(toSun.x, toSun.y, toSun.z, toSun.y > SunController.DiscGoneY ? 1.0f : 0.0f);
 				sunIlluminance_ = new Vector4(color.r, color.g, color.b, 0.0f);
 			} else {
 				sunDirection_ = Vector4.zero;
