@@ -49,6 +49,7 @@ namespace NatureFX {
 		public bool OwnTransparentLight { get; set; } // HDRP's sun, lamps and the own sky light still light what is drawn see-through (OwnLighting.Transparents)
 		public bool OwnBrdf { get; set; }             // the sun and lamps lit by the own BSDF, no G-buffer drawn again (RTShadowPass.OwnBrdf)
 		public float SkyLightStrength { get; set; }   // the own sky's light on surfaces (OwnLighting.Ambient): the shade's brightness
+		public float SkyLightSaturation { get; set; } // the sky light's colour: 1 the sky model's, 0.5 measured skylight (NativeEngine)
 		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
 		public float SunMaxElevation { get; set; }    // degrees at noon
@@ -272,6 +273,7 @@ namespace NatureFX {
 		public bool OwnTransparentLight { get; set; } // HDRP's sun, lamps and the own sky light still light what is drawn see-through (OwnLighting.Transparents)
 		public bool OwnBrdf { get; set; }             // the sun and lamps lit by the own BSDF, no G-buffer drawn again (RTShadowPass.OwnBrdf)
 		public float SkyLightStrength { get; set; }   // the own sky's light on surfaces (OwnLighting.Ambient): the shade's brightness
+		public float SkyLightSaturation { get; set; } // the sky light's colour: 1 the sky model's, 0.5 measured skylight (NativeEngine)
 		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
 		public float SunMaxElevation { get; set; }    // degrees at noon
@@ -858,6 +860,11 @@ namespace NatureFX {
 				d.Saturation = 0.0f;
 				d.WhiteBalance = 0.6f;
 				d.ConfigVersion = 70;
+			}
+			if (d.ConfigVersion < 71) {
+				// the shade as blue as under a real clear sky, not twice as blue
+				d.SkyLightSaturation = 0.5f;
+				d.ConfigVersion = 71;
 			}
 		}
 

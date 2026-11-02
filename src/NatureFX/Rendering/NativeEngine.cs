@@ -891,6 +891,9 @@ namespace NatureFX.Rendering {
 		public static GraphicsBuffer SkyProbe { get; private set; }
 		private static IntPtr skyProbePtr_, skyProbePtrFrame_;
 		private static readonly int SkySamplesId = Shader.PropertyToID("_NFX_SkySamples");
+		private static readonly int SkyLightSaturationId = Shader.PropertyToID("_NFX_SkyLightSaturation");
+		// the sky light's colour: 1 as the sky model, 0.5 as measured skylight (Settings.SkyLightSaturation)
+		public static float SkyLightSaturation = 1.0f;
 		private static readonly int SkyProbeId = Shader.PropertyToID("_NFX_SkyProbe");
 		private static bool cloudNoiseMade_;
 		private static bool kindParams_;
@@ -1012,6 +1015,7 @@ namespace NatureFX.Rendering {
 					skyProbePtr_ = SkyProbe.GetNativeBufferPtr();
 				}
 				int project = bridge.FindKernel("SkyAmbientSH");
+				cmd.SetComputeFloatParam(bridge, SkyLightSaturationId, Mathf.Clamp01(SkyLightSaturation));
 				cmd.SetComputeBufferParam(bridge, project, SkySamplesId, a.Result);
 				cmd.SetComputeBufferParam(bridge, project, SkyProbeId, SkyProbe);
 				cmd.DispatchCompute(bridge, project, 1, 1, 1);

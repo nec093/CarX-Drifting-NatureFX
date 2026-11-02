@@ -238,6 +238,7 @@ namespace NatureFX {
 			OwnLighting.Update(s.Enabled && s.NativeSky && s.OwnSkyLighting && NativeEngine.Active, s.Enabled && s.OwnSunLight && NativeEngine.Active,
 				s.Enabled && s.OwnLampLight && NativeEngine.Active);
 			OwnLighting.SkyStrength = Mathf.Max(0.0f, s.SkyLightStrength);
+			NativeEngine.SkyLightSaturation = s.SkyLightSaturation;
 			OwnLighting.TransparentsWanted = s.Enabled && s.OwnTransparentLight;
 			bool own = s.Enabled && s.OwnSkyLighting && NativeEngine.Active;
 			HdrpFogOff.Update(cam, own && nativeFog && !hdrpVolumetric);

@@ -959,6 +959,8 @@ namespace NatureFX {
 			Other(Widgets.Slider("Bounce intensity", S.RTGIIntensity, 0, 3, v => S.RTGIIntensity = v, "0.00"));
 			Other(Widgets.Slider("Sky light in the shade", S.SkyLightStrength, 0, 3, v => S.SkyLightStrength = v, "0.00"));
 			Widgets.Info("How bright the sky makes what the sun does not reach (with the sky light from the own engine, Sky & fog). 1: as the sky is.");
+			Other(Widgets.Slider("Sky light colour", S.SkyLightSaturation, 0, 1, v => S.SkyLightSaturation = v, "0.00"));
+			Widgets.Info("How blue the sky's light is in the shade: 1 as the sky model gives it, 0.5 as measured under a clear sky.");
 			Widgets.Info("How strongly the light bounced in (and its colour) is added; 1 is physically right.");
 			Widgets.EndDependent();
 			Widgets.EndDependent();

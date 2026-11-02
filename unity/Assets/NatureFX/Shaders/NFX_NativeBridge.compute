@@ -266,6 +266,10 @@ void CloudTemporal(uint3 id : SV_DispatchThreadID)
 // spherical harmonics, convolved with the cosine lobe and divided by pi (HDRP's diffuse probe: albedo times
 // SampleSH9 is the reflected radiance), packed as HDRP packs it (7 float4, SampleSH9's order).
 StructuredBuffer<float4> _NFX_SkySamples;
+// the sky light's colour as measured skylight has it (Settings.SkyLightSaturation): the three wavelength sky model
+// gives a clear sky's light about twice as blue against red as measured (red : blue about 1 : 4, measured 1 : 2 at a
+// clear midday, 10 000 to 15 000 K): 1 as the model, 0.5 measured
+float _NFX_SkyLightSaturation;
 RWStructuredBuffer<float4> _NFX_SkyProbe;
 groupshared float3 sh_[64][9];
 
@@ -283,6 +287,7 @@ void SkyAmbientSH(uint3 id : SV_DispatchThreadID)
         float sinTheta = sqrt(saturate(1.0 - cosTheta * cosTheta));
         float3 n = float3(sinTheta * cos(phi), cosTheta, sinTheta * sin(phi));
         float3 L = _NFX_SkySamples[i].rgb * (4.0 * PI / 512.0);
+        L = max(lerp((float3)dot(L, float3(0.2126, 0.7152, 0.0722)), L, _NFX_SkyLightSaturation), 0.0);
         // Unity's order: Y00, Y1-1 (y), Y10 (z), Y11 (x), Y2-2 (xy), Y2-1 (yz), Y20, Y21 (xz), Y22
         c[0] += L * 0.282095;
         c[1] += L * 0.488603 * n.y;
