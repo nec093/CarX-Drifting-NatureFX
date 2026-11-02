@@ -88,12 +88,14 @@ float NFX_LeafLayer(float2 p, float seed, out float3 color, out float2 tilt, out
 	return best;
 }
 
-// Expanding rain drop rings in puddles; returns a world xz normal offset
+// Expanding rain drop rings on standing water; returns a world xz normal offset. Heavy rain lands hundreds of drops on
+// a square metre each second: four layers of cells 10 to 25 cm across, each cell a ring every second or so, as many of
+// the cells as the rain is heavy
 float2 NFX_Ripples(float2 xz, float time, float rain) {
 	float2 offset = 0.0;
 	[loop]
-	for (int layer = 0; layer < 2; ++layer) {
-		float2 p = xz * (2.2 + layer * 1.3) + layer * 17.0;
+	for (int layer = 0; layer < 4; ++layer) {
+		float2 p = xz * (4.0 + layer * 2.3) + layer * 17.0;
 		float2 cell = floor(p);
 		float2 f = frac(p) - 0.5;
 		float h = NFX_Hash12(cell + layer * 3.0);
@@ -125,7 +127,9 @@ void NFX_ApplyAccumulation(inout NFXSurface s, float3 positionAWS, float3 geomNo
 	float snow = _NFX_Accumulation.x;
 	float leaves = _NFX_Accumulation.y;
 	float dust = _NFX_Accumulation.z;
-	float wet = max(_NFX_Accumulation.w, _NFX_Weather.x);
+	// how wet the ground has got (AccumulationController: it wets over a minute or so as the rain sets in, as fast as
+	// the rain is heavy, and dries slowly), not the rain itself (a road soaked the instant the first drop fell)
+	float wet = _NFX_Accumulation.w;
 	float rain = _NFX_Weather.x;
 
 	float up = saturate(geomNormalWS.y);
@@ -185,11 +189,24 @@ void NFX_ApplyAccumulation(inout NFXSurface s, float3 positionAWS, float3 geomNo
 	s.smoothness = lerp(s.smoothness, 0.12, dustMask);
 	s.metallic = lerp(s.metallic, 0.0, dustMask);
 
-	// --- wetness: uneven drying, darker porous surfaces, glossy film
-	// tyres squeeze the water out: the racing line dries while it keeps raining around it
+	// --- wetness (Lagarde, "Water drop"): a porous surface first soaks the water up, darker (the water in its pores
+	// keeps light in) and only a little glossier; once soaked, water stands in its low spots, a film that fills the
+	// relief (flat normal, mirror smooth). Uneven drying; tyres squeeze the water out of the racing line.
 	float wetMask = wet * exposure * saturate(0.65 + (large - 0.5) * 0.9 + up * 0.25) * (1.0 - track.g * 0.8);
-	s.baseColor *= lerp(1.0, 0.5, wetMask * saturate(porosity));
-	s.smoothness = lerp(s.smoothness, 0.86, wetMask);
+	float soaked = saturate(wetMask * 1.6);
+	s.baseColor *= lerp(1.0, 0.35, soaked * saturate(porosity));
+	s.smoothness = lerp(s.smoothness, lerp(0.62, 0.8, 1.0 - saturate(porosity)), soaked);
+	// the water film: the level rises once the surface is soaked, the relief's low parts (its height) fill first
+	float level = saturate((wetMask - 0.5) * 2.0) * pow(up, 4.0);
+	float film = saturate((level * 1.1 - s.height * 0.6) * 5.0);
+	if (film > 0.001) {
+		s.smoothness = lerp(s.smoothness, 0.95, film);
+		s.normalWS = normalize(lerp(s.normalWS, geomNormalWS, film * 0.85));
+		if (rain > 0.0) {
+			float2 rip = NFX_Ripples(xz, time, rain);
+			s.normalWS = normalize(s.normalWS + float3(rip.x, 0.0, rip.y) * film * 0.6);
+		}
+	}
 
 	// drips running down steep faces while it rains
 	float steep = 1.0 - up;
@@ -201,8 +218,9 @@ void NFX_ApplyAccumulation(inout NFXSurface s, float3 positionAWS, float3 geomNo
 		s.smoothness = lerp(s.smoothness, 0.95, dm);
 	}
 
-	// puddles in flat, low spots: mirror smooth, flat normal, rain rings on top
-	float puddle = smoothstep(0.55, 0.42, large + (1.0 - wet) * 0.6 + detail * 0.08) * pow(up, 8.0) * wetMask;
+	// puddles in the ground's dips (the large scale noise as its unevenness), as the water rises: mirror smooth, flat
+	// normal, rain rings on top
+	float puddle = smoothstep(0.55, 0.42, large + (1.0 - level) * 0.6 + detail * 0.08) * pow(up, 8.0) * saturate(wetMask * 2.0 - 1.0);
 	if (puddle > 0.001) {
 		s.baseColor = lerp(s.baseColor, s.baseColor * 0.55, puddle);
 		s.smoothness = lerp(s.smoothness, 0.98, puddle);

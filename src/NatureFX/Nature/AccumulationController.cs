@@ -63,13 +63,20 @@ namespace NatureFX.Nature {
 
 		public void Update(ISettings s) {
 			var w = Weather.Current;
-			var target = s.Enabled && s.Accumulation ? new Vector4(w.Snow, w.Leaves, w.Dust, w.Wetness) : Vector4.zero;
+			// while it rains the ground ends up soaked whatever the weather's wetness says
+			float soak = w.Rain > 0.001f ? Mathf.Max(w.Wetness, Mathf.Clamp01(w.Rain * 2.0f)) : w.Wetness;
+			var target = s.Enabled && s.Accumulation ? new Vector4(w.Snow, w.Leaves, w.Dust, soak) : Vector4.zero;
 
 			if (s.AccumulateOverTime && target != Vector4.zero) {
 				// AccumulationRate: fraction per minute. Melting / drying happens at double speed.
 				float step = s.AccumulationRate / 60.0f * Time.deltaTime;
 				for (int i = 0; i < 4; ++i) {
 					float rate = current_[i] < target[i] ? step : step * 2.0f;
+					if (i == 3 && current_[i] < target[i] && w.Rain > 0.001f) {
+						// rain wets the ground as fast as it falls: about 5 minutes at 1 mm/h, half a minute at 20
+						float mmPerHour = NatureFX.Map.MapFog.RainRate;
+						rate = Mathf.Max(rate, (0.15f + mmPerHour / 10.0f) / 60.0f * Time.deltaTime);
+					}
 					current_[i] = Mathf.MoveTowards(current_[i], target[i], rate);
 				}
 			} else {

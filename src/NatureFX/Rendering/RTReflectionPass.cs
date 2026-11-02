@@ -150,7 +150,7 @@ namespace NatureFX.Rendering {
 			Surfaces.EnsureTraced(ctx);
 			RTTimings.ReflectionTrace.Begin(cmd);
 			NativeEngine.TraceReflection(cmd, ctx, color_, exposure, Surfaces.Albedo, Surfaces.Normal, trace_, distance_, low,
-				new Vector4(MaxDistance, RoughnessCutoff, SecondBounce ? 1.0f : 0.0f, WetStreaks ? Mathf.Clamp01(Mathf.Max(NatureFX.Nature.Weather.Current.Wetness, NatureFX.Nature.Weather.Current.Rain)) : 0.0f));
+				new Vector4(MaxDistance, RoughnessCutoff, SecondBounce ? 1.0f : 0.0f, WetStreaks ? Mathf.Clamp01(Shader.GetGlobalVector(NatureFX.Nature.ShaderGlobals.Accumulation).w) : 0.0f /* the ground's wetness as it has built up, not the rain's (streaks the instant it began) */));
 			RTTimings.ReflectionTrace.End(cmd);
 			RTTimings.ReflectionFilter.Begin(cmd);
 
