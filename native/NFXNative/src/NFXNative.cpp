@@ -2237,7 +2237,11 @@ struct RenderThreadGpu {
 	ComPtr<ID3D12Resource> readback;
 	const UINT64* stamps = nullptr;
 	UINT64 frequency = 0;
-	std::string slotName[kSlots];
+	// a list may be split into named parts (Mark): up to kStamps - 1 of them, each between two timestamps
+	static constexpr int kStamps = 8;
+	std::string slotNames[kSlots][kStamps];
+	int slotStamps[kSlots] = {};
+	std::string listName;
 	bool slotPending[kSlots] = {};
 	std::mutex timingMutex;
 	std::map<std::string, double> timingMs;  // since the last NFX_Native_GpuTimings
@@ -2249,8 +2253,8 @@ struct RenderThreadGpu {
 		}
 		D3D12_QUERY_HEAP_DESC desc = {};
 		desc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
-		desc.Count = kSlots * 2;
-		readback = CreateBuffer(static_cast<UINT64>(kSlots) * 16, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
+		desc.Count = kSlots * kStamps;
+		readback = CreateBuffer(static_cast<UINT64>(kSlots) * kStamps * 8, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
 		void* mapped = nullptr;
 		if (queue == nullptr || FAILED(queue->GetTimestampFrequency(&frequency)) || frequency == 0 ||
 		    FAILED(g_device->CreateQueryHeap(&desc, IID_PPV_ARGS(&queries))) || !readback || FAILED(readback->Map(0, nullptr, &mapped)) || mapped == nullptr) {
@@ -2287,10 +2291,12 @@ struct RenderThreadGpu {
 		auto& allocator = allocators[slot];
 		// this slot's last submission is done (the check above): its time goes into the sums
 		if (slotPending[slot] && stamps != nullptr) {
-			UINT64 a = stamps[slot * 2], b = stamps[slot * 2 + 1];
-			if (b > a) {
-				std::lock_guard<std::mutex> lock(timingMutex);
-				timingMs[slotName[slot]] += static_cast<double>(b - a) * 1000.0 / static_cast<double>(frequency);
+			std::lock_guard<std::mutex> lock(timingMutex);
+			for (int k = 0; k + 1 < slotStamps[slot]; ++k) {
+				UINT64 a = stamps[slot * kStamps + k], b = stamps[slot * kStamps + k + 1];
+				if (b > a) {
+					timingMs[slotNames[slot][k]] += static_cast<double>(b - a) * 1000.0 / static_cast<double>(frequency);
+				}
 			}
 			slotPending[slot] = false;
 		}
@@ -2299,20 +2305,36 @@ struct RenderThreadGpu {
 		list->Reset(allocator.Get(), nullptr);
 		g_crumbs.Create(g_device.Get());
 		crumb = g_crumbs.Begin(list.Get(), g_crumbTag);
-		slotName[slot] = TimingName(g_crumbTag);
+		listName = TimingName(g_crumbTag);
 		g_crumbTag = "render";
+		slotStamps[slot] = 0;
 		if (EnsureTiming(g_unityQueue.load())) {
-			list->EndQuery(queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2);
+			slotNames[slot][0] = listName;
+			list->EndQuery(queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * kStamps);
+			slotStamps[slot] = 1;
 		}
 		return list.Get();
+	}
+
+	// From here on the open list's work counts as name (nullptr: the list's own name again)
+	void Mark(const char* name) {
+		int slot = frame % kSlots;
+		if (stamps == nullptr || slotStamps[slot] == 0 || slotStamps[slot] >= kStamps - 1) {
+			return;
+		}
+		list->EndQuery(queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * kStamps + slotStamps[slot]);
+		slotNames[slot][slotStamps[slot]] = name != nullptr ? std::string(name) : listName;
+		++slotStamps[slot];
 	}
 	UINT crumb = 0;
 
 	void Submit(ID3D12CommandQueue* queue) {
 		int slot = frame % kSlots;
-		if (stamps != nullptr) {
-			list->EndQuery(queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2 + 1);
-			list->ResolveQueryData(queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2, 2, readback.Get(), static_cast<UINT64>(slot) * 16);
+		if (stamps != nullptr && slotStamps[slot] > 0) {
+			list->EndQuery(queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * kStamps + slotStamps[slot]);
+			++slotStamps[slot];
+			list->ResolveQueryData(queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * kStamps, slotStamps[slot], readback.Get(),
+			                       static_cast<UINT64>(slot) * kStamps * 8);
 			slotPending[slot] = true;
 		}
 		g_crumbs.End(list.Get(), crumb);
@@ -2451,7 +2473,9 @@ bool RecordRenderTlas(ID3D12GraphicsCommandList4* list, UINT32 frame, D3D12_GPU_
 	    !EnsureRenderBuffer(g_renderTlas, g_renderTlasCapacity, info.ResultDataMaxSizeInBytes, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE)) {
 		return false;
 	}
+	g_render.Mark("frame: foliage sway (BLAS updates)");
 	RecordWind(list, g_renderTlasBuilds, g_resolved);
+	g_render.Mark("frame: TLAS build");
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build = {};
 	build.Inputs = inputs;
 	build.DestAccelerationStructureData = g_renderTlas->GetGPUVirtualAddress();
@@ -2459,6 +2483,7 @@ bool RecordRenderTlas(ID3D12GraphicsCommandList4* list, UINT32 frame, D3D12_GPU_
 	list->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
 	auto barrier = UavBarrier(g_renderTlas.Get());
 	list->ResourceBarrier(1, &barrier);
+	g_render.Mark(nullptr);  // the trace itself again
 	g_renderTlasFrame = frame;
 	++g_renderTlasBuilds;
 	return true;

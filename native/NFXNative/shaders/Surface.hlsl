@@ -21,9 +21,16 @@ NFX_ENTRY(id)
         float3 toPixel = p.xyz - Camera;
         float dist = length(toPixel);
         float3 dir = toPixel / max(dist, 1e-4);
+        // only the stretch of the ray where the surface can be: a hit is taken within this window of the depth
+        // buffer's distance anyway, and the whole ray from the camera walked most of the scene's BVH for it (the
+        // costliest full resolution trace). Something in front of the window (a leaf the depth buffer did not have)
+        // made the pixel fall back to grey before; now its surface is found behind it.
+        float window = max(0.1, dist * 0.02);
+        float start = max(dist - window, 0.0);
         Hit hit;
-        if (Closest(Camera, dir, dist * 1.02 + 0.1, false, hit) && abs(hit.t - dist) < max(0.1, dist * 0.02))
+        if (Closest(Camera + dir * start, dir, dist + window - start, false, hit) && abs(start + hit.t - dist) < window)
         {
+            hit.t += start; // from the camera again (the texture's mip goes by it)
             // the camera ray of a pixel: the texture's own mip for its footprint, as the rasteriser picks it
             HitSurface s = SurfaceAt(hit, dir, -1.0);
             float coat = s.coat ? 0.5 : 0.0;

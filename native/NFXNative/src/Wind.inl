@@ -35,15 +35,32 @@ constexpr size_t kWindBudget = 64;  // wind BLAS swayed and updated a frame (Rec
 size_t g_windCursor = 0;
 std::mutex g_windMutex;
 
-// The per frame updates' scratch, for the largest wind BLAS: only here, while the render thread's work is waited for
-// (NFX_Native_BuildScene did before this)
+// The per frame updates' scratch: a ring the frame's updates take their own parts of, so they run side by side with
+// one barrier at the end (one shared scratch serialised them, a barrier after each of 64). At least the largest
+// update, up to all of them, at most 32 MB. Only here, while the render thread's work is waited for
+// (NFX_Native_BuildScene did before this).
+constexpr UINT64 kWindScratchAlign = 256;
+constexpr UINT64 kWindScratchMax = 32ull << 20;
+UINT64 g_windScratchRing = 0;  // the part of g_windScratch the ring uses
+
 bool EnsureWindScratch() {
-	UINT64 size = 0;
+	UINT64 largest = 0, sum = 0;
 	for (const auto& w : g_windBlas) {
-		size = w.updateScratch > size ? w.updateScratch : size;
+		UINT64 size = (w.updateScratch + kWindScratchAlign - 1) & ~(kWindScratchAlign - 1);
+		largest = size > largest ? size : largest;
+		sum += size;
 	}
-	return size == 0 || EnsureBuffer(g_windScratch, g_windScratchCapacity, size, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-	                                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	UINT64 ring = sum < kWindScratchMax ? sum : kWindScratchMax;
+	ring = ring > largest ? ring : largest;
+	if (ring == 0) {
+		return true;
+	}
+	if (!EnsureBuffer(g_windScratch, g_windScratchCapacity, ring, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+	                  D3D12_RESOURCE_STATE_UNORDERED_ACCESS)) {
+		return false;
+	}
+	g_windScratchRing = ring;
+	return true;
 }
 
 // The BLAS of the swaying instances, after NFX_Native_BuildScene built the still ones. Reuses those of the instances
@@ -262,7 +279,7 @@ void RecordWind(ID3D12GraphicsCommandList4* list, int slot, const std::vector<D3
 		return;
 	}
 	for (const auto& w : g_windBlas) {
-		if (w.updateScratch > g_windScratchCapacity) {
+		if (w.updateScratch > g_windScratchRing) {
 			return;
 		}
 	}
@@ -338,6 +355,7 @@ void RecordWind(ID3D12GraphicsCommandList4* list, int slot, const std::vector<D3
 		return;
 	}
 	list->ResourceBarrier(static_cast<UINT>(toRead.size()), toRead.data());
+	UINT64 scratchUsed = 0;
 	for (size_t k = 0; k < count; ++k) {
 		if (!chosen[k] || firstInstance[k] < 0) {
 			continue;
@@ -356,11 +374,20 @@ void RecordWind(ID3D12GraphicsCommandList4* list, int slot, const std::vector<D3
 		build.Inputs.pGeometryDescs = &w.desc;
 		build.DestAccelerationStructureData = w.blas.Address();
 		build.SourceAccelerationStructureData = w.blas.Address();
-		build.ScratchAccelerationStructureData = g_windScratch->GetGPUVirtualAddress();
+		// its own part of the ring; a barrier only when the ring comes round (the updates before must be done with it)
+		UINT64 size = (w.updateScratch + kWindScratchAlign - 1) & ~(kWindScratchAlign - 1);
+		if (scratchUsed + size > g_windScratchRing) {
+			D3D12_RESOURCE_BARRIER b = UavBarrier(nullptr);
+			list->ResourceBarrier(1, &b);
+			scratchUsed = 0;
+		}
+		build.ScratchAccelerationStructureData = g_windScratch->GetGPUVirtualAddress() + scratchUsed;
+		scratchUsed += size;
 		list->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
-		D3D12_RESOURCE_BARRIER b = UavBarrier(nullptr);
-		list->ResourceBarrier(1, &b);
 	}
+	// every update done before the TLAS build reads them (and before the swayed copies go back to being written)
+	D3D12_RESOURCE_BARRIER done = UavBarrier(nullptr);
+	list->ResourceBarrier(1, &done);
 	list->ResourceBarrier(static_cast<UINT>(toWrite.size()), toWrite.data());
 }
 
