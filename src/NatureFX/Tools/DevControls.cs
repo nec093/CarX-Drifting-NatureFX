@@ -180,6 +180,8 @@ namespace NatureFX.Tools {
 			Slider(dlss, "dlss-jitter", "Jitter", () => Dlaa.DevJitterScale, v => Dlaa.DevJitterScale = v, 0.0f, 1.0f, 0.01f);
 			Switch(dlss, "dlss-rr-upscale", "Ray Reconstruction with upscaling (test)", () => Dlaa.DevRayReconstructionUpscaling, v => Dlaa.DevRayReconstructionUpscaling = v,
 				"Off for now: it shook the picture and once hung the GPU. NVIDIA's own log goes to kino/mods/NatureFX/NFX_ngx.log.");
+			Switch(dlss, "dlss-taau-path", "Upscaling through HDRP's TAAU pass (the old way)", () => Dlaa.DevTaauPath, v => Dlaa.DevTaauPath = v,
+				"DLSS's upscaled picture handed to the screen by HDRP's TAAU pass, HDRP jittering, instead of HDRP's final pass (NFX_UpscaledFinal) with the camera jittered by NatureFX. Not saved.");
 			Switch(dlss, "dlss-taau", "Upscale with HDRP's TAAU instead (test)", () => Dlaa.DevHdrpTaau, v => Dlaa.DevHdrpTaau = v,
 				"The same lower resolution upscaled by HDRP's own TAAU: tells DLSS's doing from the resolution's.");
 			Info(dlss, "now", () => Dlaa.Status);

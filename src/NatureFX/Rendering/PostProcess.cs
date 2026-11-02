@@ -364,7 +364,7 @@ namespace NatureFX.Rendering {
 			}
 			root_ = new GameObject("NatureFX.Post");
 			Dlaa.Hook();
-			Dlaa.SetShader(bundle.Get(Dlaa.UpscaledShaderName));
+			Dlaa.SetShader(bundle.Get(Dlaa.UpscaledShaderName), bundle.Get(Dlaa.UpscaledFinalShaderName));
 			UnityEngine.Object.DontDestroyOnLoad(root_);
 			profile_ = ScriptableObject.CreateInstance<VolumeProfile>();
 			profile_.name = "NatureFX.Post";
@@ -407,7 +407,7 @@ namespace NatureFX.Rendering {
 		}
 
 		public void Reload(ShaderBundle bundle) {
-			Dlaa.SetShader(bundle.Get(Dlaa.UpscaledShaderName));
+			Dlaa.SetShader(bundle.Get(Dlaa.UpscaledShaderName), bundle.Get(Dlaa.UpscaledFinalShaderName));
 			var shader = bundle.Get(ShaderName);
 			if (shader != null && material_ != null) {
 				material_.shader = shader;

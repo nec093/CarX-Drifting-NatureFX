@@ -432,3 +432,5 @@
   - フレーム設定オフ（独自ポスト中）: LensFlareDataDriven, ColorGrading, Tonemapping, Vignette, ChromaticAberration, FilmGrain, LensDistortion, PaniniProjection（名前で解決、無ければ飛ばす）。
   - HDRP の Fog コンポーネント: 独自の霧のときは enabled オフ。
   - DXR 1.1 既定（移行 75）。
+  - 露出の「Game」は「Fixed」（FixedExposure、既定 14 EV、移行 76）に置き換え。粒子の太陽にもトレースした太陽マップ。
+  - DLSS のアップスケールの独自経路: HDRP の最終パス（m_FinalPassMaterial）を NFX_UpscaledFinal に差し替え（HDRP 2023.2 FinalPass.shader の処理をそのまま: 反転・ビューポート・グレイン・ディザ・after post・アルファ・HDR 出力と UI。入力だけ _NFX_UpscaledFinal を表示解像度で）。HDRP の TAA はオフ、DRS のフィルターは CatmullRom、ジッターは Dlaa（レンダー解像度の画素で）。Developer の DLSS tests に旧方式（TAAU）へ戻すスイッチ。
