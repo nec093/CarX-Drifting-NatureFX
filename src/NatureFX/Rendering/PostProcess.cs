@@ -442,7 +442,9 @@ namespace NatureFX.Rendering {
 			Dlaa.RayReconstructionWanted = s.DlssRayReconstruction;
 			Adapt(s);
 			string[] curves = { "ACES", "Neutral", "AgX", "none" };
-			Status = s.ExposureMode == 1
+			Status = s.ExposureMode == 0 && !float.IsNaN(ev_)
+				? FormattableString.Invariant($"own: the game's automatic exposure metered here {ev_:0.00} EV100 {gameWhat_}, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
+				: s.ExposureMode == 1
 				? FormattableString.Invariant($"own: exposure {ev_:0.00} EV100, eye adaptation, white balance {(warm_ >= 0 ? "cooler" : "warmer")} by {Mathf.Abs(warm_):0.00} stops (red / blue), bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
 				: FormattableString.Invariant($"own: the game's exposure {gameWhat_}, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}");
 		}
@@ -497,22 +499,34 @@ namespace NatureFX.Rendering {
 
 		// eye adaptation (with the game's exposure chosen, HDRP keeps it)
 		private void Adapt(ISettings s) {
+			// the game's automatic exposure under the own post-processing: HDRP would meter the picture this pass has
+			// already tone mapped (0..1), find it dark, open up, and so on down to its lowest limit (white). Metered here
+			// instead, within the game's range (its top raised for the real sun)
+			bool eye = s.ExposureMode == 1;
+			bool gameAuto = false;
 			if (s.ExposureMode == 0) {
-				ev_ = float.NaN; // nothing of the eye adaptation's left over (its fixed exposure, the white balance)
 				GameExposure();
-			} else {
+				gameAuto = !pass_.MeterOnly && (gameMode_ == ExposureMode.Automatic || gameMode_ == ExposureMode.AutomaticHistogram);
+				if (!gameAuto) {
+					ev_ = float.NaN; // HDRP's (the game's) exposure: nothing of the eye adaptation's left over
+				}
+			}
+			bool metering = eye || gameAuto;
+			if (metering) {
 				exposure_.active = true;
 				exposure_.mode.Override(ExposureMode.Fixed);
 			}
-			if (s.ExposureMode == 1 && float.IsNaN(ev_) && !float.IsNaN(HdrpEV)) {
+			float lowest = eye ? s.AutoExposureMin : gameMin_;
+			float highest = eye ? Mathf.Max(s.AutoExposureMin + 0.5f, s.AutoExposureMax) : Mathf.Max(gameMin_ + 0.5f, gameMax_ + Units.Log2Scale);
+			if (metering && float.IsNaN(ev_) && !float.IsNaN(HdrpEV)) {
 				// taking over: from where HDRP's exposure is (it adapted until now), not a jump to the first reading
-				ev_ = HdrpEV;
+				ev_ = Mathf.Clamp(HdrpEV, lowest, highest);
 			}
-			if (s.ExposureMode == 1 && pass_.MeterFrame != lastMeter_ && pass_.MeterFrame >= 0) {
+			if (metering && pass_.MeterFrame != lastMeter_ && pass_.MeterFrame >= 0) {
 				lastMeter_ = pass_.MeterFrame;
 				// real-world EVs (the sun is raised to real sunshine, Units): a moonlit night and a sunny day where they are
 				float metered = MeteredEV(pass_.Meter);
-				float target = Mathf.Clamp(metered + NightKey(metered, s.NightDarkness), s.AutoExposureMin, Mathf.Max(s.AutoExposureMin + 0.5f, s.AutoExposureMax));
+				float target = Mathf.Clamp(metered + (eye ? NightKey(metered, s.NightDarkness) : gameCompensation_ * -1.0f), lowest, highest);
 				// a flash (an afterfire, a spark, a lamp swinging past) is not adapted to: the eye closes only to light
 				// that stays, so going brighter takes the darkest reading of the last half second (the headlights' road
 				// went dark at every afterfire)
@@ -540,12 +554,12 @@ namespace NatureFX.Rendering {
 			if (float.IsNaN(ev_) || float.IsInfinity(ev_)) {
 				ev_ = float.NaN;
 			}
-			OwnExposure = s.ExposureMode == 1 && !float.IsNaN(ev_);
+			OwnExposure = metering && !float.IsNaN(ev_);
 			// until the first reading HDRP keeps its own (a fixed exposure of nothing would flash the first frames)
-			if (s.ExposureMode == 1) {
+			if (metering) {
 				exposure_.active = !float.IsNaN(ev_);
 			}
-			pass_.White = WhiteBalance(s);
+			pass_.White = eye ? WhiteBalance(s) : Vector4.zero;
 			if (!float.IsNaN(ev_)) {
 				// the compensation: the own final pass's with the own post-processing, HDRP's fixed exposure without it
 				exposure_.fixedExposure.Override(pass_ != null && pass_.MeterOnly ? ev_ - s.Exposure : ev_);
