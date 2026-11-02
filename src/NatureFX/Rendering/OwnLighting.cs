@@ -225,6 +225,8 @@ namespace NatureFX.Rendering {
 		// a scene load: look at the renderers again now
 		public static void Rescan() {
 			nextRendererScan_ = 0.0f;
+			// a new map: the check of HDRP's sun runs again (a wrong verdict on one map stays there)
+			SunUnavailable = false;
 		}
 
 		public static void HdrpLightOn(Light light) {

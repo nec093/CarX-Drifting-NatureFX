@@ -820,7 +820,10 @@ namespace NatureFX.Rendering {
 		private float nextSunCheck_;
 		private int sunZero_;
 		private void CheckOwnSun(CommandBuffer cmd) {
-			if (!OwnLighting.Sun || SunDirection.w <= 0.0f || SunDirection.y < 0.15f || Time.unscaledTime < nextSunCheck_ || sunExact_ == null) {
+			// by day only: the moon's light (a fraction of a lux) came out as nothing in the half floats at night's
+			// exposure, which took the sun away from the own engine for the rest of the session
+			float illuminance = Mathf.Max(SunIlluminance.x, Mathf.Max(SunIlluminance.y, SunIlluminance.z));
+			if (!OwnLighting.Sun || SunDirection.w <= 0.0f || SunDirection.y < 0.15f || illuminance < 1000.0f || Time.unscaledTime < nextSunCheck_ || sunExact_ == null) {
 				return;
 			}
 			nextSunCheck_ = Time.unscaledTime + 2.0f;
