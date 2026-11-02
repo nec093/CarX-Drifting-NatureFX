@@ -896,6 +896,11 @@ namespace NatureFX {
 				d.FixedExposure = 14.0f;
 				d.ConfigVersion = 76;
 			}
+			if (d.ConfigVersion < 77) {
+				// NVIDIA's NRD by default: a reset to the defaults went back to the own variance guided filter (noisy)
+				d.RTDenoiser = 2;
+				d.ConfigVersion = 77;
+			}
 		}
 
 		public static void Save() {
