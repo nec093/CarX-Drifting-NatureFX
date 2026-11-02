@@ -452,6 +452,12 @@ namespace NatureFX {
 			                         "Independent of the ray tracing switches.");
 			Other(Widgets.Switch("Native sky", S.NativeSky, v => S.NativeSky = v));
 			Widgets.Info($"Now: {mod_.RT.SkyStatus}");
+			Widgets.BeginDependent(S.NativeSky);
+			Other(Widgets.Switch("Sky light and reflections from the own engine", S.OwnSkyLighting, v => S.OwnSkyLighting = v,
+				"HDRP's sky light, sky reflections and sky are switched off; the own engine's GI and reflections give them, " +
+				"blocked by what is around (no open sky in a garage's paint). Each part only while its ray traced pass runs."));
+			Widgets.Info($"Own sky lighting: {Rendering.OwnLighting.Status}");
+			Widgets.EndDependent();
 			Widgets.Info($"HDRP's sky: {mod_.Volume.SkyState}");
 			Widgets.Info($"Cube for HDRP: {Rendering.AtmospherePass.CubeStatus}");
 			Widgets.Info($"Sky light: {Rendering.AtmospherePass.ProbeStatus}");

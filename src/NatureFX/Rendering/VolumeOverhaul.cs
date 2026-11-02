@@ -243,17 +243,20 @@ namespace NatureFX.Rendering {
 			// A3: with the own engine's sky running, HDRP's sky is a cube map of it (its sky reflections, reflection
 			// probes and ambient light then show the engine's sky, clouds included; by night its moon lit sky), redrawn
 			// by HDRP a few times a second; the screen's sky pixels are the engine's own (AtmospherePass)
-			var cube = engineSky ? AtmospherePass.SkyCube : null;
-			int want = cube != null ? (int)SkyType.HDRI : (int)SkyType.PhysicallyBased;
+			// OwnLighting: with the sky's light and the reflections from the own engine, HDRP draws no sky at all (type
+			// none, 0), and the own sky is no longer turned into a cube map for it (AtmospherePass.FeedHdrp)
+			bool none = engineSky && OwnLighting.Sky;
+			var cube = engineSky && !none ? AtmospherePass.SkyCube : null;
+			int want = none ? 0 : cube != null ? (int)SkyType.HDRI : (int)SkyType.PhysicallyBased;
 			if (!environment_.skyType.overrideState || environment_.skyType.value != want) {
 				nightSky_ ??= profile_.Add<PhysicallyBasedSky>();
 				engineSky_ ??= profile_.Add<HDRISky>();
-				nightSky_.active = cube == null;
+				nightSky_.active = cube == null && !none;
 				engineSky_.active = cube != null;
 				environment_.skyType.Override(want);
 				lastSkyElevation_ = float.NaN; // redraw the sky's lighting now
 			}
-			if (cube != null) {
+			if (cube != null || none) {
 				UnloadTrackSkyTextures(cube);
 			} else if (unloadedSky_.Count > 0) {
 				// HDRP draws the track's sky again: Unity loads them back from disk as they are used
@@ -269,7 +272,12 @@ namespace NatureFX.Rendering {
 				engineSky_.updatePeriod.Override(0.2f);
 			}
 			const float night = 0.0f;
-			indirect_.active = false;
+			// OwnLighting: HDRP's sky light (and the lightmaps' light it scales the same way) and its reflections off
+			// while the own engine's composites put them back
+			indirect_.active = OwnLighting.Ambient || OwnLighting.Reflections;
+			indirect_.indirectDiffuseLightingMultiplier.Override(OwnLighting.Ambient ? 0.0f : 1.0f);
+			indirect_.reflectionLightingMultiplier.Override(OwnLighting.Reflections ? 0.0f : 1.0f);
+			indirect_.reflectionProbeIntensityMultiplier.Override(OwnLighting.Reflections ? 0.0f : 1.0f);
 			DimSky(env, night);
 			string trackName = trackSky_ >= 0 && SkyTypes() != null && SkyTypes().TryGetValue(trackSky_, out var t) ? t.Name : $"type {trackSky_}";
 			// what HDRP renders with in the end, and what the track had

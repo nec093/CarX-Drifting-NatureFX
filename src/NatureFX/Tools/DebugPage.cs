@@ -802,6 +802,7 @@ namespace NatureFX.Tools {
 			var sky = new Section("sky", "Sky, fog, clouds");
 			sky.Try("sky", () => rt.SkyStatus);
 			sky.Try("HDRP sky", () => mod.Volume.SkyState);
+			sky.Try("own sky lighting", () => OwnLighting.Status);
 			sky.Try("cube for HDRP", () => AtmospherePass.CubeStatus);
 			sky.Try("sky light", () => AtmospherePass.ProbeStatus);
 			sky.Try("track reflection probes", () => mod.TrackProbes.Count > 0 ? $"{mod.TrackProbes.Count} off" : "none off");

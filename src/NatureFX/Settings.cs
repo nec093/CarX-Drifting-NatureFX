@@ -43,6 +43,7 @@ namespace NatureFX {
 		public bool SyncGameNight { get; set; }            // the game's night lighting (street lights) follows NatureFX's sun
 		public float TimeOfDay { get; set; }          // hours 0..24
 		public bool TimePasses { get; set; }          // the time of day runs on by itself
+		public bool OwnSkyLighting { get; set; }      // HDRP's sky light, reflections and sky from the own engine (OwnLighting)
 		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
 		public float SunMaxElevation { get; set; }    // degrees at noon
@@ -258,6 +259,7 @@ namespace NatureFX {
 		public bool SyncGameNight { get; set; }            // the game's night lighting (street lights) follows NatureFX's sun
 		public float TimeOfDay { get; set; }          // hours 0..24
 		public bool TimePasses { get; set; }          // the time of day runs on by itself
+		public bool OwnSkyLighting { get; set; }      // HDRP's sky light, reflections and sky from the own engine (OwnLighting)
 		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
 		public float SunMaxElevation { get; set; }    // degrees at noon
@@ -802,6 +804,11 @@ namespace NatureFX {
 				// the time of day running on: off, an hour a minute
 				d.TimeSpeed = 60.0f;
 				d.ConfigVersion = 63;
+			}
+			if (d.ConfigVersion < 64) {
+				// HDRP's sky light, reflections and sky handed over to the own engine
+				d.OwnSkyLighting = true;
+				d.ConfigVersion = 64;
 			}
 		}
 

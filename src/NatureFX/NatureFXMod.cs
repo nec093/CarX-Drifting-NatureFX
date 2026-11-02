@@ -207,6 +207,7 @@ namespace NatureFX {
 			Fog.Update(s.Enabled, camPos, hdrpVolumetric, s.AerialHaze, nativeFog);
 			CameraFog.Update(cam, s.Enabled && hdrpVolumetric);
 			CameraClouds.Update(cam, s.Enabled && s.Clouds && !s.NativeSky);
+			OwnLighting.Update(s.Enabled && s.NativeSky && s.OwnSkyLighting && NativeEngine.Active);
 			Volume.UpdateSky(Sun.Sun, s.Enabled && s.SunOverride, s.Enabled && s.NativeSky);
 			Weather.UpdateIce(s.Enabled && s.Accumulation, Sun.Sun);
 			PhotoMode.Update(cam);

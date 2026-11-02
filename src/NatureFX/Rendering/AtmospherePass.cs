@@ -39,6 +39,8 @@ namespace NatureFX.Rendering {
 		// reflection probes and ambient probe; null until the first frame of the engine's sky
 		public static RenderTexture SkyCube { get; private set; }
 		public bool FeedHdrp = true;
+		// the own sky as HDRP's cube map: not once HDRP draws no sky (OwnLighting)
+		private bool Feed => FeedHdrp && !OwnLighting.Sky;
 		public float StarBrightness = 4.0f;
 		// what the cube HDRP gets holds: the texel straight up and one at the horizon, read back now and then (F8)
 		public static string CubeStatus { get; private set; } = "not read yet";
@@ -247,7 +249,7 @@ namespace NatureFX.Rendering {
 				SkyStatus = FogStatus = "unavailable (HDRP's ambient probe not reachable)";
 				return;
 			}
-			NativeEngine.BeginFrame(cam, lightDir, SunController.SkyLightRadius, lightGround, frame_++, Vector4.zero, Lights, hdrpProbe);
+			NativeEngine.BeginFrame(cam, lightDir, SunController.SkyLightRadius, lightGround, frame_++, Vector4.zero, Lights, OwnLighting.Probe(ctx.hdCamera) ?? hdrpProbe);
 			ReadProbes(hdrpProbe);
 
 			float lux = SunController.SkyLightAbove;
@@ -286,7 +288,7 @@ namespace NatureFX.Rendering {
 			// was gone from -5.7° until the moon took over, then came back at once.
 			float day = SunController.SkyLightIsMoon ? 1.0f
 				: Mathf.SmoothStep(0.0f, 1.0f, Mathf.InverseLerp(Mathf.Sin(-18.0f * Mathf.Deg2Rad), Mathf.Sin(-12.0f * Mathf.Deg2Rad), SunController.RealSunY));
-			if (FeedHdrp && SkyCube == null) {
+			if (Feed && SkyCube == null) {
 				SkyCube = new RenderTexture(NativeEngine.SkyCubeSize, NativeEngine.SkyCubeSize, 0, GraphicsFormat.R16G16B16A16_SFloat) {
 					dimension = TextureDimension.Cube, useMipMap = false, name = "NFX_SkyCube", hideFlags = HideFlags.DontSave
 				};
@@ -294,7 +296,7 @@ namespace NatureFX.Rendering {
 			}
 			NativeEngine.TraceSky(cmd, bridge, skyView_, skyTransmittance_, lux, cameraHeight_, aerosols,
 				cloudsOn ? clouds_ : null, cloudSize, CloudController.NativeCover, CloudController.NativeMotion,
-				shadowsOn ? cloudShadow_ : null, SkyAmbient && day > 0.0f, FeedHdrp ? SkyCube : null);
+				shadowsOn ? cloudShadow_ : null, SkyAmbient, Feed ? SkyCube : null);
 			if (cloudsOn) {
 				// each frame marches the clouds from another offset: blended with the history at last frame's place
 				int temporal = bridge.FindKernel("CloudTemporal");
@@ -325,7 +327,7 @@ namespace NatureFX.Rendering {
 			Shared.SkyDrawn = true;
 			bool probe = SkyAmbient && NativeEngine.SkyProbe != null;
 			// HDRP's own sky light is the engine's sky when it gets the cube: nothing left to swap in the composite
-			Shared.SkyLight = probe && !(FeedHdrp && SkyCube != null) ? day : 0.0f;
+			Shared.SkyLight = probe && !(Feed && SkyCube != null) ? day : 0.0f;
 			if (probe) {
 				cmd.SetGlobalBuffer(SkyLightId, NativeEngine.SkyProbe);
 			}

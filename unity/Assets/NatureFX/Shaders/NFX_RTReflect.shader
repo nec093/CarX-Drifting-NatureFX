@@ -30,6 +30,34 @@ Shader "Hidden/NatureFX/RTReflect"
     TEXTURECUBE(_NFX_HdrpSkyCube);
     SAMPLER(sampler_NFX_HdrpSkyCube);
     float4 _NFX_HdrpSky;
+    // OwnLighting: HDRP mirrors nothing; the sky where no reflection is traced comes from the own sky's probe (SH9,
+    // HDRP's packing), as much as the GI's sky share lets through
+    float _NFX_OwnReflections;
+    StructuredBuffer<float4> _NFX_AmbientProbe;
+    TEXTURE2D_X(_NFX_SkyShareTex);   // the shadow pass's GI result: a the sky share (or rgb a one bounce factor)
+    float4 _NFX_SkyShareParams;      // x 1: there is one, y 1: GI (a), else rgb
+
+    float3 OwnProbeSH9(float3 n)
+    {
+        float4 vA = float4(n, 1.0);
+        float3 x1 = float3(dot(_NFX_AmbientProbe[0], vA), dot(_NFX_AmbientProbe[1], vA), dot(_NFX_AmbientProbe[2], vA));
+        float4 vB = n.xyzz * n.yzzx;
+        float3 x2 = float3(dot(_NFX_AmbientProbe[3], vB), dot(_NFX_AmbientProbe[4], vB), dot(_NFX_AmbientProbe[5], vB));
+        float vC = n.x * n.x - n.y * n.y;
+        return max(x1 + x2 + _NFX_AmbientProbe[6].rgb * vC, 0.0);
+    }
+
+    // the split sum's environment term for a GGX lobe (Karis' fit): how much of the sky a surface mirrors
+    float3 EnvBrdf(float3 f0, float roughness, float nv)
+    {
+        const float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);
+        const float4 c1 = float4(1.0, 0.0425, 1.04, -0.04);
+        float4 r = roughness * c0 + c1;
+        float a004 = min(r.x * r.x, exp2(-9.28 * nv)) * r.x + r.y;
+        float2 ab = float2(-1.04, 1.04) * a004 + r.zw;
+        return f0 * ab.x + ab.y;
+    }
+
 
     TEXTURE2D_X(_NFX_SurfaceAlbedo);  // RTSurfaceTrace: rgb albedo, a metalness and clear coat
     TEXTURE2D_X(_NFX_SurfaceNormal);  // w != 0: the trace found the surface the pixel shows
@@ -47,6 +75,30 @@ Shader "Hidden/NatureFX/RTReflect"
     }
 
     #define SampleRT(tex, uv) SAMPLE_TEXTURE2D_X_LOD(tex, s_linear_clamp_sampler, (uv) * _RTHandleScale.xy, 0)
+
+    // the own sky a surface mirrors where no reflection is traced (rough ones): its probe in the mirrored direction
+    // (blurry, as a rough surface mirrors it), times the share of the sky the GI sees from there
+    float3 OwnSkyReflection(uint2 pixel, float2 uv, float depth, NormalData nd, float roughness)
+    {
+        float3 posWS = ComputeWorldSpacePosition(uv, depth, UNITY_MATRIX_I_VP); // camera relative
+        float3 V = -normalize(posWS);
+        float3 n = nd.normalWS;
+        float3 R = reflect(-V, n);
+        float nv = saturate(dot(n, V));
+        float4 surf = LOAD_TEXTURE2D_X(_NFX_SurfaceAlbedo, pixel);
+        bool exact = LOAD_TEXTURE2D_X(_NFX_SurfaceNormal, pixel).w != 0.0;
+        float metal = exact ? saturate((surf.a - (surf.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0;
+        float3 f0 = lerp(0.04, exact ? surf.rgb : 0.04, metal);
+        float share = 1.0;
+        if (_NFX_SkyShareParams.x > 0.5)
+        {
+            float4 g = SampleRT(_NFX_SkyShareTex, uv);
+            share = _NFX_SkyShareParams.y > 0.5 ? saturate(g.a) : saturate(Luminance(g.rgb));
+        }
+        // the lobe leans towards the normal as it widens
+        float3 dir = normalize(lerp(R, n, roughness * roughness));
+        return EnvBrdf(f0, roughness, nv) * OwnProbeSH9(dir) * GetCurrentExposureMultiplier() * share;
+    }
 
     // Glass reflections (RTGlassPass): the change Glass.hlsl worked out (rgb, signed: the sky HDRP mirrored swapped for
     // what the ray found), never taking away more than the glass reflects (a: its Fresnel)
@@ -121,8 +173,10 @@ Shader "Hidden/NatureFX/RTReflect"
         float cutoff = max(_NFX_ReflCompose.y, 1e-3);
         float roughness = ReflRoughness(pixel, nd.perceptualRoughness);
         float smooth = saturate((cutoff - roughness) / (cutoff * 0.25));
+        bool own = _NFX_OwnReflections > 0.5;
+        float3 ownSky = own ? OwnSkyReflection(pixel, uv, depth, nd, roughness) : 0.0;
         if (smooth <= 0.0)
-            return float4(color, 1);
+            return float4(color + ownSky, 1);
 
         // joint bilateral upsample: the 4 nearest trace texels weighted by depth similarity
         float centerDepth = LinearEyeDepth(depth, _ZBufferParams);
@@ -145,11 +199,16 @@ Shader "Hidden/NatureFX/RTReflect"
         }
         refl /= wsum;
         if (refl.a <= 1e-4)
-            return float4(color, 1); // nothing traced here (sky or rough): HDRP's reflection stays
+            return float4(color + ownSky, 1); // nothing traced here (sky or rough): HDRP's reflection stays, or the own sky
 
         // refl.rgb = Fresnel * reflected light, refl.a = Fresnel (from the Reflection trace). Swap that share of the
         // image (HDRP's own probe / screen space reflection) for the traced one.
         float weight = smooth * _NFX_ReflCompose.x;
+        if (own)
+        {
+            // HDRP mirrored nothing: the traced reflection added as it is, the own sky for the part it does not cover
+            return float4(max(color + refl.rgb * weight + ownSky * (1.0 - saturate(weight)), 0.0), 1);
+        }
         float share = saturate(refl.a * weight);
         // what to take away: the Fresnel share of the image, or at least HDRP's own mirrored sky in that share (taking
         // only a share of the whole image left nearly all of HDRP's sky reflection on a car's paint, whose colour is

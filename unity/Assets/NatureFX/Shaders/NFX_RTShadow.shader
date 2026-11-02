@@ -107,7 +107,9 @@ Shader "Hidden/NatureFX/RTShadow"
         float vC = n.x * n.x - n.y * n.y;
         return max(x1 + x2 + _NFX_SkyProbe[6].rgb * vC, 0.0);
     }
-    StructuredBuffer<float4> _NFX_AmbientProbe; // HDRP's diffuse sky probe (7 float4, the SH9 constants)
+    StructuredBuffer<float4> _NFX_AmbientProbe; // the sky's diffuse probe (7 float4, the SH9 constants): HDRP's, or the
+                                                // own engine's once it replaces HDRP's sky light (OwnLighting)
+    float _NFX_OwnAmbient;                      // 1: HDRP's sky light is off; the composite adds the own sky's light
     float4 _NFX_LeafParams;           // x: share of the sun leaves let through, y: 1 = light shafts, z: 1 = local light shadows,
                                       // w: own engine GI bounce strength (0: the ambient texture is the one bounce factor)
     float4 _NFX_SunExact;             // x: 1 when _NFX_SunExactTex holds this frame's exact sun light
@@ -549,6 +551,17 @@ Shader "Hidden/NatureFX/RTShadow"
             float3 skyAlbedo = (known ? surface.rgb : 0.3) * (1.0 - skyMetal);
             skyDelta = skyAlbedo * (SkyProbeSH9(n) - ProbeSH9(n)) * GetCurrentExposureMultiplier() * ambientFactor * _NFX_SkyAmbientOn;
         }
+        // OwnLighting: HDRP lit nothing with its sky; the own sky's light on the surface's colour, through the GI's sky
+        // share (ambientFactor), is added in each of the ways below instead of darkening HDRP's
+        bool ownAmbient = _NFX_OwnAmbient > 0.5;
+        float3 ownSky = 0.0;
+        if (ownAmbient)
+        {
+            float ownMetal = known ? saturate((surface.a - (surface.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0;
+            float3 ownAlbedo = (known ? surface.rgb : 0.3) * (1.0 - ownMetal);
+            ownSky = ownAlbedo * ProbeSH9(n) * GetCurrentExposureMultiplier() * ambientFactor;
+            skyDelta = 0.0;
+        }
         // the sun light HDRP added here, worked out from the G-buffer as HDRP does (a = 0 where it is not known)
         float4 exact = _NFX_SunExact.x > 0.5 ? LOAD_TEXTURE2D_X(_NFX_SunExactTex, pixel) : 0.0;
         bool exactKnown = exact.a > 0.5;
@@ -587,7 +600,9 @@ Shader "Hidden/NatureFX/RTShadow"
             // the sky light HDRP baked in, as its probe on the surface's colour, never more than G3 holds; the rest
             // of G3 is the glow
             float3 bakeEstimate = albedoD * ProbeSH9(n) * GetCurrentExposureMultiplier();
-            float3 bake = bakeEstimate * min(1.0, Luminance(g3) / max(Luminance(bakeEstimate), 1e-6));
+            // (none with OwnLighting: HDRP's indirect diffuse multiplier, which scales the baked light too, is 0, and
+            // all of G3 is the glow)
+            float3 bake = ownAmbient ? 0.0 : bakeEstimate * min(1.0, Luminance(g3) / max(Luminance(bakeEstimate), 1e-6));
             float3 glow = max(g3 - bake, 0.0);
             float4 lampsTotal = _NFX_SunExact.y > 0.5 ? LOAD_TEXTURE2D_X(_NFX_LampsTotalTex, pixel) : 0.0;
             float4 lampsBlocked = _NFX_SunExact.y > 0.5 ? LOAD_TEXTURE2D_X(_NFX_LampsExactTex, pixel) : 0.0;
@@ -622,6 +637,8 @@ Shader "Hidden/NatureFX/RTShadow"
         }
         if (shadowStrength <= 0.0)
         {
+            if (ownAmbient)
+                return float4(max(color + ownSky + bounceLight, 0.0), 1.0);
             if (gi)
             {
                 skyPart *= min(1.0, Luminance(color) / max(Luminance(skyPart), 1e-6));
@@ -650,7 +667,12 @@ Shader "Hidden/NatureFX/RTShadow"
         float sunFactor = 1.0 - (1.0 - sunVisible) * shadowStrength;
         float3 rest = max(color - sunPart, 0.0);
         float3 result;
-        if (gi)
+        if (ownAmbient)
+        {
+            // HDRP's pixel holds no sky light: the rest (lamps, glow, highlights) as it is, the own sky added
+            result = sunPart * sunFactor + rest + ownSky + bounceLight;
+        }
+        else if (gi)
         {
             skyPart *= min(1.0, Luminance(rest) / max(Luminance(skyPart), 1e-6));
             result = sunPart * sunFactor + max(rest - skyPart * (1.0 - ambientFactor), 0.0) + bounceLight;

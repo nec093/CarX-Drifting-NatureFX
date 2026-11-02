@@ -23,6 +23,8 @@ namespace NatureFX.Rendering {
 		private static readonly int ReflCompose = Shader.PropertyToID("_NFX_ReflCompose");
 		private static readonly int HdrpSkyCubeId = Shader.PropertyToID("_NFX_HdrpSkyCube");
 		private static readonly int HdrpSkyId = Shader.PropertyToID("_NFX_HdrpSky");
+		private static readonly int OwnReflectionsId = Shader.PropertyToID("_NFX_OwnReflections");
+		private static readonly int AmbientProbeId = Shader.PropertyToID("_NFX_AmbientProbe");
 		private static readonly int DistTex = Shader.PropertyToID("_NFX_DistTex");
 		private static readonly int ExposureTexture = Shader.PropertyToID("_ExposureTexture");
 
@@ -113,7 +115,7 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			var exposure = HdrpBindings.ExposureTexture(ctx.hdCamera);
-			var ambient = HdrpBindings.AmbientProbe(ctx.hdCamera);
+			var ambient = OwnLighting.Probe(ctx.hdCamera);
 			if (exposure == null || ambient == null) {
 				Status = "unavailable (HDRP exposure or sky probe not reachable)";
 				return;
@@ -200,7 +202,12 @@ namespace NatureFX.Rendering {
 			// mirrored sky to take away is that much weaker than the cube (the paint went dark taking the whole sky off)
 			var indirect = VolumeOverhaul.Stack()?.GetComponent<UnityEngine.Rendering.HighDefinition.IndirectLightingController>();
 			float reflMul = indirect != null ? Mathf.Max(indirect.reflectionLightingMultiplier.value, 0.0f) : 1.0f;
-			props_.SetVector(HdrpSkyId, new Vector4(hdrpSky ? 1.0f : 0.0f, reflMul, 0.0f, 0.0f));
+			props_.SetVector(HdrpSkyId, new Vector4(hdrpSky && !OwnLighting.Reflections ? 1.0f : 0.0f, reflMul, 0.0f, 0.0f));
+			// OwnLighting: HDRP mirrors nothing; the composite adds the traced reflections and, where it traces none,
+			// the own sky (its probe) through the GI's sky share
+			props_.SetFloat(OwnReflectionsId, OwnLighting.Reflections ? 1.0f : 0.0f);
+			props_.SetBuffer(AmbientProbeId, ambient);
+			OwnLighting.ReflectionComposed();
 			CoreUtils.SetRenderTarget(cmd, ctx.cameraColorBuffer, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, CompositeMaterial, props_, 0);
 			RTTimings.ReflectionFilter.End(cmd);

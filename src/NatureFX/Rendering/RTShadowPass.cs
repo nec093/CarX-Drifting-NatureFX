@@ -138,6 +138,9 @@ namespace NatureFX.Rendering {
 		private static readonly int SkyTransmittanceTex = Shader.PropertyToID("_NFX_SkyTransmittance");
 		private static readonly int SkyParamsId = Shader.PropertyToID("_NFX_SkyParams");
 		private static readonly int SkyAmbientOnId = Shader.PropertyToID("_NFX_SkyAmbientOn");
+		private static readonly int OwnAmbientId = Shader.PropertyToID("_NFX_OwnAmbient");
+		public static readonly int SkyShareTexId = Shader.PropertyToID("_NFX_SkyShareTex");
+		public static readonly int SkyShareParamsId = Shader.PropertyToID("_NFX_SkyShareParams");
 
 		private static RTHandle CloudTarget(int w, int h, string name) {
 			return RTHandles.Alloc(w, h, TextureXR.slices, dimension: TextureXR.dimension,
@@ -469,7 +472,8 @@ namespace NatureFX.Rendering {
 				Status = $"unavailable (own engine not running: {NativeEngine.Info})";
 				return;
 			}
-			var probe = HdrpBindings.AmbientProbe(ctx.hdCamera);
+			// the sky's light: the own engine's probe once it replaces HDRP's (OwnLighting), HDRP's otherwise
+			var probe = OwnLighting.Probe(ctx.hdCamera);
 			var exposure = HdrpBindings.ExposureTexture(ctx.hdCamera);
 			if (probe == null || exposure == null) {
 				Status = "unavailable (HDRP sky probe or exposure not reachable)";
@@ -654,6 +658,14 @@ namespace NatureFX.Rendering {
 			props_.SetBuffer(SkyProbeTex, skyProbe ? NativeEngine.SkyProbe : probe);
 			props_.SetVector(SkyParamsId, new Vector4(skyUsed ? (cloudsUsed_ ? 2.0f : 1.0f) : 0.0f, SkySunLux, cameraHeight, sunRadius));
 			props_.SetFloat(SkyAmbientOnId, skyProbe ? skyShare : 0.0f); // the share of the engine's sky light
+			// OwnLighting: HDRP's sky light is off (its indirect diffuse multiplier 0): the composite adds the own sky's
+			// light on the surface's colour through the GI's sky share instead of darkening HDRP's
+			props_.SetFloat(OwnAmbientId, OwnLighting.Ambient ? 1.0f : 0.0f);
+			// the GI's sky share for the reflections composite (its rough surfaces' sky): a the share with GI, else the
+			// one bounce factor's brightness
+			cmd.SetGlobalTexture(SkyShareTexId, ambientResult ?? color_);
+			cmd.SetGlobalVector(SkyShareParamsId, new Vector4(ambientResult != null ? 1.0f : 0.0f, giUsed_ ? 1.0f : 0.0f, 0.0f, 0.0f));
+			OwnLighting.ShadowComposed();
 			CoreUtils.SetRenderTarget(cmd, ctx.cameraColorBuffer, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, Material, props_, PassComposite);
 			RTTimings.ShadowFilter.End(cmd);
