@@ -148,11 +148,30 @@ namespace NatureFX.Map {
 				fog_.baseHeight.overrideState = false;
 				fog_.maximumHeight.overrideState = false;
 				fog_.maxFogDistance.overrideState = false;
-				if (gameFogOn_) {
+				if (RainExtinction > 0.0f) {
+					fog_.meanFreePath.Override(1.0f / RainExtinction);
+					fog_.baseHeight.Override(baseHeight_ - 5.0f);
+					fog_.maximumHeight.Override(baseHeight_ + 600.0f);
+					fog_.maxFogDistance.Override(5000.0f);
+				} else if (gameFogOn_) {
 					fog_.meanFreePath.overrideState = false;
 				} else {
 					fog_.meanFreePath.Override(100000.0f);
 				}
+			}
+		}
+
+		// Rain's own haze: falling drops and the mist around them. Rain rate (mm/h) from the weather's rain, 1 to 50; the
+		// visibility as measured in rain, about 10 km at 1 mm/h, 1.5 km at 20, 0.8 km at 50 (V = 10 R^-0.65 km), its
+		// extinction 3.912 / V (per metre, the 2 % contrast distance)
+		public static float RainRate => 1.0f + 49.0f * Weather.Current.Rain * Weather.Current.Rain;
+		public static float RainExtinction {
+			get {
+				if (Weather.Current.Rain <= 0.001f) {
+					return 0.0f;
+				}
+				float visibility = 10000.0f * Mathf.Pow(RainRate, -0.65f);
+				return 3.912f / visibility * Mathf.Clamp01(Weather.Current.Rain * 4.0f);
 			}
 		}
 
@@ -173,15 +192,30 @@ namespace NatureFX.Map {
 				meanFreePath = Mathf.Max(1.0f, gameFogDistance_ * scale);
 				baseHeight = baseHeight_ - 300.0f;
 				layer = 1800.0f;
+			} else if (RainExtinction > 0.0f) {
+				// only rain: its haze around the camera, a deep layer (it falls from the clouds)
+				meanFreePath = float.PositiveInfinity;
+				baseHeight = baseHeight_ - 300.0f;
+				layer = 1800.0f;
 			} else {
 				meanFreePath = float.PositiveInfinity;
 				baseHeight = 0.0f;
 				layer = 1000.0f;
 			}
+			// the rain's haze on top of the fog, as dense at the camera as measured (the layer thins upwards from its base)
+			float extinction = float.IsInfinity(meanFreePath) ? 0.0f : 1.0f / meanFreePath;
+			float scaleHeight = Mathf.Max(20.0f, layer / 3.0f);
+			float atCamera = Mathf.Exp(-Mathf.Max(0.0f, baseHeight_ - baseHeight) / scaleHeight);
+			float rain = RainExtinction;
+			if (rain > 0.0f) {
+				extinction += rain / Mathf.Max(atCamera, 0.05f);
+				meanFreePath = 1.0f / extinction;
+			}
 			// clear air scatters a lamp's light at about 2e-5 per metre (1e-4 drew a white veil out of the headlights on a
 			// clear night), times the Headlight beams setting (0: none); the weather's fog in full
 			float beams = NatureFX.Settings.Data != null ? Mathf.Max(0.0f, NatureFX.Settings.Data.HeadlightShafts) : 1.0f;
-			LampAirSigma = weight > 0.0f ? 1e6f : 2e-5f * beams;
+			// rain scatters the lamps' light like the fog it is (the beams show as cones in the rain)
+			LampAirSigma = weight > 0.0f ? 1e6f : 2e-5f * beams + rain * Mathf.Max(beams, 0.5f);
 			// HDRP's fog falls off from its base to its maximum height; as an exponential, a third of the layer
 			NativeParams = new Vector4(float.IsInfinity(meanFreePath) ? 0.0f : 1.0f / meanFreePath, baseHeight, Mathf.Max(20.0f, layer / 3.0f), 1.0f);
 			volume_.weight = 1.0f;

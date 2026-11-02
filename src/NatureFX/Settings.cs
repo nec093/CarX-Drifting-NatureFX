@@ -873,6 +873,12 @@ namespace NatureFX {
 				d.NightDarkness = 1.0f;
 				d.ConfigVersion = 72;
 			}
+			if (d.ConfigVersion < 73) {
+				// the user's choice: the eye opens up to 2 EV at most at night, a fainter bloom
+				d.AutoExposureMin = 2.0f;
+				d.PostBloom = 0.02f;
+				d.ConfigVersion = 73;
+			}
 		}
 
 		public static void Save() {

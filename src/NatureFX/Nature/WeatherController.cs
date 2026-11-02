@@ -53,8 +53,8 @@ namespace NatureFX.Nature {
 			default,
 			new() { Rain = 0.0f, Wetness = 0.0f, Snow = 0.0f, Leaves = 0.05f, Dust = 0.15f, Cloud = 0.0f, FogScale = 1.6f, WindScale = 0.6f },
 			new() { Rain = 0.0f, Wetness = 0.15f, Snow = 0.0f, Leaves = 0.1f, Dust = 0.05f, Cloud = 0.8f, FogScale = 0.8f, WindScale = 1.0f },
-			new() { Rain = 0.6f, Wetness = 0.85f, Snow = 0.0f, Leaves = 0.1f, Dust = 0.0f, Cloud = 0.9f, FogScale = 0.55f, WindScale = 1.2f },
-			new() { Rain = 1.0f, Wetness = 1.0f, Snow = 0.0f, Leaves = 0.2f, Dust = 0.0f, Cloud = 1.0f, FogScale = 0.35f, WindScale = 2.0f },
+			new() { Rain = 0.6f, Wetness = 0.85f, Snow = 0.0f, Leaves = 0.1f, Dust = 0.0f, Cloud = 0.9f, FogScale = 0.8f, WindScale = 1.2f },
+			new() { Rain = 1.0f, Wetness = 1.0f, Snow = 0.0f, Leaves = 0.2f, Dust = 0.0f, Cloud = 1.0f, FogScale = 0.6f, WindScale = 2.0f },
 			new() { Rain = 0.0f, Wetness = 0.2f, Snow = 0.8f, Leaves = 0.0f, Dust = 0.0f, Cloud = 0.85f, FogScale = 0.5f, WindScale = 0.8f },
 			new() { Rain = 0.0f, Wetness = 0.25f, Snow = 0.0f, Leaves = 0.75f, Dust = 0.05f, Cloud = 0.4f, FogScale = 1.0f, WindScale = 1.3f },
 			new() { Rain = 0.0f, Wetness = 0.4f, Snow = 0.0f, Leaves = 0.1f, Dust = 0.0f, Cloud = 0.7f, FogScale = 0.15f, WindScale = 0.3f }
@@ -108,7 +108,9 @@ namespace NatureFX.Nature {
 				Snow = MapDefaults.Value(MapKey.Snow, s.Snow),
 				Leaves = MapDefaults.Value(MapKey.Leaves, s.Leaves),
 				Dust = MapDefaults.Value(MapKey.Dust, s.Dust),
-				Cloud = 0.0f, FogScale = 1.0f, WindScale = 1.0f
+				// rain falls from clouds: the sky closes over as the rain sets in (a clear sky with full sunshine in rain
+				// was the manual weather's), the air's haze from the rain itself (MapFog.RainExtinction)
+				Cloud = Mathf.Clamp01(s.Rain * 1.6f), FogScale = 1.0f, WindScale = 1.0f + 0.5f * s.Rain
 			};
 		}
 

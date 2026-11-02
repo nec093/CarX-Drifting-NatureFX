@@ -156,7 +156,7 @@ namespace NatureFX.Rendering {
 			if (MeterOnly) {
 				props_.Clear();
 				props_.SetFloat(PlainId, 0.0f);
-				Measure(cmd, ctx.cameraColorBuffer);
+				Measure(cmd, ctx.cameraColorBuffer, ctx.hdCamera.actualWidth, ctx.hdCamera.actualHeight);
 				return;
 			}
 			Dlaa.NotePost(ctx.hdCamera.camera);
@@ -196,6 +196,7 @@ namespace NatureFX.Rendering {
 				float focal = 12.0f / Mathf.Tan(Mathf.Max(1.0f, cam.fieldOfView) * 0.5f * Mathf.Deg2Rad);
 				props_.SetVector(LensId, new Vector4(focal, Mathf.Max(0.7f, FStop), Mathf.Max(0.1f, Focus), 24.0f));
 				props_.SetVector(BlurId, new Vector4(Mathf.Clamp01(MotionBlur), 0.05f * height, 0.0f, 0.02f * height));
+				props_.SetVector(SourceSizeId, Size(width, height));
 				if (blur) {
 					props_.SetTexture(SourceId, current);
 					Draw(cmd, work, PassMotionBlur, Size(width, height));
@@ -210,7 +211,7 @@ namespace NatureFX.Rendering {
 				source = current;
 			}
 
-			Measure(cmd, source);
+			Measure(cmd, source, width, height);
 
 			// bloom: down the chain, then up it
 			int levels = Bloom > 0.0f ? BloomLevels : 0;
@@ -238,6 +239,7 @@ namespace NatureFX.Rendering {
 
 			// the finished picture
 			props_.SetTexture(SourceId, source);
+			props_.SetVector(SourceSizeId, Size(width, height));
 			props_.SetTexture(FlareTexId, flare ? down[1] : source);
 			props_.SetVector(FlareId, flareParams);
 			props_.SetTexture(BloomId, levels > 0 ? (levels > 1 ? up[0] : down[0]) : source);
@@ -251,8 +253,9 @@ namespace NatureFX.Rendering {
 		}
 
 		// the meter (64x36 cells of the picture's light), read back without waiting
-		private void Measure(CommandBuffer cmd, RTHandle source) {
+		private void Measure(CommandBuffer cmd, RTHandle source, float width, float height) {
 			props_.SetTexture(SourceId, source);
+			props_.SetVector(SourceSizeId, Size(width, height));
 			props_.SetVector(TargetSizeId, Size(MeterW, MeterH));
 			CoreUtils.SetRenderTarget(cmd, meter_, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, Material, props_, PassMeter);

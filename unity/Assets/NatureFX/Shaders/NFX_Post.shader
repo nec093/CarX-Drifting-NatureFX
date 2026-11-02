@@ -39,7 +39,10 @@ Shader "Hidden/NatureFX/Post"
 
     float _NFX_PostPlain;           // 1: the textures are the display resolution's own (DLSS upscaling), not scaled RTHandles
 
-    #define SampleRT(tex, uv) SAMPLE_TEXTURE2D_X_LOD(tex, s_linear_clamp_sampler, (uv) * (_NFX_PostPlain > 0.5 ? float2(1.0, 1.0) : _RTHandleScale.xy), 0)
+    // kept a texel inside the picture: an RTHandle is larger than what is drawn in it, and a read past the edge (motion
+    // blur, the bloom's wide taps) took whatever an earlier, larger frame left there (bright smears along the edges at
+    // night when the view turned). _NFX_PostSourceSize is the texture read (PostPass sets it before each pass)
+    #define SampleRT(tex, uv) SAMPLE_TEXTURE2D_X_LOD(tex, s_linear_clamp_sampler, clamp(uv, _NFX_PostSourceSize.zw, 1.0 - _NFX_PostSourceSize.zw) * (_NFX_PostPlain > 0.5 ? float2(1.0, 1.0) : _RTHandleScale.xy), 0)
 
     float2 TargetUV(Varyings v)
     {
