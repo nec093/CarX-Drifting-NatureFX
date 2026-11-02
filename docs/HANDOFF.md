@@ -390,3 +390,9 @@
   - 藪（ShrubRenderer、docs/map-authoring.md 5.6）: nocol_nfx_shrubproto_<名前>（nfxproto_lod0 / cloud / impostor）と nocol_nfx_shrub_<名前+名前>。スキャンは近い 40 本まで、雲 3 倍まで、インポスター 300 m。動きベクトルは Camera（Object だと画面全体が流れた）、HDRP の影は切る。独自エンジンには板の束を全部。焼き: tools/kino_sdk/bake_shrub_lods.py（Blender 5.2）→ shrubs_to_png.py。SDK: NfxShrubs.cs、テストマップ区画 N4。NFX_Impostor.hlsl（_NFX_Impostor）。
   - フレーム落ち: Detritus は 1 つのメッシュに組み直していた（24 m ごとに数百万頂点）→ インスタンス描画、1 フレーム 4000 個ずつ。MapPaint の描き直しは別スレッド。
   - ヘッドライト: 手前の塊と横の縁 → fill を /2.0（8° 下で 2 % 未満）、横 h/22、±38° で 0 に、カットオフの縁 0.5°（4 か所）。
+- **11-02 ぼやけたテクスチャ（Showroom、full replace オンで再読み込み後）と車の影のカクつき**:
+  - 日陰の壁や窓のぼけ: 独自エンジンが当たり先のテクスチャを読む mip を「1 枚約 4 m 四方」と仮定していた → `NFXCommon.hlsli` HitMip（三角形の UV 面積と実面積からテクセル密度、1 ピクセル 0.0009 rad、斜めは sqrt(cos) で一部だけ伸ばす）。表面トレース・窓越し・反射の当たり先に効く。
+  - 色を持たない透明マテリアルの差し替え: 滑らかさ 0.3（すりガラス）→ 0.95（GenericTranslator）。
+  - 調査用に追加: debug page「Switched materials' textures」（mip、追跡外の NatureFX マテリアル、シェーダー別の数、差し替えなかった理由）、Developer の「Load every texture mip」。差し替え後にゲームが元の名前で付け直したテクスチャを追う Resync、レンダラーへのマテリアルの付け直し（どちらも今回の原因ではなかったが残した）。
+  - 白線などの半透明の面に落ちる車の影が 0.5 秒ほどでカクつく: SunShadowMap が 16 フレームで 1 枚 → 毎フレーム全体（約 0.1 ms 見込み）。ユーザー: 直った。
+  - ネイティブ: SetInstances が使えないジオメトリを飛ばすと UpdateTransforms の番号がずれた → g_instanceSlot で呼び出し側の番号から引く。
