@@ -11,8 +11,8 @@ namespace NatureFX.Tools {
 	// The developer's switches and tools (once the F8 window's Developer tab), on the debug page: each control's state goes
 	// out with the page's stats.json, a change comes back as GET /set?id=..&v=.. on the page's server thread and is applied
 	// here on the main thread (Unity's objects are not to be touched from another thread).
-	public static class DevControls {
-		private enum Kind { Switch, Slider, Chips, Button, Info }
+	public static partial class DevControls {
+		private enum Kind { Switch, Slider, Chips, Button, Info, Number }
 
 		private sealed class Control {
 			public string Group, Id, Label, Help;
@@ -23,6 +23,7 @@ namespace NatureFX.Tools {
 			public string[] Options;
 			public Func<string> Text;  // an info row's text, or a control's state line
 			public bool Saved;         // a setting of the settings file: saved after a change
+			public string Tab;         // the page's tab: "developer" (null) or "settings"
 		}
 
 		private static readonly List<Control> controls_ = new();
@@ -50,7 +51,8 @@ namespace NatureFX.Tools {
 					continue;
 				}
 				try {
-					c.Set(c.Kind == Kind.Slider ? Mathf.Clamp(r.Value, c.Min, c.Max) : r.Value);
+					// the settings tab's sliders take a typed value beyond their range too (the F8 window's range is a guide)
+					c.Set(c.Kind == Kind.Slider && c.Tab == null ? Mathf.Clamp(r.Value, c.Min, c.Max) : r.Value);
 					changed = true;
 					save |= c.Saved;
 					KSL.API.Kino.Log.Info($"[NatureFX] Debug page: {c.Group} / {c.Label} = {r.Value.ToString(CultureInfo.InvariantCulture)}");
@@ -86,6 +88,7 @@ namespace NatureFX.Tools {
 				  .Append(",\"value\":").Append(value.ToString("0.#####", inv))
 				  .Append(",\"min\":").Append(c.Min.ToString("0.#####", inv)).Append(",\"max\":").Append(c.Max.ToString("0.#####", inv))
 				  .Append(",\"step\":").Append(c.Step.ToString("0.#####", inv))
+				  .Append(",\"tab\":").Append(json(c.Tab ?? "developer"))
 				  .Append(",\"help\":").Append(json(c.Help ?? "")).Append(",\"text\":").Append(json(text)).Append(",\"options\":[");
 				if (c.Options != null) {
 					for (int k = 0; k < c.Options.Length; ++k) {
@@ -135,6 +138,45 @@ namespace NatureFX.Tools {
 				}
 				return cached;
 			});
+		}
+
+		// ---- the settings tab: every setting of the settings file, as the F8 window shows it (SettingsControls.g.cs,
+		// generated from the window), then the ones it has no plain control for, by their names (switch or number)
+		private static void Setting(string group, string name, string label, Func<float> get, Action<float> set, float min, float max, float step) {
+			Add(new Control { Group = group, Id = "set-" + name, Label = label, Kind = Kind.Slider, Get = get, Set = set, Min = min, Max = max, Step = step,
+			                  Help = name, Saved = true, Tab = "settings" });
+		}
+
+		private static void SettingSwitch(string group, string name, string label, Func<bool> get, Action<bool> set) {
+			Add(new Control { Group = group, Id = "set-" + name, Label = label, Kind = Kind.Switch, Get = () => get() ? 1.0f : 0.0f, Set = v => set(v > 0.5f),
+			                  Help = name, Saved = true, Tab = "settings" });
+		}
+
+		private static void SettingChips(string group, string name, string label, string[] options, Func<int> get, Action<int> set) {
+			Add(new Control { Group = group, Id = "set-" + name, Label = label, Kind = Kind.Chips, Options = options, Get = () => get(),
+			                  Set = v => set(Mathf.Clamp(Mathf.RoundToInt(v), 0, options.Length - 1)), Help = name, Saved = true, Tab = "settings" });
+		}
+
+		private static void BuildSettings() {
+			BuildWindowSettings();
+			const string other = "Other settings (no plain F8 control)";
+			foreach (var p in typeof(ISettings).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)) {
+				if (!p.CanRead || !p.CanWrite || byId_.ContainsKey("set-" + p.Name) || p.Name == "ConfigVersion") {
+					continue;
+				}
+				var prop = p;
+				if (prop.PropertyType == typeof(bool)) {
+					SettingSwitch(other, prop.Name, prop.Name, () => (bool)prop.GetValue(S), v => prop.SetValue(S, v));
+				} else if (prop.PropertyType == typeof(float) || prop.PropertyType == typeof(int)) {
+					bool integer = prop.PropertyType == typeof(int);
+					Add(new Control {
+						Group = other, Id = "set-" + prop.Name, Label = prop.Name, Kind = Kind.Number, Step = integer ? 1.0f : 0.0f,
+						Get = () => integer ? (int)prop.GetValue(S) : (float)prop.GetValue(S),
+						Set = v => prop.SetValue(S, integer ? (object)Mathf.RoundToInt(v) : v),
+						Help = integer ? "whole number" : null, Saved = true, Tab = "settings",
+					});
+				}
+			}
 		}
 
 		private static void Build() {
@@ -231,6 +273,8 @@ namespace NatureFX.Tools {
 			SlowInfo(system, "scene", () => NativeEngine.SceneStatus);
 			SlowInfo(system, "check", () => $"{NativeEngine.CheckStatus}; queue: {NativeEngine.QueueStatus}");
 			SlowInfo(system, "sun shadows", () => NativeEngine.SunCounters);
+
+			BuildSettings();
 		}
 	}
 }

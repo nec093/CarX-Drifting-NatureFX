@@ -71,6 +71,7 @@ pre { margin:0; padding:4px; height:calc(100vh - 120px); overflow:auto; border:1
 .sl { display:flex; gap:6px; align-items:center; }
 .sl input { width:180px; }
 .sl span { min-width:6ch; text-align:right; }
+.sl input.num { width:9ch; background:var(--sel); color:var(--fg); border:1px solid var(--rule); font:inherit; padding:1px 4px; }
 .chips button { margin-left:2px; color:var(--dim); }
 .chips button.cur { color:var(--fg); border-color:var(--a); }
 .kv { grid-column:1 / 3; display:grid; grid-template-columns:24ch 1fr; gap:8px; }
@@ -116,6 +117,7 @@ pre { margin:0; padding:4px; height:calc(100vh - 120px); overflow:auto; border:1
     </section>
   </div>
   <div class='tab' id='tab-scene'></div>
+  <div class='tab' id='tab-settings'></div>
   <div class='tab' id='tab-developer'></div>
   <div class='tab' id='tab-log'>
     <section class='wide' id='s-log'>
@@ -133,7 +135,7 @@ let hist = [], logText = '', built = '', marks = [], ctlBuilt = '', paused = fal
 const live = () => hist.filter(p => !p.off);
 
 // the tabs, and which tab each of the game's sections goes to (anything new: scene)
-const TABS = [['overview', 'overview'], ['performance', 'performance'], ['memory', 'memory'], ['scene', 'scene'], ['developer', 'developer'], ['log', 'log']];
+const TABS = [['overview', 'overview'], ['performance', 'performance'], ['memory', 'memory'], ['scene', 'scene'], ['settings', 'settings'], ['developer', 'developer'], ['log', 'log']];
 const HOME = { perf: 'overview', load: 'overview', 'gpu-time': 'overview', cpu: 'performance', timings: 'performance',
   split: 'memory', 'engine-memory': 'memory', buffers: 'memory', targets: 'memory', 'other-targets': 'memory', 'game-textures': 'memory',
   meshes: 'memory', 'switched-textures': 'memory' };
@@ -193,36 +195,67 @@ function table(sec) {
 function send(id, v) { fetch(`/set?id=${encodeURIComponent(id)}&v=${v}`, { cache: 'no-store' }).catch(() => {}); }
 
 function controls(list) {
-  const key = list.map(c => c.id).join(',');
-  const host = $('tab-developer');
-  if (key !== ctlBuilt) {
-    ctlBuilt = key;
-    const groups = [];
-    for (const c of list) { let g = groups.find(x => x.name === c.group); if (!g) groups.push(g = { name: c.group, items: [] }); g.items.push(c); }
-    host.innerHTML = groups.map(g => `<section><h2>${esc(g.name)}</h2><div class='ctl'>` + g.items.map(c => {
-      const help = c.help ? `<div class='help'>${esc(c.help)}</div>` : '';
-      const state = `<div class='state' id='st-${c.id}'></div>`;
-      if (c.kind === 'switch') return `<div class='row'><label for='c-${c.id}'>${esc(c.label)}</label><input type='checkbox' class='sw' id='c-${c.id}'>${help}</div>`;
-      if (c.kind === 'slider') return `<div class='row'><span>${esc(c.label)}</span><span class='sl'><input type='range' id='c-${c.id}' min='${c.min}' max='${c.max}' step='${c.step}'><span id='cv-${c.id}'></span></span>${help}</div>`;
-      if (c.kind === 'chips') return `<div class='row'><span>${esc(c.label)}</span><span class='chips' id='c-${c.id}'>` + c.options.map((o, i) => `<button data-i='${i}'>${esc(o)}</button>`).join('') + `</span>${help}</div>`;
-      if (c.kind === 'button') return `<div class='row'><span></span><button id='c-${c.id}'>${esc(c.label)}</button>${help}${state}</div>`;
-      return `<div class='row'><div class='kv'><span>${esc(c.label)}</span><span id='st-${c.id}'></span></div></div>`;
-    }).join('') + `</div></section>`).join('');
-    for (const c of list) {
-      const e = $('c-' + c.id); if (!e) continue;
-      if (c.kind === 'switch') e.onchange = () => send(c.id, e.checked ? 1 : 0);
-      if (c.kind === 'slider') { e.oninput = () => $('cv-' + c.id).textContent = (+e.value).toString(); e.onchange = () => send(c.id, e.value); }
-      if (c.kind === 'chips') e.querySelectorAll('button').forEach(b => b.onclick = () => { send(c.id, b.dataset.i); e.querySelectorAll('button').forEach(x => x.classList.toggle('cur', x === b)); });
-      if (c.kind === 'button') e.onclick = () => send(c.id, 1);
-    }
-  }
+  for (const tab of ['developer', 'settings']) build(tab, list.filter(c => (c.tab || 'developer') === tab));
   for (const c of list) {
-    const e = $('c-' + c.id), st = $('st-' + c.id);
+    const e = $('c-' + c.id), st = $('st-' + c.id), n = $('cn-' + c.id);
     if (st) st.textContent = c.text || '';
-    if (!e || e === document.activeElement && c.kind === 'slider') continue;
+    if (n && n !== document.activeElement) n.value = +c.value;
+    if (!e || e === document.activeElement && (c.kind === 'slider' || c.kind === 'number')) continue;
     if (c.kind === 'switch') e.checked = c.value > 0.5;
-    if (c.kind === 'slider') { e.value = c.value; $('cv-' + c.id).textContent = (+c.value).toString(); }
+    if (c.kind === 'slider') e.value = c.value;
+    if (c.kind === 'number') e.value = +c.value;
     if (c.kind === 'chips') e.querySelectorAll('button').forEach(b => b.classList.toggle('cur', +b.dataset.i === Math.round(c.value)));
+  }
+}
+
+// a tab's controls, built again only when the list changes; the settings tab has a filter on top
+const ctlKeys = {};
+function build(tab, list) {
+  const key = list.map(c => c.id).join(',');
+  const host = $('tab-' + tab);
+  if (!host || key === ctlKeys[tab]) return;
+  ctlKeys[tab] = key;
+  const groups = [];
+  for (const c of list) { let g = groups.find(x => x.name === c.group); if (!g) groups.push(g = { name: c.group, items: [] }); g.items.push(c); }
+  const filter = tab === 'settings'
+    ? `<section class='wide'><h2>settings (the F8 window's, saved as they change)</h2><div class='tools'><label>filter <input type='text' id='setFilter'></label><span>a value outside a slider's range: type it in the box</span></div></section>`
+    : '';
+  host.innerHTML = filter + groups.map(g => `<section data-g='${esc(g.name.toLowerCase())}'><h2>${esc(g.name)}</h2><div class='ctl'>` + g.items.map(c => {
+    const help = c.help ? `<div class='help'>${esc(c.help)}</div>` : '';
+    const state = `<div class='state' id='st-${c.id}'></div>`;
+    const row = `<div class='row' data-k='${esc((c.label + ' ' + (c.help || '')).toLowerCase())}'>`;
+    if (c.kind === 'switch') return `${row}<label for='c-${c.id}'>${esc(c.label)}</label><input type='checkbox' class='sw' id='c-${c.id}'>${help}</div>`;
+    if (c.kind === 'slider') return `${row}<span>${esc(c.label)}</span><span class='sl'><input type='range' id='c-${c.id}' min='${c.min}' max='${c.max}' step='${c.step}'><input type='number' class='num' id='cn-${c.id}' step='any'></span>${help}</div>`;
+    if (c.kind === 'number') return `${row}<span>${esc(c.label)}</span><span class='sl'><input type='number' class='num' id='c-${c.id}' step='${c.step > 0 ? c.step : 'any'}'></span>${help}</div>`;
+    if (c.kind === 'chips') return `${row}<span>${esc(c.label)}</span><span class='chips' id='c-${c.id}'>` + c.options.map((o, i) => `<button data-i='${i}'>${esc(o)}</button>`).join('') + `</span>${help}</div>`;
+    if (c.kind === 'button') return `${row}<span></span><button id='c-${c.id}'>${esc(c.label)}</button>${help}${state}</div>`;
+    return `${row}<div class='kv'><span>${esc(c.label)}</span><span id='st-${c.id}'></span></div></div>`;
+  }).join('') + `</div></section>`).join('');
+  for (const c of list) {
+    const e = $('c-' + c.id); if (!e) continue;
+    const n = $('cn-' + c.id);
+    if (c.kind === 'switch') e.onchange = () => send(c.id, e.checked ? 1 : 0);
+    if (c.kind === 'slider') {
+      e.oninput = () => { if (n) n.value = +e.value; };
+      e.onchange = () => send(c.id, e.value);
+      if (n) n.onchange = () => { if (n.value !== '' && isFinite(+n.value)) { e.value = n.value; send(c.id, +n.value); } };
+    }
+    if (c.kind === 'number') e.onchange = () => { if (e.value !== '' && isFinite(+e.value)) send(c.id, +e.value); };
+    if (c.kind === 'chips') e.querySelectorAll('button').forEach(b => b.onclick = () => { send(c.id, b.dataset.i); e.querySelectorAll('button').forEach(x => x.classList.toggle('cur', x === b)); });
+    if (c.kind === 'button') e.onclick = () => send(c.id, 1);
+  }
+  const f = $('setFilter');
+  if (f && tab === 'settings') {
+    const apply = () => {
+      const q = f.value.trim().toLowerCase();
+      host.querySelectorAll('section[data-g]').forEach(sec => {
+        const inGroup = !q || sec.dataset.g.includes(q);
+        let any = false;
+        sec.querySelectorAll('.row').forEach(r => { const on = inGroup || r.dataset.k.includes(q); r.style.display = on ? '' : 'none'; any = any || on; });
+        sec.style.display = any ? '' : 'none';
+      });
+    };
+    f.oninput = apply;
   }
 }
 
