@@ -104,6 +104,7 @@ namespace NatureFX.Rendering {
 			}
 			root_ = null;
 			material_ = null;
+			pass_ = null; // Update keys on it: with the material gone it would throw every frame
 		}
 
 		public void Update(ISettings s, Light sun) {

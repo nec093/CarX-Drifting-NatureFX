@@ -55,6 +55,7 @@ namespace NatureFX.Map {
 				if (m.Component is ReflectionProbe own) {
 					var hd = own.GetComponent<HDAdditionalReflectionData>() ?? own.gameObject.AddComponent<HDAdditionalReflectionData>();
 					Configure(hd);
+					own.enabled = on_; // Clear() switched it off; Update only touches it when on_ changes
 					probes_.Add(new Probe { Position = m.Position, Hd = hd, Unity = own });
 					continue;
 				}

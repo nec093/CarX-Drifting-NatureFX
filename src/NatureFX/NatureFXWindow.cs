@@ -325,6 +325,9 @@ namespace NatureFX {
 
 		// A preset can change anything: re-apply shader replacement and the rest.
 		private void AfterPresetApplied() {
+			// off then on: materials already switched keep their classification otherwise, so a preset with another
+			// "Every material" / "Foliage too" looked the same until a restart (the Shader rebuild tab does the same)
+			mod_.SetShaderReplacement(false);
 			mod_.SetShaderReplacement(S.ReplaceShaders);
 			mod_.MarkDirty();
 			Settings.Save();
@@ -660,6 +663,8 @@ namespace NatureFX {
 			Widgets.Info("Halogen: warm 3200 K, 18 000 cd a lamp. HID (xenon): 4300 K, 36 000 cd, a faint blue edge at the cut-off. LED: 5800 K, 30 000 cd.");
 			Widgets.BeginDependent(S.HeadlightType != 0);
 			Other(Widgets.Slider("Beam aim", S.HeadlightAim, -1, 3, v => S.HeadlightAim = v, "0.0", "° down"));
+			Other(Widgets.Slider("Colour temperature", S.HeadlightKelvin, 0, 8000, v => S.HeadlightKelvin = v < 2700.0f ? 0.0f : v, "0", " K"));
+			Widgets.Info(S.HeadlightKelvin > 0.0f ? "Your colour; 0 (far left) is the lamp type's own." : "The lamp type's own (halogen 3200 K, HID 4300 K, LED 5800 K); move it for your own (2700 to 8000 K).");
 			Widgets.Info("The low beam's axis below level, from the car's body: 0.6° is the usual setting (1 %); more lights the road closer, less reaches further and dazzles.");
 			Widgets.Switch("High beam (F7)", mod_.Headlights.HighBeam, v => mod_.Headlights.HighBeam = v,
 				"Your car's high beam: no cut-off, the light gathered far ahead, 2.5 times the low beam. Not saved.");
@@ -1256,6 +1261,18 @@ namespace NatureFX {
 			Widgets.Slider("3D grass distance", S.GrassDistance, 10, 120, v => S.GrassDistance = v, "0", " m");
 			Widgets.Info(mod_.Grass.AreaCount > 0 ? $"3D grass:  {mod_.Grass.Describe()}" : "3D grass:  no grass markers");
 			Widgets.Info(mod_.Forest.AreaCount > 0 ? $"Forest:  {mod_.Forest.Describe()}" : "Forest:  no forest markers");
+			Widgets.Slider("Thicket density", S.ShrubDensity, 0, 2, v => S.ShrubDensity = v);
+			Widgets.Slider("Scanned shrubs up to", S.ShrubDistance, 5, 80, v => S.ShrubDistance = v, "0", " m");
+			Widgets.Info(mod_.Shrubs.AreaCount > 0 ? $"Thickets:  {mod_.Shrubs.Describe()}" : "Thickets:  no shrub markers");
+			Widgets.EndCard();
+
+			// --- the ground map's details
+			Widgets.BeginCard("Ground detail", "Objects take the ground's colour where they stand in it, the profile's painted dirt ([paint]) and debris along the road's edges. Needs the own engine.");
+			Widgets.Switch("Ground detail", S.MapGroundDetail, v => S.MapGroundDetail = v);
+			Widgets.Slider("Debris (pebbles, twigs, leaves)", S.Detritus, 0, 3, v => S.Detritus = v);
+			Widgets.Info($"Ground map:  {NatureFX.Rendering.GroundMap.Status}");
+			Widgets.Info($"Painted dirt:  {mod_.Paint.Status}");
+			Widgets.Info($"Debris:  {mod_.Debris.Status}");
 			Widgets.EndCard();
 
 			// --- effects, each with what it waits for

@@ -397,6 +397,7 @@ bool BuildRtWind(std::vector<D3D12_RAYTRACING_INSTANCE_DESC>& resolved) {
 				return false;
 			}
 		}
+		g_rt.buildList->Close();  // left open by an earlier failure: closed, both resets succeed
 		g_rt.buildAllocator->Reset();
 		g_rt.buildList->Reset(g_rt.buildAllocator.Get(), nullptr);
 		for (size_t k : toBuild) {
@@ -773,6 +774,7 @@ int MirrorScene() {
 			return -5;
 		}
 	}
+	g_rt.buildList->Close();  // left open by an earlier failure (no memory): closed, both resets succeed
 	g_rt.buildAllocator->Reset();
 	g_rt.buildList->Reset(g_rt.buildAllocator.Get(), nullptr);
 	// micromaps: bake every new one, then build their arrays (each through the shared scratch, one after the other)
@@ -1086,6 +1088,8 @@ bool TraceRt(const TraceEventData* data, ID3D12CommandQueue* queue) {
 	g_rt.allocators[slot]->Reset();
 	auto* rl = g_rt.list.Get();
 	rl->Reset(g_rt.allocators[slot].Get(), nullptr);
+	g_rtCrumbs.Create(g_rt.device.Get());
+	UINT crumb = g_rtCrumbs.Begin(rl, "rt sun " + std::to_string(serial));
 	bool recorded = false;
 	{
 		std::lock_guard<std::mutex> lock(g_sceneMutex);
@@ -1109,21 +1113,29 @@ bool TraceRt(const TraceEventData* data, ID3D12CommandQueue* queue) {
 			rl->SetComputeRootUnorderedAccessView(7, g_rt.outRt[pair]->GetGPUVirtualAddress());
 			rl->Dispatch((data->width + 7) / 8, (data->height + 7) / 8, 1);
 			recorded = true;
+			// the serial counts from here, under the lock: RtWaitIdle (ReleaseRtGeometry, MirrorScene) waits for it,
+			// so the BLAS this list references are not freed between the recording and the submit below
+			g_rt.serial = serial;
 		}
 	}
+	g_rtCrumbs.End(rl, crumb);
 	if (FAILED(rl->Close()) || !recorded) {
+		if (recorded) {
+			g_rt.toUnityRt->Signal(serial);  // nothing will run for this serial: let the waits pass
+		}
 		return false;
 	}
 
 	// 2. Unity's queue: Prepare's output into this trace's shared input buffer (the trace two ago, which used it, is
 	// done: Unity's queue waited for it during the last trace), then "input ready"
+	g_crumbTag = "rt pack " + std::to_string(serial);
 	auto* list = g_render.Begin();
 	if (list == nullptr) {
+		g_rt.toUnityRt->Signal(serial);  // the trace is not submitted: let the waits for this serial pass
 		return false;
 	}
 	RtPack(list, g_packSunIn, data->surface, g_rt.inUnity[pair].Get(), static_cast<UINT>(pixels));
 	g_render.Submit(queue);
-	g_rt.serial = serial;
 	queue->Signal(g_rt.toRtUnity.Get(), serial);
 
 	// 3. the 1.619 queue: wait for the input, trace, then "result ready"
@@ -1137,6 +1149,7 @@ bool TraceRt(const TraceEventData* data, ID3D12CommandQueue* queue) {
 	UINT64 previous = serial - 1;
 	if (previous > 0 && g_rt.lastTraced == previous) {
 		queue->Wait(g_rt.toUnityUnity.Get(), previous);
+		g_crumbTag = "rt unpack " + std::to_string(previous);
 		list = g_render.Begin();
 		if (list != nullptr) {
 			RtPack(list, g_unpackSunOut, g_rt.outUnity[previous & 1].Get(), data->output, static_cast<UINT>(pixels));

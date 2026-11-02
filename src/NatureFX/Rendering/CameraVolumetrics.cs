@@ -61,11 +61,14 @@ namespace NatureFX.Rendering {
 		}
 
 		public void Restore() {
-			if (!overridden_ || camera_ == null) {
-				overridden_ = false;
+			if (!overridden_) {
 				return;
 			}
-			--active_;
+			overridden_ = false;
+			--active_; // counted when it was switched on, whether or not the camera still exists
+			if (camera_ == null) {
+				return;
+			}
 			var data = camera_.GetComponent<HDAdditionalCameraData>();
 			if (data != null) {
 				data.renderingPathCustomFrameSettings.SetEnabled(field_, hadValue_);

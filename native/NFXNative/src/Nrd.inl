@@ -251,7 +251,7 @@ bool NrdCreate(NrdContext& c, const nrd::Denoiser* denoisers, UINT count) {
 	}
 	c.failed = true;  // until everything below is made
 	if (!NrdShared()) {
-		c.status = "NRD descriptor heap or constant ring could not be made";
+		SetStatus(c.status, "NRD descriptor heap or constant ring could not be made");
 		return false;
 	}
 	std::vector<nrd::DenoiserDesc> descs(count);
@@ -263,7 +263,7 @@ bool NrdCreate(NrdContext& c, const nrd::Denoiser* denoisers, UINT count) {
 	creation.denoisersNum = count;
 	if (nrd::CreateInstance(creation, c.instance) != nrd::Result::SUCCESS) {
 		c.instance = nullptr;
-		c.status = "NRD instance could not be made";
+		SetStatus(c.status, "NRD instance could not be made");
 		return false;
 	}
 	const nrd::InstanceDesc* desc = nrd::GetInstanceDesc(*c.instance);
@@ -298,7 +298,7 @@ bool NrdCreate(NrdContext& c, const nrd::Denoiser* denoisers, UINT count) {
 	}
 	D3D12_ROOT_SIGNATURE_DESC rootDesc = { 3, params, static_cast<UINT>(samplers.size()), samplers.data(), D3D12_ROOT_SIGNATURE_FLAG_NONE };
 	if (!NrdSerialize(rootDesc, c.root)) {
-		c.status = "NRD root signature could not be made";
+		SetStatus(c.status, "NRD root signature could not be made");
 		return false;
 	}
 	for (UINT i = 0; i < desc->pipelinesNum; ++i) {
@@ -307,13 +307,13 @@ bool NrdCreate(NrdContext& c, const nrd::Denoiser* denoisers, UINT count) {
 		if (p.computeShaderDXIL.bytecode == nullptr || !NrdPso(c.root.Get(), p.computeShaderDXIL.bytecode, static_cast<size_t>(p.computeShaderDXIL.size), state)) {
 			char line[128];
 			snprintf(line, sizeof(line), "NRD pipeline %u (%s) could not be made", i, p.shaderIdentifier);
-			c.status = line;
+			SetStatus(c.status, line);
 			return false;
 		}
 		c.pipelines.push_back(state);
 	}
 	c.failed = false;
-	c.status = "ready";
+	SetStatus(c.status, "ready");
 	return true;
 }
 
@@ -346,7 +346,7 @@ bool NrdResize(NrdContext& c, UINT width, UINT height, DXGI_FORMAT inFormat, DXG
 		ok = NrdCreateTexture(c.in[1], secondIn, width, height);
 	}
 	if (!ok) {
-		c.status = "NRD textures could not be made";
+		SetStatus(c.status, "NRD textures could not be made");
 		c.failed = true;
 		return false;
 	}
@@ -452,6 +452,7 @@ ID3D12GraphicsCommandList4* NrdBegin(const NrdEventData* data) {
 			++i;
 		}
 	}
+	g_crumbTag = "nrd";
 	return g_render.Begin();
 }
 
@@ -497,19 +498,19 @@ bool NrdRun(ID3D12GraphicsCommandList4* list, NrdContext& c, const NrdEventData*
 	common.frameIndex = data->frameIndex;
 	common.accumulationMode = data->reset || resized || c.runs == 0 ? nrd::AccumulationMode::CLEAR_AND_RESTART : nrd::AccumulationMode::CONTINUE;
 	if (nrd::SetCommonSettings(*c.instance, common) != nrd::Result::SUCCESS) {
-		c.status = "NRD common settings were refused";
+		SetStatus(c.status, "NRD common settings were refused");
 		return false;
 	}
 	for (UINT i = 0; i < count; ++i) {
 		if (nrd::SetDenoiserSettings(*c.instance, ids[i], settings[i]) != nrd::Result::SUCCESS) {
-			c.status = "NRD denoiser settings were refused";
+			SetStatus(c.status, "NRD denoiser settings were refused");
 			return false;
 		}
 	}
 	const nrd::DispatchDesc* dispatches = nullptr;
 	uint32_t dispatchCount = 0;
 	if (nrd::GetComputeDispatches(*c.instance, ids, count, dispatches, dispatchCount) != nrd::Result::SUCCESS) {
-		c.status = "NRD dispatches could not be had";
+		SetStatus(c.status, "NRD dispatches could not be had");
 		return false;
 	}
 	const nrd::InstanceDesc* desc = nrd::GetInstanceDesc(*c.instance);
@@ -579,7 +580,7 @@ void NrdStatusLine(NrdContext& c, const char* what, const NrdEventData* data, ui
 	if (++c.runs == 1 || c.status == "ready") {
 		char line[128];
 		snprintf(line, sizeof(line), "%s, %ux%u, %u dispatches", what, data->width, data->height, dispatched);
-		c.status = line;
+		SetStatus(c.status, line);
 	}
 }
 
@@ -591,7 +592,7 @@ void NrdSigma(const NrdEventData* data) {
 	if (!c.pack.pso && !c.failed &&
 	    (!NrdPackKernel(c.pack, 5, NrdCode("NrdSigmaPack", g_NrdSigmaPack, sizeof(g_NrdSigmaPack))) || !NrdUnpackKernel(c.unpack, 1, NrdCode("NrdSigmaUnpack", g_NrdSigmaUnpack, sizeof(g_NrdSigmaUnpack))))) {
 		c.failed = true;
-		c.status = "SIGMA pack / unpack pipelines could not be made";
+		SetStatus(c.status, "SIGMA pack / unpack pipelines could not be made");
 	}
 	auto* list = c.pack.pso ? NrdBegin(data) : nullptr;
 	if (list == nullptr) {
@@ -631,7 +632,7 @@ void NrdReblur(const NrdEventData* data) {
 	if (!c.pack.pso && !c.failed &&
 	    (!NrdPackKernel(c.pack, 5, NrdCode("NrdReblurPack", g_NrdReblurPack, sizeof(g_NrdReblurPack))) || !NrdUnpackKernel(c.unpack, 2, NrdCode("NrdReblurUnpack", g_NrdReblurUnpack, sizeof(g_NrdReblurUnpack))))) {
 		c.failed = true;
-		c.status = "REBLUR pack / unpack pipelines could not be made";
+		SetStatus(c.status, "REBLUR pack / unpack pipelines could not be made");
 	}
 	auto* list = c.pack.pso ? NrdBegin(data) : nullptr;
 	if (list == nullptr) {
@@ -684,7 +685,7 @@ void NrdReflection(const NrdEventData* data) {
 	if (!c.pack.pso && !c.failed &&
 	    (!NrdPackKernel(c.pack, 4, NrdCode("NrdSpecPack", g_NrdSpecPack, sizeof(g_NrdSpecPack))) || !NrdUnpackKernel(c.unpack, 1, NrdCode("NrdSpecUnpack", g_NrdSpecUnpack, sizeof(g_NrdSpecUnpack))))) {
 		c.failed = true;
-		c.status = "REBLUR specular pack / unpack pipelines could not be made";
+		SetStatus(c.status, "REBLUR specular pack / unpack pipelines could not be made");
 	}
 	auto* list = c.pack.pso ? NrdBegin(data) : nullptr;
 	if (list == nullptr) {
@@ -729,7 +730,7 @@ void NrdDropKernels() {
 		c->unpack = NrdKernel();
 		if (c->failed && c->instance == nullptr) {
 			c->failed = false;
-			c->status = "not started";
+			SetStatus(c->status, "not started");
 		}
 	}
 }

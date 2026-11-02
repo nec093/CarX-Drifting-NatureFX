@@ -47,6 +47,7 @@
 #include "SkyCube.h"          // g_SkyCube: the engine's sky as HDRP's cube map
 #include "LampMask.h"         // g_LampMask: each lamp's own visibility (roadmap A4)
 #include "SunMap.h"           // g_SunMap: the sun's ray traced shadow map for transparent surfaces
+#include "GroundMap.h"        // g_GroundMap: the ground seen from above (ground blend, painted dirt, debris)
 #include "SanitizeIndices.h"  // g_SanitizeIndices: shaders/SanitizeIndices.hlsl as DXIL
 #include "ExtractUvs.h"       // g_ExtractUvs: shaders/ExtractUvs.hlsl as DXIL
 // the same traces as DXR 1.0 libraries (NFX_PIPELINE: TraceRay in a ray tracing pipeline), g_<name>Lib
@@ -71,6 +72,7 @@
 #include "SkyCubeLib.h"
 #include "LampMaskLib.h"
 #include "SunMapLib.h"
+#include "GroundMapLib.h"
 #include "CopyRaw.h"          // g_CopyRaw: shaders/CopyRaw.hlsl as DXIL
 #include "WindDisplace.h"     // g_WindDisplace: shaders/WindDisplace.hlsl (foliage swayed by the wind)
 #include "BakeAlpha.h"        // g_BakeAlpha: shaders/BakeAlpha.hlsl as DXIL
@@ -100,14 +102,122 @@ std::string g_deviceSource = "none";
 std::atomic<bool> g_dead{ false };
 HRESULT g_removedReason = S_OK;
 
+void WriteHangReport();  // the breadcrumbs into NFXNative-gpu-hang.txt (defined with them below)
+
 bool CheckDevice() {
 	HRESULT reason = g_device ? g_device->GetDeviceRemovedReason() : S_OK;
 	if (FAILED(reason)) {
 		g_removedReason = reason;
 		g_dead = true;
+		WriteHangReport();
 	}
 	return !g_dead;
 }
+
+// GPU breadcrumbs, to name a hang's culprit: every list the engine records writes its number into memory the CPU can
+// still read after the device is lost, when the GPU starts it (slot 0) and when it is through (slot 1). A hung GPU
+// leaves slot 0 ahead of slot 1: that list never finished. The tags are the lists' names by number.
+struct Crumbs {
+	ComPtr<ID3D12Resource> buffer;
+	volatile UINT* cpu = nullptr;
+	std::string tags[256];
+	UINT next = 0;
+
+	bool Create(ID3D12Device* device) {
+		if (buffer || device == nullptr) {
+			return buffer != nullptr;
+		}
+		D3D12_HEAP_PROPERTIES heap = {};
+		heap.Type = D3D12_HEAP_TYPE_CUSTOM;
+		heap.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+		heap.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+		D3D12_RESOURCE_DESC desc = {};
+		desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		desc.Width = 256;
+		desc.Height = 1;
+		desc.DepthOrArraySize = 1;
+		desc.MipLevels = 1;
+		desc.SampleDesc.Count = 1;
+		desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+		void* mapped = nullptr;
+		if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&buffer))) ||
+		    FAILED(buffer->Map(0, nullptr, &mapped)) || mapped == nullptr) {
+			buffer.Reset();
+			return false;
+		}
+		cpu = static_cast<volatile UINT*>(mapped);
+		cpu[0] = cpu[1] = 0;
+		return true;
+	}
+
+	UINT Begin(ID3D12GraphicsCommandList2* list, const std::string& tag) {
+		if (!buffer || list == nullptr) {
+			return 0;
+		}
+		UINT id = ++next;
+		tags[id & 255] = tag;
+		D3D12_WRITEBUFFERIMMEDIATE_PARAMETER at = { buffer->GetGPUVirtualAddress(), id };
+		D3D12_WRITEBUFFERIMMEDIATE_MODE mode = D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_IN;
+		list->WriteBufferImmediate(1, &at, &mode);
+		return id;
+	}
+
+	void End(ID3D12GraphicsCommandList2* list, UINT id) {
+		if (!buffer || list == nullptr || id == 0) {
+			return;
+		}
+		D3D12_WRITEBUFFERIMMEDIATE_PARAMETER at = { buffer->GetGPUVirtualAddress() + 4, id };
+		D3D12_WRITEBUFFERIMMEDIATE_MODE mode = D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
+		list->WriteBufferImmediate(1, &at, &mode);
+	}
+
+	std::string Report(const char* name) const {
+		if (!buffer || cpu == nullptr) {
+			return std::string(name) + ": no breadcrumbs\n";
+		}
+		UINT begun = cpu[0], done = cpu[1];
+		std::string r = std::string(name) + ": last started " + std::to_string(begun) + " (" + tags[begun & 255] + "), last finished " +
+		                std::to_string(done) + " (" + tags[done & 255] + "), recorded " + std::to_string(next) + "\n";
+		r += begun > done ? "  -> the GPU stopped inside " + tags[begun & 255] + "\n" : std::string("  -> every started list finished on this queue\n");
+		r += "  the last lists recorded:";
+		for (UINT i = next > 16 ? next - 15 : 1; i <= next; ++i) {
+			r += " " + std::to_string(i) + "=" + tags[i & 255];
+		}
+		return r + "\n";
+	}
+};
+Crumbs g_crumbs;        // Unity's queue (the render thread's lists)
+Crumbs g_rtCrumbs;      // the DXR 1.2 device's trace queue (RtDevice.inl)
+Crumbs g_gpuCrumbs;     // the engine's own queue: scene builds (g_gpu)
+std::string g_crumbTag = "render";  // the next render thread list's name
+
+// Once, when the device is found lost: where each queue stopped, next to NFXNative.dll (the game dies soon after,
+// and Unity's own log only says the device was removed)
+void WriteHangReport() {
+	static std::atomic<bool> written{ false };
+	if (written.exchange(true)) {
+		return;
+	}
+	HMODULE self = nullptr;
+	wchar_t path[MAX_PATH] = {};
+	GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&WriteHangReport), &self);
+	DWORD length = GetModuleFileNameW(self, path, MAX_PATH);
+	std::wstring file(path, length);
+	file = file.substr(0, file.find_last_of(L"\\/") + 1) + L"NFXNative-gpu-hang.txt";
+	FILE* f = _wfopen(file.c_str(), L"w");
+	if (f == nullptr) {
+		return;
+	}
+	SYSTEMTIME t;
+	GetLocalTime(&t);
+	fprintf(f, "NFXNative: the GPU stopped (device removed, reason 0x%08x) at %04d-%02d-%02d %02d:%02d:%02d\n", static_cast<unsigned>(g_removedReason), t.wYear,
+	        t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+	fputs(g_crumbs.Report("Unity's queue").c_str(), f);
+	fputs(g_rtCrumbs.Report("DXR 1.2 trace queue").c_str(), f);
+	fputs(g_gpuCrumbs.Report("the engine's own queue (scene builds)").c_str(), f);
+	fclose(f);
+}
+
 
 // ------------------------------------------------------------------ helpers
 
@@ -211,12 +321,20 @@ struct Gpu {
 		return true;
 	}
 
-	void Begin() {
+	void Begin(const char* tag = "scene") {
+		// a build that failed half way (no memory for a buffer) returned with the list open: closed first, the
+		// allocator can be reset and the list starts empty (Reset drops what was recorded)
+		list->Close();
 		allocator->Reset();
 		list->Reset(allocator.Get(), nullptr);
+		g_gpuCrumbs.Create(g_device.Get());
+		crumb = g_gpuCrumbs.Begin(list.Get(), tag);
 	}
+	UINT crumb = 0;
 
 	bool SubmitAndWait(DWORD timeoutMs = 10000) {
+		g_gpuCrumbs.End(list.Get(), crumb);
+		crumb = 0;
 		if (FAILED(list->Close())) {
 			return false;
 		}
@@ -226,6 +344,7 @@ struct Gpu {
 		fence->SetEventOnCompletion(fenceValue, event);
 		if (WaitForSingleObject(event, timeoutMs) != WAIT_OBJECT_0) {
 			g_dead = true;  // a hung GPU: leave it alone from now on
+			WriteHangReport();
 			return false;
 		}
 		return CheckDevice();
@@ -295,7 +414,7 @@ enum TraceKind {
 	kTraceGI = 6, kTraceCacheResolve = 7, kTraceGlass = 8,
 	// the sky (Sky.hlsli): its tables, no rays
 	kTraceSkyTransmittance = 9, kTraceSkyMultiScatter = 10, kTraceSkyView = 11, kTraceCloudNoise = 12, kTraceClouds = 13,
-	kTraceCloudShadow = 14, kTraceSkyAmbient = 15, kTraceFog = 16, kTraceFogVolume = 17, kTraceSkyCube = 18, kTraceLampMask = 19, kTraceSunMap = 20, kTraceKinds = 21
+	kTraceCloudShadow = 14, kTraceSkyAmbient = 15, kTraceFog = 16, kTraceFogVolume = 17, kTraceSkyCube = 18, kTraceLampMask = 19, kTraceSunMap = 20, kTraceGroundMap = 21, kTraceKinds = 22
 };
 // GI's world space radiance cache (NFXCommon.hlsli: CacheEntries x CacheEntryBytes), u2 of every trace
 constexpr UINT64 kCacheBytes = (1ull << 19) * 48;
@@ -328,7 +447,7 @@ bool CreateTraceStateObjects() {
 		ShaderCode("CloudShadowLib", g_CloudShadowLib, sizeof(g_CloudShadowLib)), ShaderCode("SkyAmbientLib", g_SkyAmbientLib, sizeof(g_SkyAmbientLib)),
 		ShaderCode("FogLib", g_FogLib, sizeof(g_FogLib)), ShaderCode("FogVolumeLib", g_FogVolumeLib, sizeof(g_FogVolumeLib)),
 		ShaderCode("SkyCubeLib", g_SkyCubeLib, sizeof(g_SkyCubeLib)), ShaderCode("LampMaskLib", g_LampMaskLib, sizeof(g_LampMaskLib)),
-		ShaderCode("SunMapLib", g_SunMapLib, sizeof(g_SunMapLib))
+		ShaderCode("SunMapLib", g_SunMapLib, sizeof(g_SunMapLib)), ShaderCode("GroundMapLib", g_GroundMapLib, sizeof(g_GroundMapLib))
 	};
 	// every kind: 3 records (ray generation, miss, hit group), one table row
 	if (!g_traceTables) {
@@ -429,7 +548,7 @@ bool CreateTracePipelines() {
 		ShaderCode("CloudShadow", g_CloudShadow, sizeof(g_CloudShadow)), ShaderCode("SkyAmbient", g_SkyAmbient, sizeof(g_SkyAmbient)),
 		ShaderCode("Fog", g_Fog, sizeof(g_Fog)), ShaderCode("FogVolume", g_FogVolume, sizeof(g_FogVolume)),
 		ShaderCode("SkyCube", g_SkyCube, sizeof(g_SkyCube)), ShaderCode("LampMask", g_LampMask, sizeof(g_LampMask)),
-		ShaderCode("SunMap", g_SunMap, sizeof(g_SunMap))
+		ShaderCode("SunMap", g_SunMap, sizeof(g_SunMap)), ShaderCode("GroundMap", g_GroundMap, sizeof(g_GroundMap))
 	};
 	for (int k = 0; k < kTraceKinds; ++k) {
 		if (g_tracePso[k]) {
@@ -514,7 +633,7 @@ std::vector<D3D12_RAYTRACING_INSTANCE_DESC> g_instances;
 // ones get new transforms (NFX_Native_UpdateTransforms). Guarded by g_sceneMutex, as are the geometries.
 std::vector<D3D12_RAYTRACING_INSTANCE_DESC> g_resolved;
 std::mutex g_sceneMutex;
-void WaitRenderIdle();  // until the GPU finished the render thread's work (defined with it below)
+bool WaitRenderIdle();  // until the GPU finished the render thread's work (defined with it below); false: it did not within the time
 // the DXR 1.2 device's copy of the scene (RtDevice.inl)
 int MirrorScene();
 void ClearRtScene();
@@ -598,6 +717,24 @@ UINT TextureDescriptor(ID3D12Resource* texture, bool srgb) {
 		case DXGI_FORMAT_BC3_TYPELESS: format = srgb ? DXGI_FORMAT_BC3_UNORM_SRGB : DXGI_FORMAT_BC3_UNORM; break;
 		case DXGI_FORMAT_BC7_TYPELESS: format = srgb ? DXGI_FORMAT_BC7_UNORM_SRGB : DXGI_FORMAT_BC7_UNORM; break;
 		case DXGI_FORMAT_R16G16B16A16_TYPELESS: format = DXGI_FORMAT_R16G16B16A16_FLOAT; break;
+		case DXGI_FORMAT_BC4_TYPELESS: format = DXGI_FORMAT_BC4_UNORM; break;
+		case DXGI_FORMAT_BC5_TYPELESS: format = DXGI_FORMAT_BC5_UNORM; break;
+		case DXGI_FORMAT_BC6H_TYPELESS: format = DXGI_FORMAT_BC6H_UF16; break;
+		case DXGI_FORMAT_R8_TYPELESS: format = DXGI_FORMAT_R8_UNORM; break;
+		case DXGI_FORMAT_R8G8_TYPELESS: format = DXGI_FORMAT_R8G8_UNORM; break;
+		case DXGI_FORMAT_R16_TYPELESS: format = DXGI_FORMAT_R16_UNORM; break;
+		case DXGI_FORMAT_R16G16_TYPELESS: format = DXGI_FORMAT_R16G16_FLOAT; break;
+		case DXGI_FORMAT_R32_TYPELESS: format = DXGI_FORMAT_R32_FLOAT; break;
+		case DXGI_FORMAT_R32G32_TYPELESS: format = DXGI_FORMAT_R32G32_FLOAT; break;
+		case DXGI_FORMAT_R32G32B32A32_TYPELESS: format = DXGI_FORMAT_R32G32B32A32_FLOAT; break;
+		case DXGI_FORMAT_R10G10B10A2_TYPELESS: format = DXGI_FORMAT_R10G10B10A2_UNORM; break;
+		case DXGI_FORMAT_B8G8R8X8_TYPELESS: format = srgb ? DXGI_FORMAT_B8G8R8X8_UNORM_SRGB : DXGI_FORMAT_B8G8R8X8_UNORM; break;
+		// any other typeless format (depth, odd layouts) has no view this code knows: "no texture" rather than a
+		// view D3D12 rejects without saying so
+		case DXGI_FORMAT_R32G32B32_TYPELESS: case DXGI_FORMAT_R32G8X24_TYPELESS: case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
+		case DXGI_FORMAT_R24G8_TYPELESS: case DXGI_FORMAT_R24_UNORM_X8_TYPELESS: case DXGI_FORMAT_X24_TYPELESS_G8_UINT:
+		case DXGI_FORMAT_X32_TYPELESS_G8X24_UINT:
+			return ~0u;
 		default: break;
 	}
 	D3D12_CPU_DESCRIPTOR_HANDLE handle;
@@ -665,7 +802,20 @@ NFX_EXPORT int NFX_Native_Init(void* unityResource) {
 	return 1;
 }
 
+// Status strings the render thread writes (DLSS, NRD, shader reload) and the main thread reads through the
+// NFX_Native_*Status exports: one lock for both, since a std::string being reassigned while it is copied out read
+// freed memory (the DLSS status changed every frame)
+std::mutex g_statusMutex;
+
+static void SetStatus(std::string& status, const std::string& value) {
+	std::lock_guard<std::mutex> lock(g_statusMutex);
+	if (status != value) {
+		status = value;
+	}
+}
+
 static int CopyOut(const std::string& s, char* buffer, int size) {
+	std::lock_guard<std::mutex> lock(g_statusMutex);
 	int n = static_cast<int>(s.size()) < size - 1 ? static_cast<int>(s.size()) : size - 1;
 	if (n > 0) {
 		memcpy(buffer, s.data(), n);
@@ -683,7 +833,7 @@ NFX_EXPORT int NFX_Native_Info(char* buffer, int size) {
 	s += g_pluginLoadCalled ? (g_unityD3D12 != nullptr ? "yes (D3D12v7)" : "yes (no D3D12v7)") : "no";
 	s += ", device from: " + g_deviceSource;
 	// features the C# side checks before relying on them (an older DLL lacks them)
-	s += ", features: own-glass lamp-mask dlss dlss-rr sun-map";
+	s += ", features: own-glass lamp-mask dlss dlss-rr sun-map ground-map ground-cover";
 	if (g_device) {
 		D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
 		g_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options));
@@ -1006,7 +1156,8 @@ NFX_EXPORT void NFX_Native_SetInstances(const float* transforms, const int* geom
 		D3D12_RAYTRACING_INSTANCE_DESC d = {};
 		memcpy(d.Transform, transforms + i * 12, sizeof(d.Transform));
 		d.InstanceID = static_cast<UINT>(i);
-		d.InstanceMask = (flags[i] & 2) ? 0x02 : 0x01;
+		// 2 glass (its own trace only); else the scene, and 16 the ground, 32 the road among it (GroundMap.hlsl)
+		d.InstanceMask = (flags[i] & 2) ? 0x02 : static_cast<UINT>(0x01 | ((flags[i] & 16) ? 0x04 : 0) | ((flags[i] & 32) ? 0x08 : 0) | ((flags[i] & 5) ? 0x10 : 0));
 		d.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE | ((flags[i] & 1) ? D3D12_RAYTRACING_INSTANCE_FLAG_NONE : D3D12_RAYTRACING_INSTANCE_FLAG_FORCE_OPAQUE);
 		// geometry index for now; the BLAS address is filled in at build time
 		d.AccelerationStructure = static_cast<UINT64>(id);
@@ -1562,7 +1713,7 @@ struct RenderThreadGpu {
 	ComPtr<ID3D12CommandAllocator> allocators[kSlots];
 	ComPtr<ID3D12GraphicsCommandList4> list;
 	ComPtr<ID3D12Fence> fence;
-	UINT64 submitted = 0;
+	std::atomic<UINT64> submitted{ 0 };  // written by the render thread, read by WaitRenderIdle on the main thread
 	int frame = 0;
 
 	bool Create() {
@@ -1589,12 +1740,19 @@ struct RenderThreadGpu {
 			return nullptr;  // the GPU is that far behind: skip rather than stall Unity's render thread
 		}
 		auto& allocator = allocators[frame % kSlots];
+		list->Close();  // a list left open by an earlier failure would make both resets fail
 		allocator->Reset();
 		list->Reset(allocator.Get(), nullptr);
+		g_crumbs.Create(g_device.Get());
+		crumb = g_crumbs.Begin(list.Get(), g_crumbTag);
+		g_crumbTag = "render";
 		return list.Get();
 	}
+	UINT crumb = 0;
 
 	void Submit(ID3D12CommandQueue* queue) {
+		g_crumbs.End(list.Get(), crumb);
+		crumb = 0;
 		list->Close();
 		ID3D12CommandList* lists[] = { list.Get() };
 		queue->ExecuteCommandLists(1, lists);
@@ -1620,6 +1778,7 @@ void QueueTest() {
 	if (!output) {
 		output = CreateBuffer(4, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	}
+	g_crumbTag = "queue test";
 	auto* list = g_render.Begin();
 	if (list == nullptr || !output) {
 		g_queueTest = -2;
@@ -1638,7 +1797,9 @@ void QueueTest() {
 
 // The render thread's own TLAS, rebuilt every frame from g_resolved (moving cars), with an instance upload buffer
 // per frame in flight
-constexpr int kInstanceSlots = 16;  // TLAS builds (one per frame) in flight
+// TLAS builds (one per frame) in flight: as many as the render thread may have submissions queued (Begin lets it run
+// kSlots ahead), so an upload buffer is never written while a queued build still reads it
+constexpr int kInstanceSlots = RenderThreadGpu::kSlots;
 ComPtr<ID3D12Resource> g_renderTlas, g_renderScratch, g_renderInstances[kInstanceSlots];
 UINT64 g_renderTlasCapacity = 0, g_renderScratchCapacity = 0, g_renderInstanceCapacity[kInstanceSlots] = {};
 UINT32 g_renderTlasFrame = ~0u;
@@ -1690,8 +1851,10 @@ static_assert(sizeof(TraceEventData::constants) <= kConstantSlot, "the Frame con
 bool TraceRt(const TraceEventData* data, ID3D12CommandQueue* queue);
 
 // Builds g_renderTlas from g_resolved into the open list, once per frame. False when there is nothing to trace.
+// g_sceneMutex held by the caller (Trace), from before the list is begun until it is submitted: the main thread's
+// WaitRenderIdle only knows about submitted work, so a TLAS build recorded against BLAS it is about to free must not
+// sit unsubmitted while it waits
 bool RecordRenderTlas(ID3D12GraphicsCommandList4* list, UINT32 frame, D3D12_GPU_VIRTUAL_ADDRESS* records) {
-	std::lock_guard<std::mutex> lock(g_sceneMutex);
 	if (g_resolved.empty() || !g_records || !g_heap) {
 		return false;
 	}
@@ -1770,6 +1933,10 @@ void Trace(const TraceEventData* data) {
 		++g_traceFrames;
 		return;
 	}
+	g_crumbTag = "trace " + std::to_string(data->kind);
+	// the scene lock from here to the submit (see RecordRenderTlas): ReleaseGeometry / BuildScene wait for the GPU
+	// under it and then free BLAS, so nothing referencing them may be half recorded meanwhile
+	std::lock_guard<std::mutex> lock(g_sceneMutex);
 	auto* list = g_render.Begin();
 	if (list == nullptr) {
 		++g_traceSkipped;
@@ -1864,16 +2031,20 @@ void UNITY_INTERFACE_API OnRenderEventAndData(int eventId, void* data) {
 }  // namespace
 
 namespace {
-void WaitRenderIdle() {
+bool WaitRenderIdle() {
 	if (!g_render.fence || g_render.submitted == 0) {
-		return;
+		return true;
 	}
+	bool done = true;
 	if (g_render.fence->GetCompletedValue() < g_render.submitted) {
-		HANDLE done = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-		g_render.fence->SetEventOnCompletion(g_render.submitted, done);
-		WaitForSingleObject(done, 5000);
-		CloseHandle(done);
+		HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+		g_render.fence->SetEventOnCompletion(g_render.submitted, event);
+		// a GPU that is this far behind (a resize at 4K evicting memory) must not have what it still uses freed:
+		// callers that free resources on a false wait keep them (DlssResize)
+		done = WaitForSingleObject(event, 5000) == WAIT_OBJECT_0;
+		CloseHandle(event);
 	}
+	return done;
 }
 
 }  // namespace
@@ -2152,7 +2323,7 @@ void ReloadShaders() {
 	char line[192];
 	snprintf(line, sizeof(line), "%zu shader files in use; trace pipelines %s", g_shaderFiles.size(),
 	         ok ? "made again" : "failed (a shader file is broken: traces stop until the next reload)");
-	g_shaderStatus = line;
+	SetStatus(g_shaderStatus, line);
 }
 }  // namespace
 

@@ -182,11 +182,7 @@ namespace NatureFX.Rendering {
 				Draw(ctx);
 				return;
 			}
-			skyUsed_ = fogUsed_ = cloudsUsed_ = false;
-			Shared.SkyDrawn = false;
-			Shared.CloudShadowParams = Vector4.zero;
-			Shared.SkyLight = 0.0f;
-			CloudController.NativeShadowsActive = false;
+			ResetShared();
 			if (!NativeSky) {
 				SkyStatus = "off (HDRP's sky)";
 				FogStatus = "off (HDRP's fog)";
@@ -201,6 +197,24 @@ namespace NatureFX.Rendering {
 			Trace(ctx);
 		}
 
+		// What the other passes read from this one, cleared: at the start of each trace, and when the pass is switched
+		// off (RayTracingEffects.Apply), since a disabled pass does not run and left the last frame's cloud shadow, fog
+		// and sky light standing (a still cloud shadow on the ground, no light shafts, old fog on glass and particles)
+		public void ResetShared() {
+			skyUsed_ = fogUsed_ = cloudsUsed_ = false;
+			Shared.SkyDrawn = false;
+			Shared.CloudShadowParams = Vector4.zero;
+			Shared.SkyLight = 0.0f;
+			CloudController.NativeShadowsActive = false;
+		}
+
+		public void Disable() {
+			ResetShared();
+			Shader.SetGlobalVector(FogVolumeParamsId, Vector4.zero);
+			SkyStatus = "off (HDRP's sky)";
+			FogStatus = "off (HDRP's fog)";
+		}
+
 		private void Trace(CustomPassContext ctx) {
 			var cmd = ctx.cmd;
 			var bridge = NativeEngine.Bridge;
@@ -213,6 +227,12 @@ namespace NatureFX.Rendering {
 			var lightGround = new Vector4(ground.x, ground.y, ground.z, 0.0f);
 			// the frame's constants (the ray traced shadow pass, if it runs, adds its own ambient values)
 			var hdrpProbe = HdrpBindings.AmbientProbe(ctx.hdCamera);
+			if (hdrpProbe == null) {
+				// the sky tables and the fog are issued with the probe's buffer bound: without one the engine skips
+				// them silently, and the "made" flags below would have kept it from trying again
+				SkyStatus = FogStatus = "unavailable (HDRP's ambient probe not reachable)";
+				return;
+			}
 			NativeEngine.BeginFrame(cam, lightDir, SunController.SkyLightRadius, lightGround, frame_++, Vector4.zero, Lights, hdrpProbe);
 			ReadProbes(hdrpProbe);
 

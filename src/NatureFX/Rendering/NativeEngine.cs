@@ -441,6 +441,12 @@ namespace NatureFX.Rendering {
 			if (!Ready) {
 				return;
 			}
+			// each pass that drops its history sets it again this frame; left standing, a true from the frame the
+			// shadow pass was switched off made DLSS and the NRD reflections reset for ever
+			NrdReset = false;
+			// buffers replaced by a resize or a DLSS mode change: freed here (every frame, whether or not a pass runs:
+			// with only DLSS on they were never freed) once the queued frames that used them are past
+			ReleaseRetired(3);
 			if (Time.unscaledTime >= nextMemoryLog_) {
 				nextMemoryLog_ = Time.unscaledTime + 30.0f;
 				Kino.Log.Info($"[NatureFX] GPU memory: {GpuMemory}");
@@ -562,7 +568,10 @@ namespace NatureFX.Rendering {
 		// render event data (TraceEventData in NFXNative.cpp): 4 pointers, kind, width, height, Unity frame, 2100 floats
 		private const int EventSlotSize = 8448;
 		private const int ConstantsOffset = 48;
-		private const int EventSlots = 64;
+		// trace events whose data the render thread may still have to read: a frame issues up to about 20 (sky, clouds,
+		// their shadow, the sky's light and cube, the 3D fog, sun, GI, lamps, lamp masks, surface, reflections, glass,
+		// plus the ground and sun map bands) and 2 or 3 frames are queued; 64 could wrap onto a slot still unread
+		private const int EventSlots = 256;
 		private static IntPtr eventData_;
 		private static int eventSlot_;
 		private static readonly float[] constants_ = new float[2100];
@@ -618,6 +627,9 @@ namespace NatureFX.Rendering {
 				if (ambientParams != Vector4.zero) {
 					ambientParams_ = ambientParams;
 				}
+				if (sunRadius > 0.0f) {
+					sunRadius_ = sunRadius; // the shadow pass's (Sun size): the atmosphere pass begins the frame with the disc's
+				}
 				return;
 			}
 			beganFrame_ = Time.frameCount;
@@ -644,8 +656,15 @@ namespace NatureFX.Rendering {
 				probe_ = probe;
 				probePtr_ = probe != null ? probe.GetNativeBufferPtr() : IntPtr.Zero;
 			}
+			ReleaseRetired(3);
+		}
+
+		// Buffers a resize replaced, freed once the frames that may still use them are submitted (the engine's work
+		// goes into Unity's queue with each frame's command buffers, 2 or 3 frames behind at most). A resize at 4K
+		// retires about 2 GB at once: held for 10 frames it pushed the GPU over its memory budget
+		private static void ReleaseRetired(int frames) {
 			for (int i = retired_.Count - 1; i >= 0; --i) {
-				if (Time.frameCount - retired_[i].Frame > 10) {
+				if (Time.frameCount - retired_[i].Frame > frames) {
 					retired_[i].Buffer.Release();
 					retired_.RemoveAt(i);
 				}
@@ -796,11 +815,13 @@ namespace NatureFX.Rendering {
 			Unpack4(cmd, bridge, t, transmittance, new Vector4(TransmittanceW, TransmittanceH, 1.0f / TransmittanceW, 1.0f / TransmittanceH));
 			Issue(cmd, TraceSkyView_, m.ResultPtr, v.ResultPtr, SkyViewW, SkyViewH, t.ResultPtr);
 			Unpack4(cmd, bridge, v, view, new Vector4(SkyViewW, SkyViewH, 1.0f / SkyViewW, 1.0f / SkyViewH));
+			// the clouds' noise once, whether or not the clouds are drawn: the 3D fog's boxes and the tyre smoke read
+			// its Worley noise too (FogVolume.hlsl), and were empty in a session that never showed clouds
+			if (!cloudNoiseMade_) {
+				cloudNoiseMade_ = true;
+				Issue(cmd, TraceCloudNoise_, m.ResultPtr, t.ResultPtr, 4096, 64);
+			}
 			if (clouds != null) {
-				if (!cloudNoiseMade_) {
-					cloudNoiseMade_ = true;
-					Issue(cmd, TraceCloudNoise_, m.ResultPtr, t.ResultPtr, 4096, 64);
-				}
 				int width = (int)cloudSize.x, height2 = (int)cloudSize.y;
 				var b = Buffers(TraceClouds_, width * height2, 1, 16);
 				int prepare = bridge.FindKernel("PrepareClouds");
@@ -1157,6 +1178,47 @@ namespace NatureFX.Rendering {
 		// the sun as the map is traced, whatever the sun does meanwhile), the rays starting start m up it
 		public const int TraceSunMap_ = 20;
 
+		// The ground for the ground map (GroundMap, NFXNative GroundMap.hlsl): terrain, and wide flat meshes that do not
+		// move (roads, verges, the ground's own meshes; a rock, a wall or a post is neither wide nor flat)
+		private static bool Ground(Instance instance) {
+			// leaves and grass cards are never the ground, however wide a combined mesh of them is (a map's combined
+			// grass cards, flat and many metres across, would put the ground at their tips)
+			if (instance.Glass || instance.Follow != null || instance.Mesh == null || instance.AlphaTest || instance.Wind) {
+				return false;
+			}
+			if (instance.Kind == "terrain") {
+				return true;
+			}
+			var b = instance.SubMesh < instance.Mesh.subMeshCount ? instance.Mesh.GetSubMesh(instance.SubMesh).bounds : instance.Mesh.bounds;
+			var m = instance.Matrix;
+			// the world box's size: each axis the sum of the box's extents along it
+			var e = b.extents;
+			float sx = Mathf.Abs(m.m00) * e.x + Mathf.Abs(m.m01) * e.y + Mathf.Abs(m.m02) * e.z;
+			float sy = Mathf.Abs(m.m10) * e.x + Mathf.Abs(m.m11) * e.y + Mathf.Abs(m.m12) * e.z;
+			float sz = Mathf.Abs(m.m20) * e.x + Mathf.Abs(m.m21) * e.y + Mathf.Abs(m.m22) * e.z;
+			float wide = Mathf.Max(sx, sz) * 2.0f;
+			return wide >= 6.0f && sy * 2.0f <= wide * 0.35f;
+		}
+
+		// the road among the ground: by its material's or mesh's name (Kino's road_ tag, asphalt)
+		private static bool Road(Instance instance) {
+			string name = ((instance.Material != null ? instance.Material.name : "") + " " + (instance.Mesh != null ? instance.Mesh.name : "")).ToLowerInvariant();
+			return name.Contains("road") || name.Contains("asphalt") || name.Contains("tarmac");
+		}
+
+		// The ground map (GroundMap): rows row .. row + rows of a cells x cells map into target, centred on origin (x, z;
+		// y the camera's height; w the cell size), the rays starting start m above it
+		public const int TraceGroundMap_ = 21;
+
+		public static void TraceGroundMap(CommandBuffer cmd, GraphicsBuffer target, Vector4 origin, int row, int rows, int cells, float start) {
+			var ptr = target.GetNativeBufferPtr();
+			kindParams_ = true;
+			kindA_ = origin;
+			kindB_ = new Vector4(row, start, cells, 0.0f);
+			Issue(cmd, TraceGroundMap_, ptr, ptr, cells, rows);
+			kindParams_ = false;
+		}
+
 		public static void TraceSunMap(CommandBuffer cmd, GraphicsBuffer target, Vector4 origin, Vector4 dir, int row, int rows, int cells, float start) {
 			var ptr = target.GetNativeBufferPtr();
 			var sun = sunDirection_;
@@ -1251,6 +1313,11 @@ namespace NatureFX.Rendering {
 				screen_ = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, screenPixels), 12) { name = "NFX_NativeScreen" };
 				screenPtr_ = screen_.GetNativeBufferPtr();
 			}
+			// ScreenSize is this buffer's size: the render resolution, not the camera's pixel size. With DLSS upscaling
+			// they differ (3840x2054 shown, 1280x685 rendered) and the traces read the buffer with the larger stride,
+			// far past its end through a root SRV (no bounds check): the GPU faulted (device removed) the moment an
+			// upscaling mode was chosen
+			screenSize_ = new Vector4(ctx.hdCamera.actualWidth, ctx.hdCamera.actualHeight, 1.0f / Mathf.Max(1, ctx.hdCamera.actualWidth), 1.0f / Mathf.Max(1, ctx.hdCamera.actualHeight));
 			int screenKernel = bridge.FindKernel("PrepareScreen");
 			cmd.SetComputeTextureParam(bridge, screenKernel, ColorTexId, color);
 			cmd.SetComputeTextureParam(bridge, screenKernel, CameraDepthId, ctx.cameraDepthBuffer);
@@ -1360,6 +1427,9 @@ namespace NatureFX.Rendering {
 		// boxes: the local fog boxes (5 float4 each, FogVolume.hlsl BoxesSigma), boxCount of them
 		public static void TraceFogVolume(CommandBuffer cmd, ComputeShader bridge, Vector4 fog, RTHandle historyIn, RTHandle historyOut, RTHandle integrated,
 		                                  Vector3 cameraDelta, float share, Vector4[] boxes = null, int boxCount = 0, Vector4[] smoke = null) {
+			if (skyTransmittance_ == null) {
+				return; // the fog reads the sky data (its noise, the transmittance): nothing sensible without it
+			}
 			var b = Buffers(TraceFogVolume_, FogW * FogH * FogD, 1, 16);
 			if (boxes != null && boxCount > 0) {
 				cmd.SetBufferData(b.Surface, boxes, 0, FogW * FogH * 3, boxCount * 5);
@@ -1373,7 +1443,7 @@ namespace NatureFX.Rendering {
 			cmd.DispatchCompute(bridge, prepare, (FogW + 7) / 8, (FogH + 7) / 8, 1);
 			kindParams_ = true;
 			kindA_ = fog;
-			kindB_ = new Vector4(boxCount, Time.time, smoke != null ? 1.0f : 0.0f, 0.0f);
+			kindB_ = new Vector4(boxCount, Time.time, smoke != null ? 1.0f : 0.0f, NatureFX.Map.MapFog.LampAirSigma);
 			// Screen: the sky data (the boxes' noise)
 			Issue(cmd, TraceFogVolume_, b.SurfacePtr, b.ResultPtr, FogW, FogH * FogD, skyTransmittance_ != null ? skyTransmittance_.ResultPtr : IntPtr.Zero);
 			kindParams_ = false;
@@ -1465,7 +1535,9 @@ namespace NatureFX.Rendering {
 					transforms[o + 4] = m.m10; transforms[o + 5] = m.m11; transforms[o + 6] = m.m12; transforms[o + 7] = m.m13;
 					transforms[o + 8] = m.m20; transforms[o + 9] = m.m21; transforms[o + 10] = m.m22; transforms[o + 11] = m.m23;
 					ids[n] = id;
-					flags[n] = (instance.AlphaTest ? 1 : 0) | (instance.Glass ? 2 : 0) | (instance.Wind ? 4 : 0) | (instance.Follow != null ? 8 : 0);
+					bool ground = Ground(instance);
+					flags[n] = (instance.AlphaTest ? 1 : 0) | (instance.Glass ? 2 : 0) | (instance.Wind ? 4 : 0) | (instance.Follow != null ? 8 : 0)
+					           | (ground ? 16 : 0) | (ground && Road(instance) ? 32 : 0);
 					materials[n] = MaterialId(instance.Material, instance.Color, instance.Finish);
 					uploaded_.Add(instance);
 					++n;

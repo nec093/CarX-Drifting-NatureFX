@@ -603,7 +603,11 @@ namespace NatureFX.Rendering {
 			// the sky, clouds and fog run on the own engine too, whatever the ray traced effects are set to
 			NativeEngine.Enabled = s.Enabled && (EngineLighting.Shadows(s) || EngineLighting.Ambient(s) || s.RTShafts || EngineLighting.Reflections(s) || s.NativeSky);
 			if (atmosphereTrace_ != null) {
-				atmosphereTrace_.enabled = atmosphereComposite_.enabled = s.Enabled && s.NativeSky;
+				bool atmosphere = s.Enabled && s.NativeSky;
+				if (atmosphereTrace_.enabled && !atmosphere) {
+					atmosphereTrace_.Disable(); // a pass that no longer runs cannot clear what it shared
+				}
+				atmosphereTrace_.enabled = atmosphereComposite_.enabled = atmosphere;
 				atmosphereTrace_.NativeSky = s.Enabled && s.NativeSky;
 				atmosphereTrace_.NativeFog = s.NativeFog;
 				atmosphereTrace_.Clouds = s.Clouds;
@@ -661,6 +665,8 @@ namespace NatureFX.Rendering {
 				shadows_.LampMasks = s.RTLampMasks;
 				shadows_.FullRelight = s.RTFullRelight;
 				shadows_.TransparentShadows = s.RTTransparentShadows;
+				shadows_.GroundDetail = s.MapGroundDetail;
+				shadows_.GroundBlend = NatureFX.Map.MapDefaults.Value(NatureFX.Map.MapKey.GroundBlend, 0.35f);
 				shadows_.LeafTranslucency = s.RTLeafTranslucency;
 				shadows_.Shafts = s.RTShafts;
 				lights_.Enabled = EngineLighting.LocalLights(s);

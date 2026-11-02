@@ -101,7 +101,9 @@ NFX_ENTRY(id)
             // far clouds fade into the sky's haze
             float distance = weight > 0.0 ? weightedT / weight : t0;
             float fade = exp(-distance / max(ReflParams.w, 1000.0));
-            result = float4(min(L * fade, 1e9), lerp(1.0, T, fade));
+            // within half range: the target and its history are 16 bit floats, and a thin cloud across the sun went
+            // past 65504 (inf, then NaN spreading through the temporal history as holes around the sun)
+            result = float4(min(L * fade, 60000.0), lerp(1.0, T, fade));
         }
     }
     Output.Store4(index * 16, asuint(result));

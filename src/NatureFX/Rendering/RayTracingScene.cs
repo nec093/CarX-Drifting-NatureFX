@@ -273,6 +273,23 @@ namespace NatureFX.Rendering {
 				}
 			}
 
+			// NatureFX's own plants drawn by instancing (ShrubRenderer): their billboard clouds, alpha tested, so they
+			// shade and are seen in reflections like the map's plants; a new scatter is a new key
+			var shrubs = NatureFX.Nature.ShrubRenderer.RayKey;
+			if (shrubs != null) {
+				seen_.Add(shrubs);
+				if (!handles_.ContainsKey(shrubs)) {
+					var list = new List<int>();
+					foreach (var s in NatureFX.Nature.ShrubRenderer.RayInstances) {
+						int handle = nextOwnHandle_++;
+						list.Add(handle);
+						AddNative(handle, s.Mesh, 0, s.Matrix, true, "tree", null, false, s.Material);
+						++InstanceCount;
+					}
+					handles_[shrubs] = list;
+				}
+			}
+
 			// what was switched off or destroyed leaves
 			gone_.Clear();
 			foreach (var source in handles_.Keys) {

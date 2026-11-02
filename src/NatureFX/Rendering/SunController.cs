@@ -62,6 +62,7 @@ namespace NatureFX.Rendering {
 			if (sun_ == null) {
 				return;
 			}
+			moonShadowsTraced_ = EngineLighting.Shadows(s);
 			if (hdSun_ != null && s.Enabled && s.RealisticShadows) {
 				// soft shadow penumbra grows with distance from the caster (PCSS, High shadow filtering only)
 				// overcast sky: the whole sky is the light source, so shadows get very soft
@@ -183,6 +184,7 @@ namespace NatureFX.Rendering {
 		private Light moon_;
 		private HDAdditionalLightData hdMoon_;
 		private bool sunShadowsOff_;
+		private bool moonShadowsTraced_, moonShadowsOn_;  // the moon's shadow map: off while the own engine traces shadows
 
 		// the sun raised to real sunshine while NatureFX is on (Units), the track's own when it is off
 		private float physical_ = 1.0f;
@@ -213,7 +215,14 @@ namespace NatureFX.Rendering {
 			moon_.useColorTemperature = true;
 			moon_.colorTemperature = 7800.0f;
 			if (hdMoon_ != null) {
-				hdMoon_.EnableShadows(amount >= 0.5f);
+				// its shadow map only while the own engine does not trace the shadows (it turns other directional
+				// lights' shadows off every 2 s: set again every frame here, the moon's shadows doubled and flickered),
+				// and only on a change (EnableShadows is not free)
+				bool shadows = amount >= 0.5f && !moonShadowsTraced_;
+				if (shadows != moonShadowsOn_) {
+					hdMoon_.EnableShadows(shadows);
+					moonShadowsOn_ = shadows;
+				}
 				hdMoon_.volumetricDimmer = shafts;
 				hdMoon_.angularDiameter = 0.52f;
 			}

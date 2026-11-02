@@ -20,12 +20,20 @@ namespace NatureFX.Map {
 		private float baseHeight_ = float.NaN;
 		private bool gameFogOn_ = true;
 		private float gameFogDistance_ = float.PositiveInfinity;  // the track's own attenuation distance
+		private int resampleFrames_;
+
+		// Reads the track's own fog again (after a map loaded): see Update
+		public void Invalidate() {
+			resampleFrames_ = 2;
+		}
 
 		// Native fog (Settings.NativeFog): the own engine draws the fog (NFXNative Fog.hlsl, RTShadowPass) from these:
 		// x extinction at the base (1/m), y the base height (world y), z the scale height (m), w 1 = on. HDRP's global
 		// fog is then switched off (this volume's mean free path out of reach); its volumetric fog stays for the map's
 		// local fog volumes and the tyre smoke.
 		public static Vector4 NativeParams { get; private set; }
+		// the most the air scatters the lamps' light (1/m): unlimited in the weather's or the map's fog, else clear air's
+		public static float LampAirSigma { get; private set; } = 1e-4f;
 
 		public void Create() {
 			if (root_ != null) {
@@ -67,6 +75,16 @@ namespace NatureFX.Map {
 			float weight = on && distance > 0.0f ? MapDefaults.FogWeight : 0.0f;
 			volumetric &= on;
 			haze = on ? Mathf.Clamp01(haze) : 0.0f;
+			if (resampleFrames_ > 0) {
+				// a new map: this volume off for a rendered frame, so the camera's stack shows the track's own fog
+				// again (with the haze or the own engine's fog on from the first frame it was never read: every
+				// track's fog counted as none)
+				--resampleFrames_;
+				volume_.enabled = false;
+				if (resampleFrames_ > 0) {
+					return;
+				}
+			}
 			if (!volume_.enabled) {
 				// the track's own fog, as it is without this volume
 				var stack = NatureFX.Rendering.VolumeOverhaul.Stack()?.GetComponent<Fog>();
@@ -160,6 +178,7 @@ namespace NatureFX.Map {
 				baseHeight = 0.0f;
 				layer = 1000.0f;
 			}
+			LampAirSigma = weight > 0.0f ? 1e6f : 1e-4f;
 			// HDRP's fog falls off from its base to its maximum height; as an exponential, a third of the layer
 			NativeParams = new Vector4(float.IsInfinity(meanFreePath) ? 0.0f : 1.0f / meanFreePath, baseHeight, Mathf.Max(20.0f, layer / 3.0f), 1.0f);
 			volume_.weight = 1.0f;

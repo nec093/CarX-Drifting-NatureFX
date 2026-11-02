@@ -341,6 +341,11 @@ Shader "Hidden/NatureFX/SunExact"
                 for (uint i = 0; i < _PunctualLightCount; ++i)
                 {
                     LightData light = _LightDatas[i];
+                    // out of the light's range: nothing to add or take away (HDRP's light loop never reaches such a
+                    // light through its tiles; this loop over every lamp evaluated the full BSDF for each)
+                    float3 toLight = light.positionRWS - posInput.positionWS;
+                    if (dot(toLight, toLight) > light.range * light.range)
+                        continue;
                     // the engine's lamp of this light: the same position (LocalLights takes it from the same Light)
                     float3 at = GetAbsolutePositionWS(light.positionRWS);
                     float visible = 1.0;

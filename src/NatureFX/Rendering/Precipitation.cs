@@ -33,6 +33,7 @@ namespace NatureFX.Rendering {
 				State = "needs the new shader bundle (NatureFX/Particle)";
 				return;
 			}
+			materials_ = new[] { rainMaterial, splashMaterial, snowMaterial }; // destroyed with the root (each reload made new ones)
 			root_ = new GameObject("NatureFX.Precipitation");
 			Object.DontDestroyOnLoad(root_);
 
@@ -48,9 +49,19 @@ namespace NatureFX.Rendering {
 			if (root_ != null) {
 				Object.Destroy(root_);
 			}
+			if (materials_ != null) {
+				foreach (var m in materials_) {
+					if (m != null) {
+						Object.Destroy(m);
+					}
+				}
+			}
+			materials_ = null;
 			root_ = null;
 			rain_ = splash_ = snow_ = null;
 		}
+
+		private Material[] materials_;
 
 		public void Update(ISettings s, Camera camera) {
 			if (root_ == null || camera == null) {

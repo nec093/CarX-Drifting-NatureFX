@@ -30,6 +30,9 @@ namespace NatureFX {
 		internal readonly TrackMap Tracks = new();
 		internal readonly CarRain CarRainFx = new();
 		internal readonly MapProfile Map = new();
+		internal readonly MapPaint Paint = new();
+		internal readonly Detritus Debris = new();
+		internal readonly ShrubRenderer Shrubs = new();
 		internal readonly MarkerScanner Markers = new();
 		internal readonly MaterialProfiles MaterialLooks = new();
 		internal readonly ExposureProbe Exposure = new();
@@ -63,6 +66,7 @@ namespace NatureFX {
 		private float nextRescan_;
 		private Coroutine pendingRescan_;
 		private float nextVolumeRefresh_;
+		private float pendingShrubDensity_ = float.NaN, shrubReloadAt_;
 
 		private void Start() {
 			if (!Settings.Init()) {
@@ -120,6 +124,7 @@ namespace NatureFX {
 			Kino.Input.Bind(KeyCode.F9, () => {
 				PhotoMode.Toggle();
 				MarkDirty(); // the ray traced effects take the photo quality (RayTracingEffects.Apply)
+				RT.ResetHistory(); // their history textures change size with it
 			}, "NatureFX photo mode");
 
 			ScheduleRescan(1.0f);
@@ -139,6 +144,7 @@ namespace NatureFX {
 			Finish.RestoreAll();
 			PaintedShadows.ShowAll();
 			Headlights.Restore();
+			Headlights.DestroyCookies();
 			Tracks.Destroy();
 			CarRainFx.Destroy();
 			Bundle.Unload();
@@ -147,6 +153,7 @@ namespace NatureFX {
 			Clouds.Destroy();
 			Night.Destroy();
 			Forest.Destroy();
+			Shrubs.Destroy();
 			Smoke.Destroy();
 			Rain.Destroy();
 			Glow.Destroy();
@@ -160,12 +167,15 @@ namespace NatureFX {
 			TrackProbes.Restore();
 			Grass.Destroy();
 			Decals.Destroy();
+			Paint.Destroy();
+			Debris.Destroy();
 			Water.Destroy();
 			Volumes.Destroy();
 			Particles.Destroy();
 			Volume.Destroy();
 			CameraFog.Restore();
 			CameraClouds.Restore();
+			GroundMap.Release();
 			ShaderGlobals.DestroyNoiseTexture();
 		}
 
@@ -229,8 +239,23 @@ namespace NatureFX {
 			// the 3D grass belongs to the shader rebuild (it draws with NatureFX/Foliage), the rest to map effects
 			Grass.Update(mapOn && rebuiltSurface, s, camPos);
 			Forest.Update(mapOn, camPos);
+			// the thickets: planted again when the density changes; they draw with NatureFX/Foliage like the 3D grass
+			if (Shrubs.NeedsReload(s.ShrubDensity)) {
+				// once the slider rests: every frame of a drag replanted the thickets (materials, meshes, the ray tracing
+				// scene) and stuttered
+				if (!Mathf.Approximately(s.ShrubDensity, pendingShrubDensity_)) {
+					pendingShrubDensity_ = s.ShrubDensity;
+					shrubReloadAt_ = Time.unscaledTime + 0.5f;
+				} else if (Time.unscaledTime >= shrubReloadAt_) {
+					Shrubs.Load(Markers, Bundle, Replacer, s.ShrubDensity);
+				}
+			}
+			Shrubs.Update(mapOn && rebuiltSurface, cam, s.ShrubDistance);
 			bool effects = mapOn && s.MapEffects;
 			Decals.Update(effects, camPos);
+			// the ground map's painted dirt and debris (the ground blend itself is RT's)
+			Paint.Update(effects && s.MapGroundDetail, camPos);
+			Debris.Update(effects && s.MapGroundDetail, s.Detritus, camPos);
 			Water.Update(effects, camPos);
 			Volumes.Update(effects, s, Sun.Sun, camPos);
 			Particles.Update(effects, Sun.Sun, camPos, Lights.LitPositions);
@@ -357,6 +382,7 @@ namespace NatureFX {
 				Replacer.LoadRules(Map);
 			}
 			Markers.Scan(Map);
+			Fog.Invalidate(); // the new track's own fog is read again (MapFog)
 			// a new map takes the user's sliders as they are now as the point where the map's defaults apply
 			if (changed || force) {
 				MapWeather.Load(Map, Settings.Data);
@@ -367,11 +393,14 @@ namespace NatureFX {
 			Probes.Load(Map, Markers);
 			Grass.Load(Map, Markers, Bundle, Settings.Data.GrassDensity);
 			Decals.Load(Markers);
+			Paint.Load(Map);
+			Debris.Create(Bundle);
 			Water.Load(Markers, Bundle);
 			Volumes.Load(Markers);
 			Particles.Load(Markers, Bundle);
 			Night.Load(Map, Bundle);
 			Forest.Load(Markers, Bundle);
+			Shrubs.Load(Markers, Bundle, Replacer, Settings.Data.ShrubDensity);
 		}
 
 		internal bool BundleFileExists() {
@@ -381,6 +410,7 @@ namespace NatureFX {
 		private void OnSceneLoaded(Scene scene, LoadSceneMode mode) {
 			if (mode == LoadSceneMode.Single) {
 				NatureFX.Tools.MapDataProbe.Reset();
+				Shrubs.Unload(); // they draw the old map's meshes, destroyed with its scene
 			}
 			// a track loads several scenes in a row (2 s for them all); the game's day / night lighting is one small scene
 			ScheduleRescan(mode == LoadSceneMode.Additive && GameDayNight.Switching ? 0.3f : 2.0f);

@@ -104,6 +104,7 @@ namespace NatureFX.Rendering {
 			if (allocatedFull_ != FullResolution) {
 				ReleaseTraceTargets();
 				AllocTraceTargets();
+				History.RequestReset(); // the new history textures hold whatever memory had (NaN stays for good in a lerp)
 			}
 
 			var cmd = ctx.cmd;

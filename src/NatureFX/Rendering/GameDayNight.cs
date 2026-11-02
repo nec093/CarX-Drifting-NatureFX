@@ -124,8 +124,13 @@ namespace NatureFX.Rendering {
 			}
 			if (!drive) {
 				if (driving_ && original_.HasValue && ready && isDay != original_.Value) {
-					setMode_.Invoke(controller, new object[] { original_.Value });
-					refreshAt_ = Time.unscaledTime + 0.5f;
+					try {
+						setMode_.Invoke(controller, new object[] { original_.Value });
+						refreshAt_ = Time.unscaledTime + 0.5f;
+					} catch (Exception e) {
+						// the game's own method threw: give up rather than throw out of Update every frame
+						Kino.Log.Warning($"[NatureFX] The game's day / night mode could not be restored: {e.InnerException?.Message ?? e.Message}");
+					}
 				}
 				driving_ = false;
 				RestoreExtraSuns();

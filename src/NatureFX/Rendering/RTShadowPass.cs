@@ -65,6 +65,8 @@ namespace NatureFX.Rendering {
 		public long TracedRays { get; private set; }
 		public Vector4 SunDirection;
 		public bool TransparentShadows = true; // the sun's ray traced shadow map for transparent surfaces (SunShadowMap)
+		public bool GroundDetail = true;       // the ground map (GroundMap): ground blend, painted dirt, debris
+		public float GroundBlend = 0.35f;      // m: how high objects take the ground's colour where a material does not say
 		public Vector4 SunIlluminance;
 
 		public bool TraceShadows = true;
@@ -226,7 +228,18 @@ namespace NatureFX.Rendering {
 				Denoise = Alloc(Vector2.one * scale, $"NFX_RT{name_}_Denoise", format_);
 				HistoryA = Alloc(Vector2.one * scale, $"NFX_RT{name_}_HistoryA", format_);
 				HistoryB = Alloc(Vector2.one * scale, $"NFX_RT{name_}_HistoryB", format_);
+				fresh_ = true;
 			}
+
+			// True once after Ensure made new textures: their history holds whatever memory had (a NaN stays in a
+			// lerp for good), so the frame starts from its new samples
+			public bool TakeFresh() {
+				bool fresh = fresh_;
+				fresh_ = false;
+				return fresh;
+			}
+
+			private bool fresh_;
 
 			public void Release() {
 				Raw?.Release();
@@ -266,13 +279,42 @@ namespace NatureFX.Rendering {
 			dbufferWhite_ = Alloc(Vector2.one, "NFX_DBufferNoneMask", GraphicsFormat.R8G8B8A8_UNorm, false);
 			sunExact_ = Alloc(Vector2.one, "NFX_SunExact", GraphicsFormat.R16G16B16A16_SFloat, false);
 			lampsExact_ = Alloc(Vector2.one, "NFX_LampsExact", GraphicsFormat.R16G16B16A16_SFloat, false);
-			lampHistoryA_ = Alloc(Vector2.one, "NFX_LampMaskHistoryA", GraphicsFormat.R32G32B32A32_SFloat, false);
-			lampHistoryB_ = Alloc(Vector2.one, "NFX_LampMaskHistoryB", GraphicsFormat.R32G32B32A32_SFloat, false);
+			// the lamp mask histories (32 B a pixel) and DLSS Ray Reconstruction's guides are made when first used
+			// (EnsureLampHistory / EnsureGuides): always there, they were 400 MB at 4K whether or not either ran
 			lampsTotal_ = Alloc(Vector2.one, "NFX_LampsTotal", GraphicsFormat.R16G16B16A16_SFloat, false);
 			lampHistoryValid_ = false;
-			guideDiffuse_ = Alloc(Vector2.one, "NFX_DlssGuideDiffuse", GraphicsFormat.R16G16B16A16_SFloat, false);
-			guideSpecular_ = Alloc(Vector2.one, "NFX_DlssGuideSpecular", GraphicsFormat.R16G16B16A16_SFloat, false);
-			guideIds_ = new RenderTargetIdentifier[] { guideDiffuse_, guideSpecular_ };
+		}
+
+		private void EnsureLampHistory() {
+			if (lampHistoryA_ == null) {
+				lampHistoryA_ = Alloc(Vector2.one, "NFX_LampMaskHistoryA", GraphicsFormat.R32G32B32A32_SFloat, false);
+				lampHistoryB_ = Alloc(Vector2.one, "NFX_LampMaskHistoryB", GraphicsFormat.R32G32B32A32_SFloat, false);
+				lampHistoryValid_ = false;
+			}
+		}
+
+		private void ReleaseLampHistory() {
+			lampHistoryA_?.Release();
+			lampHistoryB_?.Release();
+			lampHistoryA_ = lampHistoryB_ = null;
+			lampHistoryValid_ = false;
+		}
+
+		private void EnsureGuides() {
+			if (guideDiffuse_ == null) {
+				guideDiffuse_ = Alloc(Vector2.one, "NFX_DlssGuideDiffuse", GraphicsFormat.R16G16B16A16_SFloat, false);
+				guideSpecular_ = Alloc(Vector2.one, "NFX_DlssGuideSpecular", GraphicsFormat.R16G16B16A16_SFloat, false);
+				guideIds_ = new RenderTargetIdentifier[] { guideDiffuse_, guideSpecular_ };
+			}
+		}
+
+		private void ReleaseGuides() {
+			guideDiffuse_?.Release();
+			guideSpecular_?.Release();
+			guideDiffuse_ = guideSpecular_ = null;
+			guideIds_ = null;
+			GuideDiffuse = GuideSpecular = null;
+			GuidesFrame = -10;
 		}
 
 		private void ReleaseExactTargets() {
@@ -287,13 +329,9 @@ namespace NatureFX.Rendering {
 			dbufferWhite_.Release();
 			sunExact_.Release();
 			lampsExact_.Release();
-			lampHistoryA_.Release();
-			lampHistoryB_.Release();
+			ReleaseLampHistory();
 			lampsTotal_.Release();
-			guideDiffuse_.Release();
-			guideSpecular_.Release();
-			GuideDiffuse = GuideSpecular = null;
-			GuidesFrame = -10;
+			ReleaseGuides();
 			lampMask_?.Release();
 			lampMask_ = null;
 			gbuffer_ = null;
@@ -340,14 +378,20 @@ namespace NatureFX.Rendering {
 			ExactFrame = Time.frameCount;
 			// DLSS Ray Reconstruction's albedos, from the same G-buffer
 			if (Dlaa.RayReconstruction) {
+				EnsureGuides();
 				CoreUtils.SetRenderTarget(cmd, guideIds_, ctx.cameraDepthBuffer, ClearFlag.None);
 				CoreUtils.DrawFullScreen(cmd, SunExactMaterial, props_, 2);
 				GuideDiffuse = guideDiffuse_;
 				GuideSpecular = guideSpecular_;
 				GuidesFrame = Time.frameCount;
+			} else if (guideDiffuse_ != null) {
+				ReleaseGuides();
 			}
 			// the light HDRP's lamps added, for the old blocked share (without lamp masks, DrawExactLamps)
 			if (!maskUsed_) {
+				if (lampHistoryA_ != null) {
+					ReleaseLampHistory();
+				}
 				CoreUtils.SetRenderTarget(cmd, lampsExact_, ClearFlag.None);
 				CoreUtils.DrawFullScreen(cmd, SunExactMaterial, props_, 1);
 			}
@@ -363,6 +407,7 @@ namespace NatureFX.Rendering {
 				lampMask_ = Alloc(Vector2.one * lampMaskScale_, "NFX_LampMask", GraphicsFormat.R32G32B32A32_SFloat);
 			}
 			NativeEngine.TraceLampMask(cmd, Bridge, ctx, Surfaces.Normal, lampMask_, maskSize);
+			EnsureLampHistory();
 			var historyIn = lampFlip_ ? lampHistoryB_ : lampHistoryA_;
 			var historyOut = lampFlip_ ? lampHistoryA_ : lampHistoryB_;
 			lampFlip_ = !lampFlip_;
@@ -424,6 +469,7 @@ namespace NatureFX.Rendering {
 			ambient_.Ensure(lowScale);
 			shafts_.Ensure(0.25f);
 			local_.Ensure(lowScale);
+			resetHistory |= sun_.TakeFresh() | ambient_.TakeFresh() | shafts_.TakeFresh() | local_.TakeFresh();
 			// quarter resolution: each trace pixel looks at a different full resolution pixel of its 4 x 4 block every
 			// frame (an R2 sequence); the accumulation gathers them, the composite's depth weighted upsample spreads them.
 			// Not under NRD: REBLUR follows each pixel through time and needs it to stay where it is.
@@ -459,6 +505,8 @@ namespace NatureFX.Rendering {
 			NativeEngine.BeginFrame(ctx.hdCamera.camera, SunDirection, sunRadius, SunIlluminance, frame_, ambientParams, Lights, probe);
 			// the sun's shadow on transparent surfaces (their forward pass reads the map)
 			SunShadowMap.Update(cmd, ctx.hdCamera.camera, SunDirection, TransparentShadows && TraceShadows);
+			// the ground seen from above: the map's ground blend, painted dirt and debris read it
+			GroundMap.Update(cmd, ctx.hdCamera.camera, GroundDetail, GroundBlend);
 			Surfaces.EnsureTraced(ctx);
 			bool skyUsed = false; // the sky is the atmosphere pass's (AtmospherePass), drawn after this one
 			float cameraHeight = 1.0f;

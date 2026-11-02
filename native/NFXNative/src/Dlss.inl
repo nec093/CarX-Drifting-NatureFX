@@ -111,11 +111,11 @@ bool DlssInit() {
 	if (NVSDK_NGX_FAILED(r)) {
 		char line[128];
 		snprintf(line, sizeof(line), "NGX could not start (0x%08x: not an NVIDIA RTX GPU, or the driver is too old)", static_cast<unsigned>(r));
-		d.status = line;
+		SetStatus(d.status, line);
 		return false;
 	}
 	if (NVSDK_NGX_FAILED(NVSDK_NGX_D3D12_GetCapabilityParameters(&d.params)) || d.params == nullptr) {
-		d.status = "NGX's capability parameters could not be had";
+		SetStatus(d.status, "NGX's capability parameters could not be had");
 		NVSDK_NGX_D3D12_Shutdown1(g_device.Get());
 		return false;
 	}
@@ -123,7 +123,7 @@ bool DlssInit() {
 	NVSDK_NGX_Parameter_GetI(d.params, NVSDK_NGX_Parameter_SuperSampling_Available, &available);
 	NVSDK_NGX_Parameter_GetI(d.params, NVSDK_NGX_Parameter_SuperSampling_NeedsUpdatedDriver, &needsDriver);
 	if (!available) {
-		d.status = needsDriver ? "DLSS needs a newer NVIDIA driver" : "DLSS is not available (nvngx_dlss.dll missing next to NFXNative.dll, or the GPU has no tensor cores)";
+		SetStatus(d.status, needsDriver ? "DLSS needs a newer NVIDIA driver" : "DLSS is not available (nvngx_dlss.dll missing next to NFXNative.dll, or the GPU has no tensor cores)");
 		NVSDK_NGX_D3D12_DestroyParameters(d.params);
 		d.params = nullptr;
 		NVSDK_NGX_D3D12_Shutdown1(g_device.Get());
@@ -134,7 +134,7 @@ bool DlssInit() {
 	d.rrAvailable = rrAvailable != 0;
 	d.initialised = true;
 	d.failed = false;
-	d.status = "ready";
+	SetStatus(d.status, "ready");
 	return true;
 }
 
@@ -149,8 +149,12 @@ bool DlssResize(ID3D12GraphicsCommandList4* list, const DlssEventData* data) {
 		return true;
 	}
 	if (d.feature) {
-		// the old feature may still be in flight: wait for the GPU (a resize is rare)
-		WaitRenderIdle();
+		// the old feature may still be in flight: wait for the GPU (a resize is rare). Not done in time (the GPU
+		// evicting memory after a resize at 4K): keep it, DLSS sits this frame out rather than free what runs
+		if (!WaitRenderIdle()) {
+			SetStatus(d.status, "GPU busy: the DLSS resize waits");
+			return false;
+		}
 		NVSDK_NGX_D3D12_ReleaseFeature(d.feature);
 		d.feature = nullptr;
 	}
@@ -161,7 +165,7 @@ bool DlssResize(ID3D12GraphicsCommandList4* list, const DlssEventData* data) {
 	    (rr && (!NrdCreateTexture(d.diffuse, DXGI_FORMAT_R16G16B16A16_FLOAT, width, height) ||
 	            !NrdCreateTexture(d.specular, DXGI_FORMAT_R16G16B16A16_FLOAT, width, height) ||
 	            !NrdCreateTexture(d.normals, DXGI_FORMAT_R16G16B16A16_FLOAT, width, height)))) {
-		d.status = "DLSS textures could not be made";
+		SetStatus(d.status, "DLSS textures could not be made");
 		return false;
 	}
 	NVSDK_NGX_DLSS_Create_Params create = {};
@@ -172,8 +176,10 @@ bool DlssResize(ID3D12GraphicsCommandList4* list, const DlssEventData* data) {
 	create.Feature.InPerfQualityValue = static_cast<NVSDK_NGX_PerfQuality_Value>(data->quality);
 	// HDR (pre-exposed by HDRP's exposure), the motion without the jitter (PrepareDlss works it out from the camera's
 	// unjittered matrices), HDRP's reversed depth, DLSS's own exposure on the pre-exposed colour
+	// MVLowRes: the motion vectors are at the render resolution (d.motion is width x height), not the output's;
+	// without the flag NGX reads them as output sized when upscaling (ghosting of anything moving)
 	create.InFeatureCreateFlags = NVSDK_NGX_DLSS_Feature_Flags_IsHDR | NVSDK_NGX_DLSS_Feature_Flags_DepthInverted |
-	                              NVSDK_NGX_DLSS_Feature_Flags_AutoExposure;
+	                              NVSDK_NGX_DLSS_Feature_Flags_AutoExposure | NVSDK_NGX_DLSS_Feature_Flags_MVLowRes;
 	NVSDK_NGX_Result r;
 	if (rr) {
 		// the roughness in the normals' w, HDRP's (reversed) hardware depth
@@ -194,7 +200,7 @@ bool DlssResize(ID3D12GraphicsCommandList4* list, const DlssEventData* data) {
 	if (NVSDK_NGX_FAILED(r)) {
 		char line[96];
 		snprintf(line, sizeof(line), "the DLSS%s feature could not be made (0x%08x)", rr ? "-RR" : "", static_cast<unsigned>(r));
-		d.status = line;
+		SetStatus(d.status, line);
 		d.feature = nullptr;
 		return false;
 	}
@@ -210,7 +216,7 @@ bool DlssResize(ID3D12GraphicsCommandList4* list, const DlssEventData* data) {
 
 void Dlss(const DlssEventData* data) {
 	auto& d = g_dlss;
-	if (g_dead || g_unityQueue.load() == nullptr || data == nullptr || data->buffer == nullptr || data->output == nullptr || data->width == 0 ||
+	if (g_dead || !CheckDevice() || g_unityQueue.load() == nullptr || data == nullptr || data->buffer == nullptr || data->output == nullptr || data->width == 0 ||
 	    data->height == 0 || data->outWidth < data->width || data->outHeight < data->height ||
 	    !g_render.Create() || !NrdShared() || !DlssInit()) {
 		return;
@@ -218,7 +224,7 @@ void Dlss(const DlssEventData* data) {
 	if (!d.pack.pso && (!NrdPackKernel(d.pack, 3, NrdCode("DlssPack", g_DlssPack, sizeof(g_DlssPack))) ||
 	                    !NrdUnpackKernel(d.unpack, 1, NrdCode("DlssUnpack", g_DlssUnpack, sizeof(g_DlssUnpack))) ||
 	                    !NrdPackKernel(d.packGuides, 3, NrdCode("DlssPackGuides", g_DlssPackGuides, sizeof(g_DlssPackGuides))))) {
-		d.status = "DLSS pack / unpack pipelines could not be made";
+		SetStatus(d.status, "DLSS pack / unpack pipelines could not be made");
 		return;
 	}
 	UINT64 completed = g_render.fence->GetCompletedValue();
@@ -229,6 +235,7 @@ void Dlss(const DlssEventData* data) {
 			++i;
 		}
 	}
+	g_crumbTag = "dlss";
 	auto* list = g_render.Begin();
 	if (list == nullptr) {
 		return;
@@ -339,7 +346,7 @@ void Dlss(const DlssEventData* data) {
 	if (NVSDK_NGX_FAILED(r)) {
 		char line[96];
 		snprintf(line, sizeof(line), "DLSS evaluation failed (0x%08x)", static_cast<unsigned>(r));
-		d.status = line;
+		SetStatus(d.status, line);
 		// what was recorded still runs (the pack); the buffer keeps the colour as it was
 		g_render.Submit(g_unityQueue.load());
 		return;
@@ -370,7 +377,7 @@ void Dlss(const DlssEventData* data) {
 	} else {
 		snprintf(line, sizeof(line), "DLSS %ux%u to %ux%u%s (%d frames)", data->width, data->height, data->outWidth, data->outHeight, rrNote, d.runs);
 	}
-	d.status = line;
+	SetStatus(d.status, line);
 }
 
 // The pack / unpack kernels dropped (render thread, shader reload): made again from the shader files on next use

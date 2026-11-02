@@ -102,6 +102,7 @@ NFX_ENTRY(id)
             transmission = paneThrough;
             Hit pane = glass;
             float travelled = glass.t;
+            uint steps = 0;  // a bound on the "same face" repeats: a pane skimmed along could be hit without end
             [loop]
             for (int layer = 0; layer < 2; ++layer)
             {
@@ -116,7 +117,7 @@ NFX_ENTRY(id)
                 if (sameFace)
                 {
                     --layer;
-                    if (travelled > a.w)
+                    if (travelled > a.w || ++steps >= 8u)
                         break;
                     continue;
                 }

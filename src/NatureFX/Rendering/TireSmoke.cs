@@ -56,6 +56,8 @@ namespace NatureFX.Rendering {
 		}
 
 		private readonly Dictionary<Transform, TyreHeat> heat_ = new();
+		private readonly List<Transform> goneWheels_ = new();
+		private Material particleMaterial_;
 		private const float SurfaceHeatCapacity = 150.0f; // J/K
 		private const float SmokeOnset = 140.0f;          // C
 		private const float SmokeFull = 260.0f;           // C: as much smoke as the tyre gives
@@ -368,7 +370,7 @@ namespace NatureFX.Rendering {
 			}
 			commands.Dispose();
 			hits.Dispose();
-			shadowCursor_ = start + rays;
+			shadowCursor_ = (start + rays) % count; // kept small: it grew without bound and overflowed negative after hours (index out of range every frame)
 			ShadowedParticles = shadowed * count / Mathf.Max(1, rays);
 			particles_.SetCustomParticleData(custom_, ParticleSystemCustomData.Custom1);
 		}
@@ -381,6 +383,7 @@ namespace NatureFX.Rendering {
 			if (material == null) {
 				return;
 			}
+			particleMaterial_ = material;
 			var go = new GameObject("NatureFX.TyreSmokeParticles");
 			go.transform.SetParent(root_.transform, false);
 			var ps = go.AddComponent<ParticleSystem>();
@@ -471,6 +474,10 @@ namespace NatureFX.Rendering {
 				Object.Destroy(particles_.gameObject);
 			}
 			particles_ = null;
+			if (particleMaterial_ != null) {
+				Object.Destroy(particleMaterial_); // made again by CreateParticles (each shader reload leaked one)
+			}
+			particleMaterial_ = null;
 		}
 
 		// a puff as particles: a few overlapping, as big as the fog puff would grow, as long lived
@@ -526,6 +533,15 @@ namespace NatureFX.Rendering {
 			if (noise_ != null) {
 				Object.Destroy(noise_);
 			}
+			if (smokeShadow_ != null) {
+				Object.Destroy(smokeShadow_);
+			}
+			if (smokeVolume_ != null) {
+				Object.Destroy(smokeVolume_);
+			}
+			smokeShadow_ = null;
+			smokeVolume_ = null;
+			DestroyParticles();
 			root_ = null;
 			pool_.Clear();
 		}
@@ -554,12 +570,22 @@ namespace NatureFX.Rendering {
 
 			float ambient = AmbientTemperature(w);
 			HottestTyre = ambient;
-			// tyres off the road cool in the air (those on it in TyreSmokeRate)
+			// tyres off the road cool in the air (those on it in TyreSmokeRate); wheels of cars that left (destroyed, or
+			// not seen for half a minute) are forgotten, they only accumulated
+			goneWheels_.Clear();
 			foreach (var kv in heat_) {
+				if (kv.Key == null || kv.Value.Frame < Time.frameCount - 1800) {
+					goneWheels_.Add(kv.Key);
+					continue;
+				}
 				if (kv.Value.Frame >= Time.frameCount - 1) {
 					continue;
 				}
 				kv.Value.Temperature = Mathf.MoveTowards(kv.Value.Temperature, ambient, (kv.Value.Temperature - ambient) * 0.4f * dt);
+			}
+			foreach (var wheel in goneWheels_) {
+				heat_.Remove(wheel);
+				lastSpawn_.Remove(wheel);
 			}
 			if (on && amount > 0.0f) {
 				foreach (var c in TrackMap.Contacts) {
