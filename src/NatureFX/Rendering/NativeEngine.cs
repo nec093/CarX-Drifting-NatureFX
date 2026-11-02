@@ -35,6 +35,7 @@ namespace NatureFX.Rendering {
 		[DllImport(DllName)] private static extern int NFX_Native_StartRt([MarshalAs(UnmanagedType.LPStr)] string sdkPath);
 		[DllImport(DllName)] private static extern void NFX_Native_SetRtActive(int active);
 		[DllImport(DllName)] private static extern int NFX_Native_MemoryStats(ulong[] values, int capacity);
+		[DllImport(DllName)] private static extern int NFX_Native_GpuTimings(byte[] buffer, int size);
 		[DllImport(DllName)] private static extern void NFX_Native_SetRtOmm(int enabled);
 		[DllImport(DllName)] private static extern int NFX_Native_SetPipeline(int pipeline);
 		[DllImport(DllName)] private static extern int NFX_Native_GpuMemory(out ulong usedMb, out ulong budgetMb);
@@ -580,6 +581,33 @@ namespace NatureFX.Rendering {
 				return values;
 			} catch (EntryPointNotFoundException) {
 				memoryStatsMissing_ = true;
+				return null;
+			} catch (Exception) {
+				return null;
+			}
+		}
+
+		// The engine's GPU time by submission (ms) since the last call, summed over the frames between (the debug page);
+		// null with a DLL that does not measure it
+		private static bool gpuTimingsMissing_;
+		private static readonly byte[] gpuTimingsBuffer_ = new byte[8192];
+
+		public static Dictionary<string, double> GpuTimings() {
+			if (!Ready || gpuTimingsMissing_) {
+				return null;
+			}
+			try {
+				int length = NFX_Native_GpuTimings(gpuTimingsBuffer_, gpuTimingsBuffer_.Length);
+				var result = new Dictionary<string, double>();
+				foreach (string item in Encoding.UTF8.GetString(gpuTimingsBuffer_, 0, Math.Max(0, Math.Min(length, gpuTimingsBuffer_.Length))).Split(';')) {
+					int eq = item.LastIndexOf('=');
+					if (eq > 0 && double.TryParse(item.Substring(eq + 1), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double ms)) {
+						result[item.Substring(0, eq)] = ms;
+					}
+				}
+				return result;
+			} catch (EntryPointNotFoundException) {
+				gpuTimingsMissing_ = true;
 				return null;
 			} catch (Exception) {
 				return null;

@@ -31,6 +31,7 @@ td.k.i { padding-left:16px; }
 td.v.n { text-align:right; white-space:nowrap; width:14ch; }
 td.g { width:28%; }
 td.g div { height:7px; margin-top:4px; background:var(--bar); }
+#chart2 { height:150px; }
 #events { table-layout:auto; }
 #events td { white-space:nowrap; }
 #events td.s { white-space:normal; width:40%; }
@@ -63,6 +64,10 @@ pre { margin:0; padding:4px; height:420px; overflow:auto; border:1px solid var(-
   <h2>gpu memory, MB (<span style='color:var(--a)'>used</span> / <span style='color:var(--c)'>budget</span> / <span style='color:var(--b)'>nfx counted</span>)</h2>
   <canvas id='chart'></canvas>
   <div class='tools'><span id='range'>-</span><button id='clear'>clear</button></div>
+</section>
+<section id='s-load-chart'>
+  <h2>load (<span style='color:var(--a)'>frame ms</span> / <span style='color:var(--b)'>own engine GPU ms</span>, left; <span style='color:var(--c)'>GPU busy %</span>, right)</h2>
+  <canvas id='chart2'></canvas>
 </section>
 <section id='s-events'>
   <h2>events (memory at each step after a scene load; deltas against the step before, MB)</h2>
@@ -123,12 +128,13 @@ function show(d) {
   if (ids !== built) {
     built = ids;
     $('cols').innerHTML = d.sections.map(s => `<section id='s-${s.id}'></section>`).join('');
-    $('nav').innerHTML = ['chart', 'events'].concat(d.sections.map(s => s.id), ['log']).map(id => `<a href='#s-${id}'>${id}</a>`).join('');
+    $('nav').innerHTML = ['chart', 'load-chart', 'events'].concat(d.sections.map(s => s.id), ['log']).map(id => `<a href='#s-${id}'>${id}</a>`).join('');
   }
   for (const s of d.sections) { const e = $('s-' + s.id); if (e) e.innerHTML = table(s); }
-  hist.push({ t: d.time, u: d.gpuUsedMB, b: d.gpuBudgetMB, n: d.oursMB });
+  hist.push({ t: d.time, u: d.gpuUsedMB, b: d.gpuBudgetMB, n: d.oursMB, f: d.frameMs || 0, e: d.nfxGpuMs || 0, g: d.gpuBusy });
   marks = d.marks || [];
   events();
+  chart2();
   if (hist.length > 3600) hist.shift();
   chart();
 }
@@ -166,6 +172,38 @@ function chart() {
   }
 }
 
+function chart2() {
+  const c = $('chart2'), g = c.getContext('2d'), r = devicePixelRatio || 1;
+  const w = c.width = c.clientWidth * r, h = c.height = c.clientHeight * r;
+  const css = getComputedStyle(document.documentElement), col = n => css.getPropertyValue(n).trim();
+  g.clearRect(0, 0, w, h);
+  if (hist.length < 2) return;
+  const top = Math.max(16.7, ...hist.map(p => Math.max(p.f, p.e))) * 1.1;
+  g.font = `${10 * r}px Consolas, monospace`; g.lineWidth = 1;
+  for (const v of [8.3, 16.7, 33.3, 50, 100].filter(v => v <= top)) {
+    const y = h - v / top * h;
+    g.strokeStyle = col('--rule'); g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
+    g.fillStyle = col('--dim'); g.fillText(`${v} ms`, 3 * r, y - 2 * r);
+  }
+  const x = i => i / (hist.length - 1) * w;
+  const line = (key, color, scale) => {
+    g.strokeStyle = col(color); g.lineWidth = 1.5 * r; g.beginPath();
+    let started = false;
+    hist.forEach((p, i) => {
+      const v = p[key];
+      if (v === undefined || v < 0) return;
+      const y = h - scale(v) * h;
+      started ? g.lineTo(x(i), y) : g.moveTo(x(i), y);
+      started = true;
+    });
+    g.stroke();
+  };
+  line('g', '--c', v => v / 100);
+  line('f', '--a', v => v / top);
+  line('e', '--b', v => v / top);
+  g.fillStyle = col('--dim'); g.fillText('100 %', w - 40 * r, 12 * r);
+}
+
 function showLog() {
   const f = $('filter').value.toLowerCase();
   const lines = logText.split('\n').filter(l => !f || l.toLowerCase().includes(f));
@@ -192,7 +230,7 @@ async function loadLog() {
 $('clear').onclick = () => { hist = []; chart(); };
 $('reload').onclick = loadLog;
 $('filter').oninput = showLog;
-addEventListener('resize', chart);
+addEventListener('resize', () => { chart(); chart2(); });
 poll();
 loadLog();
 setInterval(() => { if (!$('pause').checked) loadLog(); }, 5000);

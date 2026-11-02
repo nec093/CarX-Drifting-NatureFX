@@ -14,6 +14,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <cctype>
 #include <string>
 #include <mutex>
 #include <algorithm>
@@ -2229,23 +2230,91 @@ struct RenderThreadGpu {
 		return true;
 	}
 
+	// GPU time of each submission (the debug page): a timestamp at the start and the end of every list, resolved into
+	// a readback buffer per slot and read when the slot comes round again (its work is done by then), summed by the
+	// list's name (g_crumbTag without its serial numbers) until NFX_Native_GpuTimings takes the sums
+	ComPtr<ID3D12QueryHeap> queries;
+	ComPtr<ID3D12Resource> readback;
+	const UINT64* stamps = nullptr;
+	UINT64 frequency = 0;
+	std::string slotName[kSlots];
+	bool slotPending[kSlots] = {};
+	std::mutex timingMutex;
+	std::map<std::string, double> timingMs;  // since the last NFX_Native_GpuTimings
+	bool timingFailed = false;
+
+	bool EnsureTiming(ID3D12CommandQueue* queue) {
+		if (stamps != nullptr || timingFailed) {
+			return stamps != nullptr;
+		}
+		D3D12_QUERY_HEAP_DESC desc = {};
+		desc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+		desc.Count = kSlots * 2;
+		readback = CreateBuffer(static_cast<UINT64>(kSlots) * 16, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
+		void* mapped = nullptr;
+		if (queue == nullptr || FAILED(queue->GetTimestampFrequency(&frequency)) || frequency == 0 ||
+		    FAILED(g_device->CreateQueryHeap(&desc, IID_PPV_ARGS(&queries))) || !readback || FAILED(readback->Map(0, nullptr, &mapped)) || mapped == nullptr) {
+			timingFailed = true;
+			return false;
+		}
+		stamps = static_cast<const UINT64*>(mapped);  // stays mapped (a readback heap may be)
+		return true;
+	}
+
+	// "trace 4" -> "trace: surface", "rt pack 123" -> "rt pack"
+	static std::string TimingName(const std::string& tag) {
+		static const char* kinds[] = { "sun", "ambient", "lamp shadows", "light shafts", "surface", "reflection", "GI", "GI cache resolve",
+		                               "glass", "sky transmittance", "sky multi scatter", "sky view", "cloud noise", "clouds",
+		                               "cloud shadow", "sky ambient", "fog", "3D fog", "sky cube", "lamp mask", "sun map", "ground map" };
+		size_t space = tag.rfind(' ');
+		if (space != std::string::npos && space + 1 < tag.size() && std::all_of(tag.begin() + space + 1, tag.end(), ::isdigit)) {
+			std::string head = tag.substr(0, space);
+			if (head == "trace") {
+				int kind = atoi(tag.c_str() + space + 1);
+				return kind >= 0 && kind < static_cast<int>(sizeof(kinds) / sizeof(kinds[0])) ? std::string("trace: ") + kinds[kind] : tag;
+			}
+			return head;
+		}
+		return tag;
+	}
+
 	// The next allocator, once the GPU is done with what it recorded kSlots submissions ago
 	ID3D12GraphicsCommandList4* Begin() {
 		if (submitted >= kSlots && fence->GetCompletedValue() < submitted - (kSlots - 1)) {
 			return nullptr;  // the GPU is that far behind: skip rather than stall Unity's render thread
 		}
-		auto& allocator = allocators[frame % kSlots];
+		int slot = frame % kSlots;
+		auto& allocator = allocators[slot];
+		// this slot's last submission is done (the check above): its time goes into the sums
+		if (slotPending[slot] && stamps != nullptr) {
+			UINT64 a = stamps[slot * 2], b = stamps[slot * 2 + 1];
+			if (b > a) {
+				std::lock_guard<std::mutex> lock(timingMutex);
+				timingMs[slotName[slot]] += static_cast<double>(b - a) * 1000.0 / static_cast<double>(frequency);
+			}
+			slotPending[slot] = false;
+		}
 		list->Close();  // a list left open by an earlier failure would make both resets fail
 		allocator->Reset();
 		list->Reset(allocator.Get(), nullptr);
 		g_crumbs.Create(g_device.Get());
 		crumb = g_crumbs.Begin(list.Get(), g_crumbTag);
+		slotName[slot] = TimingName(g_crumbTag);
 		g_crumbTag = "render";
+		if (EnsureTiming(g_unityQueue.load())) {
+			list->EndQuery(queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2);
+		}
 		return list.Get();
 	}
 	UINT crumb = 0;
 
 	void Submit(ID3D12CommandQueue* queue) {
+		int slot = frame % kSlots;
+		if (stamps != nullptr) {
+			list->EndQuery(queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2 + 1);
+			list->ResolveQueryData(queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2, 2, readback.Get(), static_cast<UINT64>(slot) * 16);
+			slotPending[slot] = true;
+		}
 		g_crumbs.End(list.Get(), crumb);
 		crumb = 0;
 		list->Close();
@@ -2970,4 +3039,21 @@ NFX_EXPORT int NFX_Native_MemoryStats(unsigned long long* out, int capacity) {
 		out[i] = v[i];
 	}
 	return kCount;
+}
+
+// The engine's GPU time since the last call, by submission name ("trace: sun=0.412;nrd=1.03;..." in ms, summed over
+// the frames in between: the caller divides by them). Empty before the first timestamps came back, or where the queue
+// has no timestamps.
+NFX_EXPORT int NFX_Native_GpuTimings(char* buffer, int size) {
+	std::string out;
+	{
+		std::lock_guard<std::mutex> lock(g_render.timingMutex);
+		char item[160];
+		for (const auto& t : g_render.timingMs) {
+			snprintf(item, sizeof(item), "%s=%.4f;", t.first.c_str(), t.second);
+			out += item;
+		}
+		g_render.timingMs.clear();
+	}
+	return CopyOut(out, buffer, size);
 }

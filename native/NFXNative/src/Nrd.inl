@@ -439,7 +439,7 @@ void NrdFlush(ID3D12GraphicsCommandList4* list, std::vector<D3D12_RESOURCE_BARRI
 }
 
 // The frees of earlier resizes, then the list to record into (null: skip this time)
-ID3D12GraphicsCommandList4* NrdBegin(const NrdEventData* data) {
+ID3D12GraphicsCommandList4* NrdBegin(const NrdEventData* data, const char* name) {
 	if (g_dead || g_unityQueue.load() == nullptr || data == nullptr || data->guide == nullptr || data->surface == nullptr ||
 	    data->result == nullptr || data->width == 0 || data->height == 0 || !g_render.Create()) {
 		return nullptr;
@@ -452,7 +452,7 @@ ID3D12GraphicsCommandList4* NrdBegin(const NrdEventData* data) {
 			++i;
 		}
 	}
-	g_crumbTag = "nrd";
+	g_crumbTag = name;  // (the debug page's GPU time by name)
 	return g_render.Begin();
 }
 
@@ -589,12 +589,13 @@ void NrdSigma(const NrdEventData* data) {
 	// with translucency: glass dims the sun instead of letting it all through (SunShadow.hlsl's share)
 	static const nrd::Denoiser kSigma[] = { nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY };
 	auto& c = g_nrdSun;
+	const char* name = "nrd: SIGMA sun";
 	if (!c.pack.pso && !c.failed &&
 	    (!NrdPackKernel(c.pack, 5, NrdCode("NrdSigmaPack", g_NrdSigmaPack, sizeof(g_NrdSigmaPack))) || !NrdUnpackKernel(c.unpack, 1, NrdCode("NrdSigmaUnpack", g_NrdSigmaUnpack, sizeof(g_NrdSigmaUnpack))))) {
 		c.failed = true;
 		SetStatus(c.status, "SIGMA pack / unpack pipelines could not be made");
 	}
-	auto* list = c.pack.pso ? NrdBegin(data) : nullptr;
+	auto* list = c.pack.pso ? NrdBegin(data, name) : nullptr;
 	if (list == nullptr) {
 		return;
 	}
@@ -629,12 +630,13 @@ void NrdSigma(const NrdEventData* data) {
 void NrdReblur(const NrdEventData* data) {
 	static const nrd::Denoiser kReblur[] = { nrd::Denoiser::REBLUR_DIFFUSE, nrd::Denoiser::REBLUR_DIFFUSE };
 	auto& c = data != nullptr && data->mode == 2 ? g_nrdLocal : g_nrdAmbient;
+	const char* name = data != nullptr && data->mode == 2 ? "nrd: REBLUR lamps" : "nrd: REBLUR ambient / GI";
 	if (!c.pack.pso && !c.failed &&
 	    (!NrdPackKernel(c.pack, 5, NrdCode("NrdReblurPack", g_NrdReblurPack, sizeof(g_NrdReblurPack))) || !NrdUnpackKernel(c.unpack, 2, NrdCode("NrdReblurUnpack", g_NrdReblurUnpack, sizeof(g_NrdReblurUnpack))))) {
 		c.failed = true;
 		SetStatus(c.status, "REBLUR pack / unpack pipelines could not be made");
 	}
-	auto* list = c.pack.pso ? NrdBegin(data) : nullptr;
+	auto* list = c.pack.pso ? NrdBegin(data, name) : nullptr;
 	if (list == nullptr) {
 		return;
 	}
@@ -682,12 +684,13 @@ void NrdReblur(const NrdEventData* data) {
 void NrdReflection(const NrdEventData* data) {
 	static const nrd::Denoiser kSpecular[] = { nrd::Denoiser::REBLUR_SPECULAR };
 	auto& c = g_nrdReflection;
+	const char* name = "nrd: REBLUR reflections";
 	if (!c.pack.pso && !c.failed &&
 	    (!NrdPackKernel(c.pack, 4, NrdCode("NrdSpecPack", g_NrdSpecPack, sizeof(g_NrdSpecPack))) || !NrdUnpackKernel(c.unpack, 1, NrdCode("NrdSpecUnpack", g_NrdSpecUnpack, sizeof(g_NrdSpecUnpack))))) {
 		c.failed = true;
 		SetStatus(c.status, "REBLUR specular pack / unpack pipelines could not be made");
 	}
-	auto* list = c.pack.pso ? NrdBegin(data) : nullptr;
+	auto* list = c.pack.pso ? NrdBegin(data, name) : nullptr;
 	if (list == nullptr) {
 		return;
 	}

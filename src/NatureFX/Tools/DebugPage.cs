@@ -27,6 +27,14 @@ namespace NatureFX.Tools {
 		private static int port_;
 		private static string logPath_;
 		private static float fps_ = 60.0f;
+		// load: frame times since the last snapshot, Unity's frame timings, the process's CPU time
+		private static double frameMsSum_, frameMsMax_;
+		private static int framesSince_;
+		private static readonly FrameTiming[] frameTimings_ = new FrameTiming[1];
+		private static double cpuMainMs_, cpuRenderMs_, gpuFrameMs_;
+		private static TimeSpan lastCpu_;
+		private static DateTime lastCpuWall_;
+		private static double frameMs_, frameMsPeak_, nfxGpuMs_, cpuPercent_;
 		private static List<(string Group, long Bytes, int Count)> nfxTargets_ = new();
 		private static List<(string Name, long Bytes)> bigTargets_ = new();
 		private static long otherTargets_;
@@ -54,6 +62,21 @@ namespace NatureFX.Tools {
 			float dt = Time.unscaledDeltaTime;
 			if (dt > 0.0f) {
 				fps_ += (1.0f / dt - fps_) * 0.05f;
+				frameMsSum_ += dt * 1000.0;
+				frameMsMax_ = Math.Max(frameMsMax_, dt * 1000.0);
+				++framesSince_;
+			}
+			// Unity's own CPU / GPU frame times (when the game was built with frame timing stats)
+			try {
+				FrameTimingManager.CaptureFrameTimings();
+				if (FrameTimingManager.GetLatestTimings(1, frameTimings_) > 0) {
+					var t = frameTimings_[0];
+					cpuMainMs_ += (t.cpuMainThreadFrameTime - cpuMainMs_) * 0.1;
+					cpuRenderMs_ += (t.cpuRenderThreadFrameTime - cpuRenderMs_) * 0.1;
+					gpuFrameMs_ += (t.gpuFrameTime - gpuFrameMs_) * 0.1;
+				}
+			} catch (Exception) {
+				// not in this build
 			}
 			bool watched = DateTime.UtcNow.Ticks - Interlocked.Read(ref lastRequestTicks_) < TimeSpan.TicksPerSecond * 5;
 			if (!watched || Time.unscaledTime < nextSnapshot_) {
@@ -585,6 +608,63 @@ namespace NatureFX.Tools {
 			var sections = new List<Section>();
 			NativeEngine.GpuMemoryMB(out ulong used, out ulong budget);
 
+			// load: frame time, the GPU's counters, Unity's frame timings, the engine's GPU time by submission
+			int frames = Math.Max(1, framesSince_);
+			frameMs_ = framesSince_ > 0 ? frameMsSum_ / framesSince_ : 0.0;
+			frameMsPeak_ = frameMsMax_;
+			frameMsSum_ = frameMsMax_ = 0.0;
+			framesSince_ = 0;
+			var now = DateTime.UtcNow;
+			var cpu = System.Diagnostics.Process.GetCurrentProcess().TotalProcessorTime;
+			if (lastCpuWall_ != default) {
+				double wall = (now - lastCpuWall_).TotalMilliseconds;
+				cpuPercent_ = wall > 0.0 ? (cpu - lastCpu_).TotalMilliseconds / wall / Environment.ProcessorCount * 100.0 : 0.0;
+			}
+			lastCpu_ = cpu;
+			lastCpuWall_ = now;
+			GpuStats.Read();
+			var load = new Section("load", "Load");
+			load.Add("frame time (average)", $"{frameMs_:0.00} ms", frameMs_, false, frameMs_ > 33.4 ? 2 : frameMs_ > 17.5 ? 1 : 0);
+			load.Add("frame time (worst in the second)", $"{frameMsPeak_:0.0} ms", frameMsPeak_, false, frameMsPeak_ > 50.0 ? 1 : 0);
+			if (gpuFrameMs_ > 0.0 || cpuMainMs_ > 0.0) {
+				load.Add("Unity: CPU main thread", $"{cpuMainMs_:0.00} ms", cpuMainMs_, true);
+				load.Add("Unity: CPU render thread", $"{cpuRenderMs_:0.00} ms", cpuRenderMs_, true);
+				load.Add("Unity: GPU frame", gpuFrameMs_ > 0.0 ? $"{gpuFrameMs_:0.00} ms" : "not reported", gpuFrameMs_ > 0.0 ? gpuFrameMs_ : -1.0, true);
+			} else {
+				load.Add("Unity frame timings", "not reported (the game is built without frame timing stats)");
+			}
+			load.Add("process CPU", $"{cpuPercent_:0} % of {Environment.ProcessorCount} logical CPUs");
+			if (GpuStats.Available) {
+				load.Add("GPU", GpuStats.Name);
+				load.Add("GPU busy", $"{GpuStats.GpuPercent} %", -1.0, false, GpuStats.GpuPercent >= 97 ? 1 : 0);
+				load.Add("GPU memory controller busy", $"{GpuStats.MemoryPercent} %");
+				load.Add("clocks", $"{GpuStats.GraphicsMHz} MHz graphics (max {GpuStats.MaxGraphicsMHz}), {GpuStats.MemoryMHz} MHz memory, P{GpuStats.PState}");
+				load.Add("power", $"{GpuStats.Watts:0} W of {GpuStats.WattLimit:0} W", -1.0, false, GpuStats.WattLimit > 0.0f && GpuStats.Watts > GpuStats.WattLimit * 0.95f ? 1 : 0);
+				load.Add("temperature", $"{GpuStats.Celsius} C, fan {GpuStats.FanPercent} %", -1.0, false, GpuStats.Celsius >= 83 ? 1 : 0);
+				load.Add("clocks held back by", GpuStats.ThrottleText, -1.0, false, (GpuStats.Throttle & 0xE4) != 0 ? 1 : 0);
+			} else {
+				load.Add("GPU counters", GpuStats.Problem.Length > 0 ? GpuStats.Problem : "not read yet");
+			}
+			var gpuTime = new Section("gpu-time", "Own engine GPU time per frame (timestamps on Unity's queue)");
+			var engineTimes = NativeEngine.GpuTimings();
+			nfxGpuMs_ = 0.0;
+			if (engineTimes != null && engineTimes.Count > 0) {
+				var list = new List<KeyValuePair<string, double>>(engineTimes);
+				list.Sort((a, b) => b.Value.CompareTo(a.Value));
+				foreach (var kv in list) {
+					nfxGpuMs_ += kv.Value / frames;
+				}
+				gpuTime.Add("all", $"{nfxGpuMs_:0.00} ms", nfxGpuMs_);
+				gpuTime.Add("share of the frame time", $"{nfxGpuMs_ / Math.Max(frameMs_, 0.001) * 100.0:0} %");
+				foreach (var kv in list) {
+					double ms = kv.Value / frames;
+					gpuTime.Add(kv.Key, $"{ms:0.000} ms", ms, true);
+				}
+				gpuTime.Add("note", "the first trace of a frame also builds the frame's TLAS and sways the foliage");
+			} else {
+				gpuTime.Add("not measured", engineTimes == null ? "this NFXNative.dll does not measure it (an older build)" : "no timestamps yet");
+			}
+
 			// memory
 			var native = NativeEngine.NativeMemory();
 			long nativeTotal = 0;
@@ -760,6 +840,8 @@ namespace NatureFX.Tools {
 			HdrpState(hdrp);
 
 			sections.Add(perf);
+			sections.Add(load);
+			sections.Add(gpuTime);
 			sections.Add(split);
 			sections.Add(timings);
 			sections.Add(engine);
@@ -784,6 +866,9 @@ namespace NatureFX.Tools {
 			sb.Append(",\"fps\":").Append(fps_.ToString("0.0", inv));
 			sb.Append(",\"gpuUsedMB\":").Append(used).Append(",\"gpuBudgetMB\":").Append(budget);
 			sb.Append(",\"oursMB\":").Append((ours / 1048576.0).ToString("0.0", inv));
+			sb.Append(",\"frameMs\":").Append(frameMs_.ToString("0.00", inv));
+			sb.Append(",\"nfxGpuMs\":").Append(nfxGpuMs_.ToString("0.00", inv));
+			sb.Append(",\"gpuBusy\":").Append(GpuStats.Available ? (int)GpuStats.GpuPercent : -1);
 			AppendMarks(sb, inv);
 			sb.Append(",\"sections\":[");
 			for (int i = 0; i < sections.Count; ++i) {
