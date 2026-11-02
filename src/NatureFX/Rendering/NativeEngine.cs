@@ -243,6 +243,8 @@ namespace NatureFX.Rendering {
 		// Developer tab: each signal can go back to NatureFX's own filter, and the cars' motion vector pass stay off,
 		// to find which part of NRD a problem comes from (not saved)
 		public static bool DevNrdSun = true, DevNrdAmbient = true, DevNrdLamps = true, DevNrdReflections = true, DevCarMotionVectors = true;
+		// REBLUR's performance mode (fewer passes, less quality): the reflections, and the ambient light / GI and lamps
+		public static bool NrdFastReflections, NrdFastDiffuse;
 		public static bool NrdReset;       // the shadow pass dropped its history this frame
 		public static int SunSamples = 1;  // sun shadow rays per pixel (SunShadow.hlsl; Dlaa: more while upscaling)
 		public static string NrdStatus {
@@ -1077,6 +1079,9 @@ namespace NatureFX.Rendering {
 			Marshal.WriteInt32(slot, 32, frame_);
 			Marshal.WriteInt32(slot, 36, NrdReset ? 1 : 0);
 			Marshal.WriteInt32(slot, 320, mode);
+			// flags: REBLUR's performance mode (Developer > NRD parts), per denoiser
+			bool fast = eventId == 7 ? NrdFastReflections : eventId == 6 && NrdFastDiffuse;
+			Marshal.WriteInt32(slot, 324, fast ? 1 : 0);
 			cmd.IssuePluginEventAndData(NFX_Native_RenderEventAndDataFunc(), eventId, slot);
 		}
 

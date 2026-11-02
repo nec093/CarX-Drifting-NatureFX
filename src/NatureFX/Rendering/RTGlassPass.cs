@@ -38,6 +38,7 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Execute(CustomPassContext ctx) {
+			using var cpuTime = NatureFX.Tools.CpuTimings.Scope("pass: glass (RT)"); // (the debug page)
 			if (!RTSurfaceTrace.IsScreenCamera(ctx.hdCamera)) {
 				return;
 			}

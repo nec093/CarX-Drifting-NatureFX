@@ -27,7 +27,7 @@ struct NrdEventData {
 	float denoisingRange;
 	float timeDelta;          // ms
 	UINT32 mode;              // event 6: 1 GI (two signals), 0 the one bounce ambient light, 2 the lamp shadows
-	UINT32 pad;
+	UINT32 flags;             // bit 0: REBLUR's performance mode (F8 > Developer > NRD parts)
 };
 static_assert(sizeof(NrdEventData) == 328, "NrdEventData: NativeEngine.IssueNrd writes 328 bytes");
 
@@ -658,6 +658,7 @@ void NrdReblur(const NrdEventData* data) {
 	// long one is clamped to, followed the noise and the image flickered on a moving car. A longer fast history and
 	// a looser clamp; the long history and the anti-lag stay REBLUR's.
 	nrd::ReblurSettings reblur = {};
+	reblur.enablePerformanceMode = (data->flags & 1u) != 0;
 	reblur.maxFastAccumulatedFrameNum = 10;
 	reblur.fastHistoryClampingSigmaScale = 2.5f;
 	if (data->mode != 2) {
@@ -707,6 +708,7 @@ void NrdReflection(const NrdEventData* data) {
 	// ghosted and lagged behind. A short history, quicker to throw away (anti-lag), and the smoothest surfaces
 	// (car paint's varnish, mirrors, wet roads) responsive down to a couple of frames.
 	nrd::ReblurSettings reblur = {};
+	reblur.enablePerformanceMode = (data->flags & 1u) != 0;
 	reblur.maxAccumulatedFrameNum = 16;
 	reblur.maxFastAccumulatedFrameNum = 3;
 	reblur.maxStabilizedFrameNum = 8;

@@ -96,6 +96,7 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Execute(CustomPassContext ctx) {
+			using var cpuTime = NatureFX.Tools.CpuTimings.Scope("pass: reflections (RT)"); // (the debug page)
 			// only the camera drawing to the screen: probes, mirrors and previews would flip the status (and with it
 			// HDRP's sun shadows) every frame and mix their images into the history
 			if (!RTSurfaceTrace.IsScreenCamera(ctx.hdCamera)) {

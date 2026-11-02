@@ -40,6 +40,7 @@ namespace NatureFX.Tools {
 		private static long otherTargets_;
 		private static int otherTargetCount_;
 		public static string Status { get; private set; } = "off";
+		public static bool Running => running_;
 		public static string Url => $"http://127.0.0.1:{port_}/";
 
 		// Per frame (main thread): start or stop as the setting says, and make a snapshot when a page is watching
@@ -645,6 +646,24 @@ namespace NatureFX.Tools {
 			} else {
 				load.Add("GPU counters", GpuStats.Problem.Length > 0 ? GpuStats.Problem : "not read yet");
 			}
+			// NatureFX's CPU time on the main thread, by part
+			var cpuSec = new Section("cpu", "NatureFX CPU time per frame (main thread)");
+			var cpuParts = CpuTimings.Take(out int cpuFrames, out int collections);
+			double cpuUpdate = 0.0;
+			foreach (var kv in cpuParts) {
+				if (kv.Key.StartsWith("update: ", StringComparison.Ordinal)) {
+					cpuUpdate += kv.Value;
+				}
+			}
+			cpuSec.Add("NatureFX update (all parts)", $"{cpuUpdate:0.00} ms", cpuUpdate, false, cpuUpdate > 4.0 ? 1 : 0);
+			foreach (var kv in cpuParts) {
+				bool part = kv.Key.StartsWith("update: ", StringComparison.Ordinal) || kv.Key.StartsWith("pass: ", StringComparison.Ordinal);
+				cpuSec.Add(kv.Key, $"{kv.Value:0.000} ms", kv.Value, part, kv.Value > 2.0 ? 1 : 0);
+			}
+			cpuSec.Add("garbage collections", $"{collections} in {cpuFrames} frames", -1.0, false, collections > 0 ? 1 : 0);
+			cpuSec.Add("managed heap", Mb(GC.GetTotalMemory(false)));
+			cpuSec.Add("note", "HDRP render: the main thread's recording of every camera, the custom passes (pass: ...) inside it; slow frames below");
+
 			var gpuTime = new Section("gpu-time", "Own engine GPU time per frame (timestamps on Unity's queue)");
 			var engineTimes = NativeEngine.GpuTimings();
 			nfxGpuMs_ = 0.0;
@@ -842,6 +861,7 @@ namespace NatureFX.Tools {
 			sections.Add(perf);
 			sections.Add(load);
 			sections.Add(gpuTime);
+			sections.Add(cpuSec);
 			sections.Add(split);
 			sections.Add(timings);
 			sections.Add(engine);
@@ -870,6 +890,14 @@ namespace NatureFX.Tools {
 			sb.Append(",\"nfxGpuMs\":").Append(nfxGpuMs_.ToString("0.00", inv));
 			sb.Append(",\"gpuBusy\":").Append(GpuStats.Available ? (int)GpuStats.GpuPercent : -1);
 			AppendMarks(sb, inv);
+			sb.Append(",\"spikes\":[");
+			var spikes = CpuTimings.Spikes();
+			for (int i = 0; i < spikes.Count; ++i) {
+				var sp = spikes[i];
+				sb.Append(i > 0 ? "," : "").Append("{\"t\":").Append(sp.Time.ToString("0.0", inv)).Append(",\"ms\":").Append(sp.FrameMs.ToString("0.0", inv))
+				  .Append(",\"gc\":").Append(sp.Collections).Append(",\"top\":").Append(Json(sp.Top)).Append('}');
+			}
+			sb.Append(']');
 			sb.Append(",\"sections\":[");
 			for (int i = 0; i < sections.Count; ++i) {
 				var sec = sections[i];

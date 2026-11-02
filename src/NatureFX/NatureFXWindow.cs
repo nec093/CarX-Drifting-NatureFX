@@ -1130,6 +1130,10 @@ namespace NatureFX {
 			Widgets.Switch("Ambient light / GI (REBLUR)", NativeEngine.DevNrdAmbient, v => NativeEngine.DevNrdAmbient = v);
 			Widgets.Switch("Lamp shadows (REBLUR)", NativeEngine.DevNrdLamps, v => NativeEngine.DevNrdLamps = v);
 			Widgets.Switch("Reflections (REBLUR)", NativeEngine.DevNrdReflections, v => NativeEngine.DevNrdReflections = v);
+			Widgets.Switch("Reflections: REBLUR performance mode", NativeEngine.NrdFastReflections, v => NativeEngine.NrdFastReflections = v,
+				"NRD's own faster mode (fewer blur passes): compare the paint's reflections and the debug page's 'nrd: REBLUR reflections' time.");
+			Widgets.Switch("Ambient / GI and lamps: REBLUR performance mode", NativeEngine.NrdFastDiffuse, v => NativeEngine.NrdFastDiffuse = v,
+				"The same for the ambient light, GI and the lamp shadows (their noise in dark corners and car shadows).");
 			Widgets.Switch("Cars' motion vector pass", NativeEngine.DevCarMotionVectors, v => NativeEngine.DevCarMotionVectors = v,
 				"NRD and DLSS follow a moving car's pixels by its motion vectors; the game draws cars without them.");
 			Widgets.EndCard();

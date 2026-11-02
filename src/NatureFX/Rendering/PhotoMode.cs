@@ -21,6 +21,7 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Execute(CustomPassContext ctx) {
+			using var cpuTime = NatureFX.Tools.CpuTimings.Scope("pass: photo mode"); // (the debug page)
 			// the screen's camera only: a second game camera (mirror, picture in picture) averaged its view in too
 			if (Material == null || !RTSurfaceTrace.IsScreenCamera(ctx.hdCamera) || !PhotoMode.Active) {
 				return;

@@ -32,7 +32,12 @@ td.v.n { text-align:right; white-space:nowrap; width:14ch; }
 td.g { width:28%; }
 td.g div { height:7px; margin-top:4px; background:var(--bar); }
 #chart2 { height:150px; }
-#events { table-layout:auto; }
+#events, #spikes { table-layout:auto; }
+#spikes td { white-space:nowrap; }
+#spikes td.s { white-space:normal; }
+#spikes td.n { text-align:right; }
+#spikes td.up { color:var(--warn); }
+#spikes tr.head td { color:var(--dim); }
 #events td { white-space:nowrap; }
 #events td.s { white-space:normal; width:40%; }
 #events td.n { text-align:right; }
@@ -68,6 +73,10 @@ pre { margin:0; padding:4px; height:420px; overflow:auto; border:1px solid var(-
 <section id='s-load-chart'>
   <h2>load (<span style='color:var(--a)'>frame ms</span> / <span style='color:var(--b)'>own engine GPU ms</span>, left; <span style='color:var(--c)'>GPU busy %</span>, right)</h2>
   <canvas id='chart2'></canvas>
+</section>
+<section id='s-spikes'>
+  <h2>slow frames (longer than 25 ms or 1.6 x the average; NatureFX's main thread parts in that frame, ms)</h2>
+  <table id='spikes'></table>
 </section>
 <section id='s-events'>
   <h2>events (memory at each step after a scene load; deltas against the step before, MB)</h2>
@@ -128,13 +137,18 @@ function show(d) {
   if (ids !== built) {
     built = ids;
     $('cols').innerHTML = d.sections.map(s => `<section id='s-${s.id}'></section>`).join('');
-    $('nav').innerHTML = ['chart', 'load-chart', 'events'].concat(d.sections.map(s => s.id), ['log']).map(id => `<a href='#s-${id}'>${id}</a>`).join('');
+    $('nav').innerHTML = ['chart', 'load-chart', 'spikes', 'events'].concat(d.sections.map(s => s.id), ['log']).map(id => `<a href='#s-${id}'>${id}</a>`).join('');
   }
   for (const s of d.sections) { const e = $('s-' + s.id); if (e) e.innerHTML = table(s); }
   hist.push({ t: d.time, u: d.gpuUsedMB, b: d.gpuBudgetMB, n: d.oursMB, f: d.frameMs || 0, e: d.nfxGpuMs || 0, g: d.gpuBusy });
   marks = d.marks || [];
   events();
   chart2();
+  const sp = d.spikes || [];
+  $('spikes').innerHTML = sp.length
+    ? `<tr class='head'><td>t (s)</td><td class='n'>frame ms</td><td class='n'>GC</td><td class='s'>NatureFX parts that frame</td></tr>` +
+      sp.slice().reverse().map(x => `<tr><td>${x.t}</td><td class='n'>${x.ms}</td><td class='n${x.gc > 0 ? ' up' : ''}'>${x.gc}</td><td class='s'>${esc(x.top)}</td></tr>`).join('')
+    : `<tr><td class='k'>none since the page opened</td></tr>`;
   if (hist.length > 3600) hist.shift();
   chart();
 }

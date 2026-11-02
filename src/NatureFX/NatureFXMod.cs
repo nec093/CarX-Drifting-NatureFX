@@ -187,11 +187,14 @@ namespace NatureFX {
 			}
 			// the debug page (a browser on this PC): whether NatureFX is on or not
 			NatureFX.Tools.DebugPage.Update(this, s.DebugPage, s.DebugPagePort);
+			NatureFX.Tools.CpuTimings.Active = NatureFX.Tools.DebugPage.Running;
+			NatureFX.Tools.CpuTimings.BeginFrame();
 			TextureBudget.Apply(s.TextureStreamingBudget);
 
 			// the map's [defaults] and weather zones at the camera, before the weather and wind read them
 			var cam = Camera.main;
 			var camPos = cam != null ? cam.transform.position : Vector3.zero;
+			NatureFX.Tools.CpuTimings.Section("weather");
 			MapWeather.Update(s, Zones, camPos, s.UseMapProfile && Map.Loaded);
 			WeatherCtl.Update(s);
 			Seasons.Update(s, WeatherCtl.ActivePreset, s.UseMapProfile && Map.Loaded ? MapWeather.Season : null, s.Enabled);
@@ -199,6 +202,7 @@ namespace NatureFX {
 			// HDRP's volumetric fog
 			bool nativeFog = s.NativeFog && s.NativeSky;
 			bool hdrpVolumetric = !nativeFog && (Volumes.AnyVisible || Smoke.AnyVisible);
+			NatureFX.Tools.CpuTimings.Section("fog and clouds");
 			Fog.Update(s.Enabled, camPos, hdrpVolumetric, s.AerialHaze, nativeFog);
 			CameraFog.Update(cam, s.Enabled && hdrpVolumetric);
 			CameraClouds.Update(cam, s.Enabled && s.Clouds && !s.NativeSky);
@@ -208,6 +212,7 @@ namespace NatureFX {
 			Clouds.Update(s.Enabled, s, Sun.Sun, s.UseMapProfile && Map.Loaded && MapValues.TryFloat(Map.Get("clouds", "sea"), out float sea) ? sea : float.NaN);
 
 			// weather blends fog, clouds and sun over time, so refresh the volume a few times per second
+			NatureFX.Tools.CpuTimings.Section("volumes and RT settings");
 			if (Time.unscaledTime >= nextVolumeRefresh_) {
 				nextVolumeRefresh_ = Time.unscaledTime + 0.25f;
 				dirty_ = true;
@@ -226,21 +231,25 @@ namespace NatureFX {
 			// the rebuilt shaders' road surface (grain, wear, tyre rubber)
 			bool rebuiltSurface = s.Enabled && s.ReplaceShaders;
 			Wind.DrawnSway = Map.FoliageWind;
+			NatureFX.Tools.CpuTimings.Section("wind, build-up, sun");
 			Wind.Update(s);
 			Accumulation.Update(s);
 			Accumulation.UpdateRoad(rebuiltSurface ? s.RoadWear : 0.0f);
 			Sun.Update(s);
 			// the game's own night lighting (its street lights) at NatureFX's night
+			NatureFX.Tools.CpuTimings.Section("day / night, headlights, lights");
 			GameNight.Update(s.Enabled && s.SunOverride && s.SyncGameNight, Sun);
 			Headlights.Update(s, s.Enabled && s.UseMapProfile);
 			bool mapOn = s.Enabled && s.UseMapProfile;
 			Lights.Update(mapOn, Sun.Sun, camPos, s.HeadlightShafts, RT.LampShadowsTraced);
 			// with the own engine's sky HDRP's sky reflection is that sky (A3) and the traced reflections show what is near:
 			// the probes, rendered by HDRP without the engine's sky, fog and light, kept a stale day sky into the night
+			NatureFX.Tools.CpuTimings.Section("probes");
 			Probes.Update(mapOn && s.MapProbes && !s.NativeSky, Sun.Sun, camPos);
 			// and the track's own probes, rendered once at load under whatever sky HDRP had then
 			TrackProbes.Update(s.Enabled && s.NativeSky);
 			// the 3D grass belongs to the shader rebuild (it draws with NatureFX/Foliage), the rest to map effects
+			NatureFX.Tools.CpuTimings.Section("grass, forest, shrubs");
 			Grass.Update(mapOn && rebuiltSurface, s, camPos);
 			Forest.Update(mapOn, camPos);
 			// the thickets: planted again when the density changes; they draw with NatureFX/Foliage like the 3D grass
@@ -256,6 +265,7 @@ namespace NatureFX {
 			}
 			Shrubs.Update(mapOn && rebuiltSurface, cam, s.ShrubDistance);
 			bool effects = mapOn && s.MapEffects;
+			NatureFX.Tools.CpuTimings.Section("decals, paint, debris, water, volumes, particles");
 			Decals.Update(effects, camPos);
 			// the ground map's painted dirt and debris (the ground blend itself is RT's)
 			Paint.Update(effects && s.MapGroundDetail, camPos);
@@ -263,16 +273,20 @@ namespace NatureFX {
 			Water.Update(effects, camPos);
 			Volumes.Update(effects, s, Sun.Sun, camPos);
 			Particles.Update(effects, Sun.Sun, camPos, Lights.LitPositions);
+			NatureFX.Tools.CpuTimings.Section("night, tyre marks, car rain");
 			Night.Update(s.Enabled, Sun.Sun);
 			Tracks.Update(s);
 			CarRainFx.Update(s, Sun.Sun);
 			TireSmokeDx12.ReplaceGameSmoke = s.Enabled && s.TireSmoke > 0.0f && s.ReplaceGameSmoke;
+			NatureFX.Tools.CpuTimings.Section("tyre smoke");
 			Smoke.Update(s.Enabled, s.TireSmoke);
+			NatureFX.Tools.CpuTimings.Section("particle lighting, rain, glow, lens, post");
 			ParticleLighting.Update(cam);
 			Rain.Update(s, cam);
 			Glow.Update(s.Enabled && s.CarGlow, camPos);
 			Lens.Update(s.Enabled, s, Sun.Sun, camPos);
 			Post.Update(s.Enabled, s);
+			NatureFX.Tools.CpuTimings.Section("game particles, painted shadows, finish, ray tracing");
 			GameFx.Update(s.Enabled && s.NativeParticles);
 			MaterialProfiles.UpdateGlobals(Sun.Sun);
 			RT.UpdateRayTracing(Sun.Sun);
@@ -287,6 +301,7 @@ namespace NatureFX {
 			if (window_ != null && window_.Visible) {
 				Exposure.Update();
 			}
+			NatureFX.Tools.CpuTimings.Section("F8 window and rescans");
 			window_?.Update();
 
 			// Tracks stream objects in, so pick up new materials periodically.
@@ -296,6 +311,7 @@ namespace NatureFX {
 					ApplyReplacement();
 				}
 			}
+			NatureFX.Tools.CpuTimings.EndSection();
 		}
 
 		private void OnGUI() {

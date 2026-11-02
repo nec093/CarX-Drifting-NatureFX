@@ -141,6 +141,7 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Execute(CustomPassContext ctx) {
+			using var cpuTime = NatureFX.Tools.CpuTimings.Scope("pass: post-processing"); // (the debug page)
 			if (Material == null || ctx.hdCamera.camera.cameraType != CameraType.Game) {
 				return;
 			}

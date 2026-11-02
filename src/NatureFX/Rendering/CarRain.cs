@@ -22,6 +22,7 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Execute(CustomPassContext ctx) {
+			using var cpuTime = NatureFX.Tools.CpuTimings.Scope("pass: car rain"); // (the debug page)
 			if (Material == null || Renderers.Count == 0 || ctx.hdCamera.camera.cameraType != CameraType.Game) {
 				return;
 			}

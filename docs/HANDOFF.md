@@ -178,6 +178,8 @@
 
 - **ユーザー実測（11-02、最新）**: マテリアル一覧の山なし（material inventory の差 0）。BLAS pool 192 MB / 3 チャンク（+0 building）でマップ往復でも増えない。GPU memory 4686 MB（最初の計測 6422 MB から −1.7 GB）、NatureFX 1657 MB（3286 から）。シーン構築 78.7 ms。独自エンジンの GPU 3.60 ms（フレームの 21 %）。残りの上位は NRD（反射 0.99、SIGMA 0.50、REBLUR GI 0.32、ランプ 0.27）。ときどき 33 ms のフレーム（原因未調査）。
 
+- **CPU の計測と NRD のパフォーマンスモード（11-02、未ビルド・未確認、.ksm と DLL）**: `Tools/CpuTimings.cs`（デバッグページが動いている間だけ。NatureFXMod.Update を 13 区間に、カスタムパスの Execute と HDRP の描画全体（beginContextRendering〜end）をスコープで計測。25 ms か平均の 1.6 倍を超えたフレームを、そのフレームの上位 4 区間と GC 回数つきで記録）。ページに「cpu」と「slow frames」。NRD: `NrdEventData.pad` を `flags` に（bit 0 = REBLUR の `enablePerformanceMode`）、F8 > Developer > NRD parts に反射と環境光・GI・ランプのスイッチ（保存しない）。
+
 ## 1. インストール済みのもの（ゲームに入っている）
 
 | 物 | 状態 |
