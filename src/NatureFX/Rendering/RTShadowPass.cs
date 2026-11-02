@@ -139,6 +139,7 @@ namespace NatureFX.Rendering {
 		private static readonly int SkyParamsId = Shader.PropertyToID("_NFX_SkyParams");
 		private static readonly int SkyAmbientOnId = Shader.PropertyToID("_NFX_SkyAmbientOn");
 		private static readonly int OwnAmbientId = Shader.PropertyToID("_NFX_OwnAmbient");
+		private static readonly int OwnSunId = Shader.PropertyToID("_NFX_OwnSun");
 		public static readonly int SkyShareTexId = Shader.PropertyToID("_NFX_SkyShareTex");
 		public static readonly int SkyShareParamsId = Shader.PropertyToID("_NFX_SkyShareParams");
 
@@ -391,6 +392,7 @@ namespace NatureFX.Rendering {
 				props_.SetTexture(GBufferTextures[i], gbuffer_[i]);
 			}
 			props_.SetVector(RTSunDir, SunDirection);
+			props_.SetFloat(OwnSunId, OwnLighting.Sun ? 1.0f : 0.0f);
 			CoreUtils.SetRenderTarget(cmd, sunExact_, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, SunExactMaterial, props_, 0);
 			ExactFrame = Time.frameCount;
@@ -661,6 +663,11 @@ namespace NatureFX.Rendering {
 			// OwnLighting: HDRP's sky light is off (its indirect diffuse multiplier 0): the composite adds the own sky's
 			// light on the surface's colour through the GI's sky share instead of darkening HDRP's
 			props_.SetFloat(OwnAmbientId, OwnLighting.Ambient ? 1.0f : 0.0f);
+			// OwnLighting.Sun: HDRP's sun is off; only with the exact sun light worked out (it is the sun's light then)
+			props_.SetFloat(OwnSunId, OwnLighting.Sun && exactUsed_ ? 1.0f : 0.0f);
+			if (exactUsed_ && TraceShadows) {
+				OwnLighting.SunComposed();
+			}
 			// the GI's sky share for the reflections composite (its rough surfaces' sky): a the share with GI, else the
 			// one bounce factor's brightness
 			cmd.SetGlobalTexture(SkyShareTexId, ambientResult ?? color_);

@@ -456,8 +456,12 @@ namespace NatureFX {
 			Other(Widgets.Switch("Sky light and reflections from the own engine", S.OwnSkyLighting, v => S.OwnSkyLighting = v,
 				"HDRP's sky light, sky reflections and sky are switched off; the own engine's GI and reflections give them, " +
 				"blocked by what is around (no open sky in a garage's paint). Each part only while its ray traced pass runs."));
-			Widgets.Info($"Own sky lighting: {Rendering.OwnLighting.Status}");
 			Widgets.EndDependent();
+			Other(Widgets.Switch("Sun light from the own engine", S.OwnSunLight, v => S.OwnSunLight = v,
+				"HDRP's sun lights nothing; the ray traced shadow pass adds the sun's light (worked out from the G-buffer as HDRP " +
+				"does, or its own where there is none) under the traced shadow. Only while the exact sun light runs " +
+				"(Lighting & shadows)."));
+			Widgets.Info($"Own lighting: {Rendering.OwnLighting.Status}");
 			Widgets.Info($"HDRP's sky: {mod_.Volume.SkyState}");
 			Widgets.Info($"Cube for HDRP: {Rendering.AtmospherePass.CubeStatus}");
 			Widgets.Info($"Sky light: {Rendering.AtmospherePass.ProbeStatus}");

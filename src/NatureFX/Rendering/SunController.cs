@@ -174,6 +174,10 @@ namespace NatureFX.Rendering {
 			}
 			SkyLight = light;
 			SkyLightIsMoon = moon;
+			// OwnLighting.Sun: the light the own engine follows lights nothing in HDRP (the composite adds it); the other
+			// keeps HDRP's own handling
+			SetHdrpLighting(hdSun_, !(OwnLighting.Sun && !moon));
+			SetHdrpLighting(hdMoon_, !(OwnLighting.Sun && moon));
 			SkyLightDir = dir;
 			SkyLightGround = new Vector3(c.r, c.g, c.b);
 			SkyLightRadius = 0.0047f; // the sun's and the moon's are nearly the same (0.53 degrees across)
@@ -276,7 +280,16 @@ namespace NatureFX.Rendering {
 			sunShadowsOff_ = !on;
 		}
 
+		private static void SetHdrpLighting(HDAdditionalLightData light, bool on) {
+			if (light != null && (light.affectDiffuse != on || light.affectSpecular != on)) {
+				light.affectDiffuse = on;
+				light.affectSpecular = on;
+			}
+		}
+
 		public void Restore() {
+			SetHdrpLighting(hdSun_, true);
+			SetHdrpLighting(hdMoon_, true);
 			if (sizeApplied_ && hdSun_ != null) {
 				hdSun_.angularDiameter = original_.AngularDiameter;
 				sizeApplied_ = false;

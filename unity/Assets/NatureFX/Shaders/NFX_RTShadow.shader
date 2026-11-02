@@ -110,6 +110,7 @@ Shader "Hidden/NatureFX/RTShadow"
     StructuredBuffer<float4> _NFX_AmbientProbe; // the sky's diffuse probe (7 float4, the SH9 constants): HDRP's, or the
                                                 // own engine's once it replaces HDRP's sky light (OwnLighting)
     float _NFX_OwnAmbient;                      // 1: HDRP's sky light is off; the composite adds the own sky's light
+    float _NFX_OwnSun;                          // 1: HDRP's sun lights nothing; the composite adds the sun's light
     float4 _NFX_LeafParams;           // x: share of the sun leaves let through, y: 1 = light shafts, z: 1 = local light shadows,
                                       // w: own engine GI bounce strength (0: the ambient texture is the one bounce factor)
     float4 _NFX_SunExact;             // x: 1 when _NFX_SunExactTex holds this frame's exact sun light
@@ -336,6 +337,49 @@ Shader "Hidden/NatureFX/RTShadow"
 
     // the shadowed and ambient-scaled image, plus the light the air scatters towards the camera
     float3 EstimateSunPart(uint2 pixel, float depth, float3 color, float3 n, float perceptualRoughness, float3 L, float ndl, float4 surface, bool known);
+
+    // OwnLighting.Sun, where the exact sun light is not known (no G-buffer pass there: forward only materials): the
+    // sun's light from the surface trace's colour, metalness and clear coat and the normal buffer's roughness: Lambert
+    // and GGX (a clear coat's own sharp lobe over the base), at the sun's illuminance, pre-exposed
+    float3 OwnSunLight(float3 n, float3 V, float3 L, float perceptualRoughness, float4 surface, bool known)
+    {
+        float ndl = saturate(dot(n, L));
+        if (ndl <= 0.0)
+            return 0.0;
+        float nv = max(saturate(dot(n, V)), 1e-3);
+        float3 H = normalize(L + V);
+        float nh = saturate(dot(n, H));
+        float vh = saturate(dot(V, H));
+        bool coated = known && surface.a > 0.495;
+        float metal = known ? saturate((surface.a - (coated ? 0.5 : 0.0)) / 0.49) : 0.0;
+        float3 albedo = known ? surface.rgb : 0.3;
+        float3 f0 = lerp(0.04, albedo, metal);
+        float3 diffuse = albedo * (1.0 - metal) * INV_PI;
+        float3 specular = 0.0;
+        [unroll]
+        for (int layer = 0; layer < 2; ++layer)
+        {
+            if (layer == 1 && !coated)
+                break;
+            // the sun's disc keeps the sharpest lobe from a point (HDRP clamps its roughness the same way)
+            float r = layer == 0 ? max(perceptualRoughness, 0.05) : NFX_COAT_ROUGHNESS + 0.03;
+            float a = r * r;
+            float a2 = a * a;
+            float d = nh * nh * (a2 - 1.0) + 1.0;
+            float D = a2 / (PI * d * d);
+            float vis = 0.5 / max(ndl * sqrt(nv * nv * (1.0 - a2) + a2) + nv * sqrt(ndl * ndl * (1.0 - a2) + a2), 1e-4);
+            float3 F = layer == 0 ? f0 + (1.0 - f0) * pow(1.0 - vh, 5.0) : 0.04 + 0.96 * pow(1.0 - vh, 5.0);
+            if (layer == 1)
+            {
+                // the varnish's reflection over a base lit through it
+                float fc = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
+                specular *= 1.0 - fc;
+                diffuse *= 1.0 - fc;
+            }
+            specular += F * min(D * vis, 100.0);
+        }
+        return (diffuse + specular) * _NFX_RTSunColor.rgb * ndl * GetCurrentExposureMultiplier();
+    }
 
     float4 Composite(Varyings v) : SV_Target
     {
@@ -609,7 +653,8 @@ Shader "Hidden/NatureFX/RTShadow"
             float3 lampsAll = lampsTotal.a > 0.5 ? max(lampsTotal.rgb, 0.0) : 0.0;
             float3 lampsLit = max(lampsAll - (lampsBlocked.a > 0.5 ? max(lampsBlocked.rgb, 0.0) : 0.0), 0.0);
             float3 sunAll = max(exact.rgb, 0.0);
-            float3 restLight = max(hdrpColor - g3 - sunAll - lampsAll, 0.0);
+            // (with OwnLighting.Sun HDRP added no sun: nothing of it to take away)
+            float3 restLight = max(hdrpColor - g3 - (_NFX_OwnSun > 0.5 ? 0.0 : sunAll) - lampsAll, 0.0);
             float sunShade = 1.0 - (1.0 - sunVisible) * shadowStrength;
             // the sky's light from the sky as it is now (HDRP's probe is the own engine's sky, A3), not what the G-buffer
             // baked: a track's lightmaps were baked under its own weak sun (Units) and left the shade black
@@ -635,8 +680,20 @@ Shader "Hidden/NatureFX/RTShadow"
             float3 diffuseAlbedo = (known ? surface.rgb : 0.3) * (1.0 - diffuseMetal);
             skyPart = diffuseAlbedo * ProbeSH9(n) * GetCurrentExposureMultiplier();
         }
+        // OwnLighting.Sun: HDRP's pixel holds no sun light; the exact one (or the own BSDF where the G-buffer has no
+        // pixel) is added under the traced shadow instead of taking the shadowed share away
+        bool ownSun = _NFX_OwnSun > 0.5;
+        float3 ownSunLight = 0.0;
+        if (ownSun && _NFX_RTSunDir.w > 0.0)
+        {
+            PositionInputs vp = GetPositionInput(pixel, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V);
+            float3 V = GetWorldSpaceNormalizeViewDir(vp.positionWS);
+            ownSunLight = exactKnown ? max(exact.rgb, 0.0) : OwnSunLight(n, V, L, nd.perceptualRoughness, surface, known);
+        }
         if (shadowStrength <= 0.0)
         {
+            if (ownSun)
+                color += ownSunLight;
             if (ownAmbient)
                 return float4(max(color + ownSky + bounceLight, 0.0), 1.0);
             if (gi)
@@ -651,7 +708,11 @@ Shader "Hidden/NatureFX/RTShadow"
         // split the pixel into the sun's share and the rest (sky, bounce, reflections); shadow the first, scale the
         // second. Facing away from the sun the share is zero, except where HDRP lets the sun through (transmission).
         float3 sunPart = 0.0;
-        if (exactKnown)
+        if (ownSun)
+        {
+            sunPart = ownSunLight; // added below under the shadow; the rest is all of HDRP's pixel
+        }
+        else if (exactKnown)
         {
             // exact: what HDRP added, never more than the pixel has (local light shadows came off first). Scaled as a
             // whole, like the lamp light above: clamped per channel, a sun brighter in one channel than the pixel
@@ -665,7 +726,7 @@ Shader "Hidden/NatureFX/RTShadow"
             sunPart = EstimateSunPart(pixel, depth, color, n, nd.perceptualRoughness, L, ndl, surface, known);
         }
         float sunFactor = 1.0 - (1.0 - sunVisible) * shadowStrength;
-        float3 rest = max(color - sunPart, 0.0);
+        float3 rest = ownSun ? color : max(color - sunPart, 0.0);
         float3 result;
         if (ownAmbient)
         {

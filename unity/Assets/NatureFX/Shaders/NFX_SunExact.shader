@@ -45,6 +45,8 @@ Shader "Hidden/NatureFX/SunExact"
             #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Lighting/LightLoop/LightLoop.hlsl"
 
             float4 _NFX_RTSunDir; // xyz: direction towards the sun (picks HDRP's light), w: 1 when the sun is up
+            float _NFX_OwnSun;    // 1: HDRP's sun is switched off for HDRP's own lighting (affects neither diffuse nor
+                                  // specular); this pass works it out at full strength all the same (OwnLighting.Sun)
 
             struct Attributes
             {
@@ -106,6 +108,11 @@ Shader "Hidden/NatureFX/SunExact"
                     // the sun the ray traced shadows are for (a moon or a fill light keeps HDRP's own handling)
                     if (dot(-light.forward, _NFX_RTSunDir.xyz) < 0.9995)
                         continue;
+                    if (_NFX_OwnSun > 0.5)
+                    {
+                        light.diffuseDimmer = 1.0;
+                        light.specularDimmer = 1.0;
+                    }
                     DirectLighting lighting = ShadeSurface_Directional(context, posInput, builtinData, preLightData, light, bsdfData, V);
                     diffuse += lighting.diffuse;
                     specular += lighting.specular;
