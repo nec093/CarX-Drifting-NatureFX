@@ -401,3 +401,33 @@ uint   NfxPackUnorm4x8(float4 v); float4 NfxUnpackUnorm4x8(uint p);
 - C: 窓の映り込みが消える → maxDistance の丸め、明るさが桁で狂う → log2、屈折の色ずれ → `pixel = id` の前提。
 - D: 環境光/影が動きに引きずられる → 動きの単位・符号、エッジが溶ける → 法線、特定距離で突然ノイズ → viewZ、反射がざらつく → 粗さ。
 - E: 反射・ガラスの画面色が消える → 深度一致（空 65504）。F: 粒状 → alpha の下限、角度ずれ → 法線。G: 環境光が消える → valid、REBLUR のヒット距離 → +28。
+
+---
+
+## 実装状況（2026-11-02、別セッション）
+
+クラウドのセッションで実装。**この環境にはビルドツール（dotnet・dxc・Unity）が無く、どれもコンパイルしていない・ゲームで未確認**。.ksm・DLL・バンドルを 3 つともビルドし直して入れ替えること（7 の B / D / E はレイアウトが三者間の API なので、どれか 1 つだけ古いと壊れる）。
+
+| 項目 | 状態 | 変更したところ |
+|---|---|---|
+| 6 画面コピーの共有 | 実装 | 新規 `Rendering/SharedColor.cs`（参照カウント、RGBA16F、random write あり）。`RTShadowPass` / `RTReflectionPass` / `AtmospherePass`（composite）/ `RTGlassPass` / `PostProcess.source_` / `CarRain` / `LensEffects`（暗視）の `color_` 等を `SharedColor.Acquire()` / `Release()` に |
+| 1 夜の GI のクランプ | 実装（案 A） | `LocalLights.LampReference`（各灯の `max(rgb) / max(1, (range/2)²)` の最大）→ `NativeEngine.Issue` の `c[27]`（`LightCount.w`）。`NFXCommon.hlsli` に `CacheReference()`（太陽 + 空と `LightCount.w × 0.5` の大きい方）、`CacheScale()` と `GI.hlsl` の `limit` がそれを使う |
+| 2 ライトの単位 | 実装 | `HeadlightController.Original` に `Unit` / `HdIntensity`、`Apply` で `hd.lightUnit` → `hd.intensity` → 従来どおり `light.intensity`。`ParticleLighting` にコメント |
+| 4 霧のライト | 実装（案 b） | ブリッジ `PrepareFogVolume` がタイル（8×8 列）× 帯（16 スライス）の 128 bit マスクを Surface の `FOG_W*FOG_H*4` 以降に書く。`FogVolume.hlsl` はマスクのビットだけ回す（`WaveActiveBitOr`、`NFX_PIPELINE` では外す）。**有効フラグは資料の `LightCount.w` ではなく `Flags` の `NFX_FLAG_FOG_LISTS`（16u）**: `LightCount.w` は 1 で使ったため（bit 8〜10 は太陽のサンプル数）。ライトは `NativeEngine.TraceFogVolume` が `lights_`（Issue と同じもの）から渡すので署名は変えていない。Developer の「3D fog lamps」で比較、F8 タイミングに「fog volume」、霧の状態行にリストの灯数 |
+| 7B Surface Result 32 → 16 B | 実装 | `Surface.hlsl` が `{ unorm8×4 albedo/α, oct16 法線, f32 符号付き距離, 0 }`、ブリッジ `PrepareSurface` / `UnpackSurface`（距離 0 なら法線テクスチャは 0）、C# stride 16 |
+| 7D NRD ガイド 32 → 16 B | 実装 | ブリッジ `PrepareNrdGuide` が `{ oct16 法線, f32 viewZ, half2 −motion, unorm16 粗さ }`、`NrdSigmaPack` / `NrdReblurPack` / `NrdSpecPack` は `NfxLoadNrdGuide`、C# の要素数 pixels（stride 16） |
+| 7E Screen 12 → 8 B | 実装 | ブリッジ `PrepareScreen` が `{ half r g, half b depth }`（空は 65504）、`NFXReflect.hlsli` の `ScreenVisibility`、`Glass.hlsl`、C# stride 8 |
+| 7A / 7C / 7F / 7G | 未着手 | 7A は `RtDevice.inl` の PackSun → CopyRaw と `NFX_PACKED_SUN` の改名を伴う（C++）。7C・7F・7G はシェーダーの読み手が多い。1 種類ずつ、各段で 3 つをそろえて確認したい |
+| 3 タイヤスモーク | 未着手 | 粒子数・大きさ・`maxParticleSize`・半解像度は見た目が変わるのでユーザーと相談。CPU 側（Burst 化・非同期レイキャスト）だけ先にやる手もある |
+| 5 コミット済みリソース | 未着手 | ネイティブの大きな変更（移行順 1〜6）。DLL のビルドと the sample touge の往復テストができる環境で |
+
+共通: パックの式は `native/NFXNative/shaders/NfxPack.hlsli`（新規、`NFXCommon.hlsli` と NRD の pack シェーダーが include）と `NFX_NativeBridge.compute` 冒頭の `Nfx*` が同じ式（そろえること）。
+
+### 気づいた既存の不具合候補（直していない）
+- `Glass.hlsl` の屈折の合成（220 行付近）で、外側の `bool own`（`NFX_FLAG_OWN_GLASS`）を内側の `uint3 own`（画面バッファの値）が隠していて、`select(own, transmission, 1 − result.w)` は画面の値が非 0 かを見ていた（ほぼ常に `transmission`）。7E では同じ判定を `shownBits` として残した。意図が `bool own` なら `select(own, …)` に直す（見た目が変わるのでゲームで比較してから）。
+
+### ゲームでの確認（各項目の「確認方法」に加えて）
+- 6: F8 の GPU memory が 1916x997 で約 90 MB、4K で約 380 MB 減る。影・反射・空・ガラス・DLSS・車の雨・暗視の見た目が同じ。
+- 1: 夜にヘッドライトで白い壁を照らし GI をオン/オフ。昼の見た目は変わらないはず。
+- 4: Developer > 3D fog lamps のオン/オフで霧の見た目が同じ、F8 の「fog volume」の ms が減る。タイルの継ぎ目（20×12 の格子）や 4.4 / 38.7 / 341 m の輪が出ないこと。
+- 7B / D / E: F8 の `trace buffers N MB` が減る。塗装の metallic・クリアコート、地面の影のアクネ・浮き、NRD（SIGMA / REBLUR）の破綻、反射とガラスの画面色が消えないこと。

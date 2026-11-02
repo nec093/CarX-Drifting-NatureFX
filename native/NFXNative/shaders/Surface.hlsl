@@ -3,8 +3,9 @@
 // (HDRP's G-buffer holds neither for a custom pass), the exact normal and distance (the G-buffer normal is
 // quantised), and whether it is a thin card (leaf). The shadow, ambient and reflection passes read this.
 // Surface (NFX_NativeBridge PrepareSurface): float4 per pixel (the point xyz, 1 = something there).
-// Output: 2 float4 per pixel (albedo rgb, metallic * 0.49 + 0.5 when clear coated; normal xyz, distance
-// from the camera: 0 not found, negative a thin card). Compiled into Surface.h.
+// Output: uint4 per pixel (albedo rgb and metallic * 0.49 + 0.5 when clear coated in unorm8 (NfxPackUnorm4x8); the
+// normal as an octahedron (NfxPackOct16); the distance from the camera as a float: 0 not found, negative a thin card
+// (it rebuilds the ray origins: no half); 0). The bridge's UnpackSurface. Compiled into Surface.h.
 #include "NFXCommon.hlsli"
 
 NFX_ENTRY(id)
@@ -34,6 +35,5 @@ NFX_ENTRY(id)
             albedo = float4(0.3, 0.3, 0.3, 0.0);
         }
     }
-    Output.Store4(index * 32, asuint(albedo));
-    Output.Store4(index * 32 + 16, asuint(normal));
+    Output.Store4(index * 16, uint4(NfxPackUnorm4x8(albedo), NfxPackOct16(normal.xyz), asuint(normal.w), 0u));
 }

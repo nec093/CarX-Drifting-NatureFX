@@ -3,6 +3,7 @@
 // t2 the instance records, t3 HDRP's ambient probe, t4 the screen (camera colour and depth, for reflections); the
 // descriptor heap is indexed directly (shader model 6.6).
 // Helpers shared by every trace kind.
+#include "NfxPack.hlsli"
 RaytracingAccelerationStructure Scene : register(t0);
 RWByteAddressBuffer Output : register(u0);
 RWByteAddressBuffer Surface : register(u1);
@@ -590,6 +591,8 @@ float Luminance(float3 c)
 {
     return dot(c, float3(0.2126, 0.7152, 0.0722));
 }
+
+// (the trace buffers' packing helpers, Nfx*: NfxPack.hlsli, included at the top)
 
 // The sky probe's lower half is the open ground around the map: light from below keeps only its level
 float3 HitSkyLight(float3 hn)

@@ -49,6 +49,42 @@ float4 _NFX_NativeDefault; // what a result pixel holds before the engine writes
 float4 _NFX_ShaftParams;   // x scattering (1/m), y anisotropy, z max distance (m)
 float4 _NFX_NativeFrame;   // x frame index
 
+// Packing of the trace buffers (docs/plan-review-followups.md 7), the same formulas as NFXCommon.hlsli's Nfx*:
+// a unit vector as an octahedron in two unorm16 (rounded), halves, four unorm8 (rounded)
+uint NfxPackOct16(float3 n)
+{
+    float2 f = PackNormalOctQuadEncode(n); // -1..1
+    uint2 q = (uint2)round(saturate(f * 0.5 + 0.5) * 65535.0);
+    return q.x | (q.y << 16);
+}
+
+float3 NfxUnpackOct16(uint p)
+{
+    float2 f = float2(p & 0xFFFFu, p >> 16) / 65535.0 * 2.0 - 1.0;
+    return UnpackNormalOctQuadEncode(f);
+}
+
+uint NfxPackHalf2(float2 v)
+{
+    return f32tof16(v.x) | (f32tof16(v.y) << 16);
+}
+
+float2 NfxUnpackHalf2(uint p)
+{
+    return float2(f16tof32(p), f16tof32(p >> 16));
+}
+
+uint NfxPackUnorm4x8(float4 v)
+{
+    uint4 q = (uint4)round(saturate(v) * 255.0);
+    return q.x | (q.y << 8) | (q.z << 16) | (q.w << 24);
+}
+
+float4 NfxUnpackUnorm4x8(uint p)
+{
+    return float4(p & 0xFFu, (p >> 8) & 0xFFu, (p >> 16) & 0xFFu, p >> 24) / 255.0;
+}
+
 float IGN(float2 p)
 {
     return frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
@@ -558,8 +594,7 @@ void PrepareSurface(uint3 id : SV_DispatchThreadID)
         p = float4(GetAbsolutePositionWS(pos.positionWS), 1.0);
     }
     _NFX_NativeSurface[index] = p;
-    _NFX_NativeResult[index * 2] = 0.0;
-    _NFX_NativeResult[index * 2 + 1] = 0.0;
+    _NFX_NativeResult[index] = 0.0; // packed (Surface.hlsl): all zero = nothing found
 }
 
 // The engine's surfaces into RTSurfaceTrace's albedo (target) and normal (target 2) textures
@@ -570,14 +605,18 @@ void UnpackSurface(uint3 id : SV_DispatchThreadID)
     if (any(id.xy >= (uint2)_NFX_TargetSize.xy))
         return;
     uint index = id.y * (uint)_NFX_TargetSize.x + id.x;
-    _NFX_NativeTarget[COORD_TEXTURE2D_X(id.xy)] = _NFX_NativeResult[index * 2];
-    _NFX_NativeTarget2[COORD_TEXTURE2D_X(id.xy)] = _NFX_NativeResult[index * 2 + 1];
+    // packed by Surface.hlsl: albedo and alpha in unorm8 (the albedo texture is R8G8B8A8 anyway), the normal as an
+    // octahedron, the signed distance as a float (it rebuilds ray origins)
+    uint4 r = asuint(_NFX_NativeResult[index]);
+    float distance = asfloat(r.z);
+    _NFX_NativeTarget[COORD_TEXTURE2D_X(id.xy)] = NfxUnpackUnorm4x8(r.x);
+    _NFX_NativeTarget2[COORD_TEXTURE2D_X(id.xy)] = distance != 0.0 ? float4(NfxUnpackOct16(r.y), distance) : 0.0;
 }
 
 // ------------------------------------------------------------------ reflections
 TEXTURE2D_X(_NFX_ColorTex);                    // camera colour before the reflection composite
 TEXTURE2D_X(_NFX_SurfaceAlbedo);               // RTSurfaceTrace: rgb albedo, a metallic and clear coat
-RWStructuredBuffer<uint3> _NFX_NativeScreen;   // per full resolution pixel: colour (4 halves), linear depth
+RWStructuredBuffer<uint2> _NFX_NativeScreen;   // per full resolution pixel: colour rgb and linear depth, 4 halves
 float4 _NFX_ReflPrepare;                       // x roughness cutoff
 
 // The camera colour and linear depth of every pixel, for the reflections' on screen hits
@@ -589,9 +628,10 @@ void PrepareScreen(uint3 id : SV_DispatchThreadID)
         return;
     float3 c = LOAD_TEXTURE2D_X(_NFX_ColorTex, id.xy).rgb;
     float depth = LOAD_TEXTURE2D_X(_CameraDepthTexture, id.xy).r;
-    float linear01 = depth == UNITY_RAW_FAR_CLIP_VALUE ? 1e9 : LinearEyeDepth(depth, _ZBufferParams);
-    uint2 packed = uint2(f32tof16(c.r) | (f32tof16(c.g) << 16), f32tof16(c.b));
-    _NFX_NativeScreen[id.y * (uint)_ScreenSize.x + id.x] = uint3(packed, asuint(linear01));
+    // the depth as a half too: the on screen test's tolerance (3 % of the depth) is far wider than a half's step
+    // (0.05 %); the sky at the largest half (65504 m, beyond any reflection or glass ray)
+    float linear01 = depth == UNITY_RAW_FAR_CLIP_VALUE ? 65504.0 : min(LinearEyeDepth(depth, _ZBufferParams), 65504.0);
+    _NFX_NativeScreen[id.y * (uint)_ScreenSize.x + id.x] = uint2(NfxPackHalf2(c.rg), NfxPackHalf2(float2(c.b, linear01)));
 }
 
 float3 EnvBRDF(float3 f0, float perceptualRoughness, float nv)
@@ -704,9 +744,11 @@ void UnpackReflection(uint3 id : SV_DispatchThreadID)
     _NFX_NativeTarget2[COORD_TEXTURE2D_X(id.xy)] = _NFX_NativeResult[index * 2 + 1];
 }
 
-// NRD's guides per sun trace pixel (NFXNative Nrd.inl: SIGMA denoises the sun shadows): world normal and linear
-// (perceptual) roughness, then linear view depth (1e6 for the sky, outside the denoising range) and the motion to the
-// previous frame in uv (NRD wants previous - current; HDRP's motion vector is current - previous)
+// NRD's guides per sun trace pixel (NFXNative Nrd.inl: SIGMA denoises the sun shadows), packed in a uint4 (16 bytes,
+// the C# stride): the world normal as an octahedron (NfxPackOct16), the linear view depth as a float (1e6 for the sky,
+// outside the denoising range), the motion to the previous frame in uv as 2 halves (NRD wants previous - current;
+// HDRP's motion vector is current - previous), the linear (perceptual) roughness in 16 bit. All at least as fine as
+// HDRP's buffers they come from and what NRD keeps of them. Read by NrdSigmaPack / NrdReblurPack / NrdSpecPack.
 RWStructuredBuffer<float4> _NFX_NrdGuide;
 TEXTURE2D_X(_NFX_MotionVectors);
 
@@ -726,8 +768,8 @@ void PrepareNrdGuide(uint3 id : SV_DispatchThreadID)
     float4 motionBuffer = LOAD_TEXTURE2D_X(_NFX_MotionVectors, pixel);
     float2 motion = motionBuffer.x > 1.0 ? 0.0 : motionBuffer.xy;
     float viewZ = depth == UNITY_RAW_FAR_CLIP_VALUE ? 1e6 : LinearEyeDepth(depth, _ZBufferParams);
-    _NFX_NrdGuide[index * 2] = float4(nd.normalWS, nd.perceptualRoughness);
-    _NFX_NrdGuide[index * 2 + 1] = float4(viewZ, -motion, 0.0);
+    uint roughness = (uint)round(saturate(nd.perceptualRoughness) * 65535.0);
+    _NFX_NrdGuide[index] = asfloat(uint4(NfxPackOct16(nd.normalWS), asuint(viewZ), NfxPackHalf2(-motion), roughness));
 }
 
 // ------------------------------------------------------------------ DLAA (NFXNative Dlss.inl)

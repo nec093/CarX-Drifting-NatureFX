@@ -14,7 +14,7 @@
 namespace {
 
 struct NrdEventData {
-	ID3D12Resource* guide;    // PrepareNrdGuide: 2 float4 per pixel
+	ID3D12Resource* guide;    // PrepareNrdGuide: a packed uint4 per pixel (NfxLoadNrdGuide in NfxPack.hlsli)
 	ID3D12Resource* surface;  // the trace's surfaces (sun: 2 float4 per pixel, ambient: 3)
 	ID3D12Resource* result;   // the trace's result (sun: float2 per pixel, ambient: float4), denoised in place
 	UINT32 width, height;

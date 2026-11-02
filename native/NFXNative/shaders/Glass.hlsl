@@ -217,9 +217,12 @@ NFX_ENTRY(id)
                 {
                     refracted = SampleSH9(bent) * exposure;
                 }
-                uint3 own = Screen.Load3((pixel.y * (uint)ScreenSize.x + pixel.x) * 12);
-                float3 straight = float3(f16tof32(own.x & 0xFFFFu), f16tof32(own.x >> 16), f16tof32(own.y & 0xFFFFu));
-                float3 through = select(own, transmission, (float3)(1.0 - result.w));
+                uint2 screen = Screen.Load2((pixel.y * (uint)ScreenSize.x + pixel.x) * 8); // PrepareScreen: 4 halves
+                float3 straight = float3(NfxUnpackHalf2(screen.x), NfxUnpackHalf2(screen.y).x);
+                // (as before the packing: this tested the screen's words (r g, b, depth) for non-zero, not the outer
+                // `own` it shadowed; kept as it was, see docs/plan-review-followups.md 7 E)
+                bool3 shownBits = bool3(screen.x != 0u, (screen.y & 0xFFFFu) != 0u, (screen.y >> 16) != 0u);
+                float3 through = select(shownBits, transmission, (float3)(1.0 - result.w));
                 result.rgb += (refracted - straight) * through;
                 result.w = max(result.w, 1e-3); // something to compose even where nothing is reflected
             }

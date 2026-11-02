@@ -923,7 +923,7 @@ namespace NatureFX.Rendering {
 					retired_.Add((guide.Buffer, Time.frameCount));
 				}
 				guide.Pixels = pixels;
-				guide.Buffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, pixels * 2), 16) { name = "NFX_NrdGuide" };
+				guide.Buffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, pixels), 16) { name = "NFX_NrdGuide" }; // a packed uint4 per pixel
 				guide.Ptr = guide.Buffer.GetNativeBufferPtr();
 			}
 			int kernel = bridge.FindKernel("PrepareNrdGuide");
@@ -1258,7 +1258,7 @@ namespace NatureFX.Rendering {
 			var bridge = Bridge;
 			int width = ctx.hdCamera.actualWidth, height = ctx.hdCamera.actualHeight;
 			var size = new Vector4(width, height, 1.0f / width, 1.0f / height);
-			var b = Buffers(TraceSurface_, width * height, 1, 32);
+			var b = Buffers(TraceSurface_, width * height, 1, 16); // packed: Surface.hlsl
 			int prepare = bridge.FindKernel("PrepareSurface");
 			int unpack = bridge.FindKernel("UnpackSurface");
 			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
@@ -1315,7 +1315,7 @@ namespace NatureFX.Rendering {
 					retired_.Add((screen_, Time.frameCount));
 				}
 				screenPixels_ = screenPixels;
-				screen_ = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, screenPixels), 12) { name = "NFX_NativeScreen" };
+				screen_ = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, screenPixels), 8) { name = "NFX_NativeScreen" }; // 4 halves (PrepareScreen)
 				screenPtr_ = screen_.GetNativeBufferPtr();
 			}
 			// ScreenSize is this buffer's size: the render resolution, not the camera's pixel size. With DLSS upscaling

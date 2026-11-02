@@ -16,14 +16,15 @@ float ScreenVisibility(float3 hitAWS, out float3 color)
     if (any(suv < 0.0) || any(suv > 1.0))
         return 0.0;
     uint2 sp = min((uint2)(suv * ScreenSize.xy), (uint2)ScreenSize.xy - 1);
-    uint3 s = Screen.Load3((sp.y * (uint)ScreenSize.x + sp.x) * 12);
-    float sceneDepth = asfloat(s.z);
+    // the bridge's PrepareScreen: colour rgb and linear depth as 4 halves
+    uint2 s = Screen.Load2((sp.y * (uint)ScreenSize.x + sp.x) * 8);
+    float sceneDepth = NfxUnpackHalf2(s.y).y;
     // soft depth match with a tolerance growing with distance (a hard cut flipped grain on the horizon)
     float tolerance = 0.1 + clip.w * 0.03;
     float match = saturate(2.0 - abs(sceneDepth - clip.w) / tolerance);
     if (match <= 0.0)
         return 0.0;
-    color = float3(f16tof32(s.x & 0xFFFFu), f16tof32(s.x >> 16), f16tof32(s.y & 0xFFFFu));
+    color = float3(NfxUnpackHalf2(s.x), NfxUnpackHalf2(s.y).x);
     float edge = min(min(suv.x, 1.0 - suv.x), min(suv.y, 1.0 - suv.y));
     return saturate(edge * 20.0) * match;
 }
