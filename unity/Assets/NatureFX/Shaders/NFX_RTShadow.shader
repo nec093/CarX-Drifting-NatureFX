@@ -544,7 +544,8 @@ Shader "Hidden/NatureFX/RTShadow"
             // step A: with HDRP's own lamp light known exactly, the blocked share of it comes off (its shine too), not
             // the blocked light on an estimated diffuse colour; lights only NatureFX has (a negative share) are added
             // as before
-            float4 lampsExact = _NFX_SunExact.x > 0.5 ? LOAD_TEXTURE2D_X(_NFX_LampsExactTex, pixel) : 0.0;
+            // (the lamp masks' pass also runs without the G-buffer: the own BSDF, NFX_LampsOwn)
+            float4 lampsExact = _NFX_SunExact.x > 0.5 || _NFX_SunExact.y > 0.5 ? LOAD_TEXTURE2D_X(_NFX_LampsExactTex, pixel) : 0.0;
             if (_NFX_SunExact.y > 0.5)
             {
                 // A4: each of HDRP's lamps shadowed by its own mask (NFX_SunExact LampsExact: the light it takes away);

@@ -47,6 +47,7 @@ namespace NatureFX {
 		public bool OwnSunLight { get; set; }         // HDRP's sun lights nothing; the shadow composite adds it (OwnLighting.Sun)
 		public bool OwnLampLight { get; set; }        // HDRP's lamps light nothing; the shadow composite adds them (OwnLighting.Lamps)
 		public bool OwnTransparentLight { get; set; } // HDRP's sun, lamps and the own sky light still light what is drawn see-through (OwnLighting.Transparents)
+		public bool OwnBrdf { get; set; }             // the sun and lamps lit by the own BSDF, no G-buffer drawn again (RTShadowPass.OwnBrdf)
 		public float SkyLightStrength { get; set; }   // the own sky's light on surfaces (OwnLighting.Ambient): the shade's brightness
 		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
@@ -268,6 +269,7 @@ namespace NatureFX {
 		public bool OwnSunLight { get; set; }         // HDRP's sun lights nothing; the shadow composite adds it (OwnLighting.Sun)
 		public bool OwnLampLight { get; set; }        // HDRP's lamps light nothing; the shadow composite adds them (OwnLighting.Lamps)
 		public bool OwnTransparentLight { get; set; } // HDRP's sun, lamps and the own sky light still light what is drawn see-through (OwnLighting.Transparents)
+		public bool OwnBrdf { get; set; }             // the sun and lamps lit by the own BSDF, no G-buffer drawn again (RTShadowPass.OwnBrdf)
 		public float SkyLightStrength { get; set; }   // the own sky's light on surfaces (OwnLighting.Ambient): the shade's brightness
 		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading

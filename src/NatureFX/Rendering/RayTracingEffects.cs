@@ -14,6 +14,7 @@ namespace NatureFX.Rendering {
 	public class RayTracingEffects {
 		public const string ShadowShaderName = "Hidden/NatureFX/RTShadow";
 		public const string SunExactShaderName = "Hidden/NatureFX/SunExact";
+		public const string LampsOwnShaderName = "Hidden/NatureFX/LampsOwn";
 		public const string ReflectionShaderName = "Hidden/NatureFX/RTReflect";
 
 		private GameObject root_;
@@ -144,6 +145,7 @@ namespace NatureFX.Rendering {
 					name = "NatureFX RT shadows",
 					Material = new Material(shadowShader) { hideFlags = HideFlags.DontSave },
 					SunExactMaterial = sunExactShader != null ? new Material(sunExactShader) { hideFlags = HideFlags.DontSave } : null,
+					LampsOwnMaterial = bundle.Get(LampsOwnShaderName) is Shader lampsOwn ? new Material(lampsOwn) { hideFlags = HideFlags.DontSave } : null,
 					Bridge = bundle.GetCompute(NativeEngine.BridgeShaderName),
 					Scene = dxrScene_,
 					Surfaces = surfaces_,
@@ -510,6 +512,8 @@ namespace NatureFX.Rendering {
 				shadows_.ExactSun = s.RTExactSun;
 				shadows_.LampMasks = s.RTLampMasks;
 				shadows_.FullRelight = s.RTFullRelight;
+				shadows_.OwnBrdf = s.OwnBrdf;
+				shadows_.OwnBrdfWanted = s.OwnSunLight && s.OwnLampLight;
 				shadows_.TransparentShadows = s.RTTransparentShadows;
 				shadows_.GroundDetail = s.MapGroundDetail;
 				shadows_.GroundBlend = NatureFX.Map.MapDefaults.Value(NatureFX.Map.MapKey.GroundBlend, 0.35f);

@@ -408,3 +408,10 @@
   - B（設定 OwnSunLight、移行 65）: エンジンが追う光（太陽か月）の HDAdditionalLightData の affectDiffuse/affectSpecular をオフ。SunExact パスは dimmer を 1 に戻して計算し、合成は影を付けて足す（G-buffer がない画素は Lambert + GGX + クリアコート）。
   - C（設定 OwnLampLight、移行 66）: 点光源・スポットの affect をオフ（1 秒ごとに探す）。LampsExact パスで dimmer を 1 に戻し、合成は lampsTotal − blocked を足す（G-buffer がない画素は影なしの拡散）。
   - 未確認・注意: HDRP が affect の両方オフのライトを光源リストから外すなら、太陽・ランプが消える（スイッチで戻せる）。合成のあとに描く半透明は太陽・ランプ・空の光がない。1 画素 4 灯を超えるランプは影なし。G-buffer のコピーと各 exact パスは独自の照明計算として残るので VRAM は減らない。
+- **11-02 HDRP からの移行の残り（A / B / C、ユーザー依頼「A,B,C を進めてください」）**:
+  - デバッグページの毎秒のカクつき（約 117 ms）: CPU 統計（全スレッドのスナップショット）と NVML の読み取りを別スレッドへ、NVML のクロック・電力・温度は既定でオフ（Developer > System のスイッチ）。ユーザー: 直った。
+  - A: ShadowMaps・Shadowmask をオフ（OwnLighting.Sun と Lamps の両方のとき）、Bloom・LensFlareScreenSpace をオフ（独自のポストプロセスが動いているとき）。NatureFXMod の CameraVolumetrics。
+  - B1 半透明（設定 OwnTransparentLight、移行 69）: HDRP の太陽・ランプを入れるレイヤーを 1<<30 から 1<<7 に。マテリアルがすべて半透明（renderQueue > 2500）のレンダラーに bit 7 を付け、不透明なレンダラーからは外す（OwnLighting.UpdateRenderers、10 秒ごと + シーン読み込み、1 フレーム 400 個）。IndirectLightingController の indirectDiffuseLightingLayers から bit 7 を外し（反射で型を合わせる）、RTShadowPass が独自の空のプローブを `_AmbientProbeData` に入れる。未確認: HDRP が透明パスの前に `_AmbientProbeData` を入れ直すなら空の光は黒のまま（太陽・ランプは効く）。
+  - B2 露出: 独自のポストプロセスがオフでも目の順応を続ける（PostPass.MeterOnly: 測光だけ、HDRP の Exposure を Fixed で上書き、補正は fixedExposure から引く）。
+  - C1 独自 BSDF（設定 OwnBrdf、既定オフ、比較用）: G-buffer を描き直さない。太陽は合成の OwnSunLight、ランプは新しいシェーダー `Hidden/NatureFX/LampsOwn`（NFX_LampsOwn.shader）。ランプのマスクの処理は `ShaderLibrary/NFX_LampsExact.hlsl` に移して LampsExact と共有、NFX_OWN_BRDF のときは表面トレースの色・金属と HDRP の法線バッファで NFX_OwnBrdf、HDRP の減衰・コーン・クッキーは GetPunctualLightVectors / EvaluateLight_Punctual。合成は `_NFX_SunExact.y` だけでも LampsExact を読む。OwnSunLight と OwnLampLight の両方、ランプマスク、DLSS RR なしのときだけ。
+  - C2 クッキーアトラス・C3 プローブアトラスは見送り: どちらも HDRP のパイプラインアセットの設定で、実行中に小さくするにはパイプラインを作り直す必要がある（ゲーム全体の描画を作り直す、危険）。クッキーは独自 BSDF のランプも HDRP の EvaluateLight_Punctual 経由で使っている。
