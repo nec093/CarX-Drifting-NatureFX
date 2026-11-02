@@ -631,6 +631,10 @@ namespace NatureFX {
 			Widgets.BeginDependent(S.WeatherCycle);
 			Other(Widgets.Slider("Change every", S.WeatherCycleMinutes, 2, 60, v => S.WeatherCycleMinutes = v, "0", " min"));
 			Widgets.EndDependent();
+			if (S.WeatherPreset <= 1 && !S.WeatherCycle) {
+				Other(Widgets.Slider("Clouds", S.CloudAmount, 0, 1, v => S.CloudAmount = v, "0.00"));
+				Widgets.Info("The clouds with the Clear and Manual weather: 0 a clear sky with a few fair weather clouds, 0.5 half covered, 1 overcast. Manual rain closes the sky over at least as far as it needs.");
+			}
 			Other(Widgets.Slider("Change time", S.WeatherChangeTime, 5, 300, v => S.WeatherChangeTime = v, "0", " s"));
 			Widgets.Info("How long a change of weather takes, the clouds included.");
 			Widgets.EndDependent();

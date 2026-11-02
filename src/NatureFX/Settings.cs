@@ -62,6 +62,7 @@ namespace NatureFX {
 		public float WhiteBalance { get; set; }       // 0..1 how much the eye takes the light around as white (PostProcess)
 		public float NightDarkness { get; set; }      // 0..1 a dark scene seen dark, not lifted to grey (PostProcess.NightKey)
 		public float FixedExposure { get; set; }      // EV100 with the exposure fixed (ExposureMode 0)
+		public float CloudAmount { get; set; }        // 0..1 the clouds with the Clear and Manual weather (WeatherController)
 
 		// --- added in config version 3: screen space path tracing ---
 
@@ -288,6 +289,7 @@ namespace NatureFX {
 		public float WhiteBalance { get; set; }       // 0..1 how much the eye takes the light around as white (PostProcess)
 		public float NightDarkness { get; set; }      // 0..1 a dark scene seen dark, not lifted to grey (PostProcess.NightKey)
 		public float FixedExposure { get; set; }      // EV100 with the exposure fixed (ExposureMode 0)
+		public float CloudAmount { get; set; }        // 0..1 the clouds with the Clear and Manual weather (WeatherController)
 
 		// --- added in config version 3: screen space path tracing ---
 

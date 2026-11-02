@@ -97,6 +97,10 @@ namespace NatureFX.Nature {
 
 			blend_ = Mathf.MoveTowards(blend_, 1.0f, Time.unscaledDeltaTime / (s.WeatherChangeTime > 0.0f ? s.WeatherChangeTime : DefaultTransitionSeconds));
 			var goal = target_ <= 0 ? Manual(s) : Presets[target_];
+			if (target_ == 1) {
+				// a clear day with as many fair weather clouds as the user wants (Settings.CloudAmount)
+				goal.Cloud = Mathf.Clamp01(s.CloudAmount);
+			}
 			Weather.Current = WeatherState.Lerp(from_, goal, Mathf.SmoothStep(0.0f, 1.0f, blend_));
 		}
 
@@ -110,7 +114,7 @@ namespace NatureFX.Nature {
 				Dust = MapDefaults.Value(MapKey.Dust, s.Dust),
 				// rain falls from clouds: the sky closes over as the rain sets in (a clear sky with full sunshine in rain
 				// was the manual weather's), the air's haze from the rain itself (MapFog.RainExtinction)
-				Cloud = Mathf.Clamp01(s.Rain * 1.6f), FogScale = 1.0f, WindScale = 1.0f + 0.5f * s.Rain
+				Cloud = Mathf.Clamp01(Mathf.Max(s.Rain * 1.6f, s.CloudAmount)), FogScale = 1.0f, WindScale = 1.0f + 0.5f * s.Rain
 			};
 		}
 
