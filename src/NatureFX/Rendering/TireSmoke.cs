@@ -537,16 +537,21 @@ namespace NatureFX.Rendering {
 		private void EmitParticles(Vector3 point, Vector3 velocity, float strength, bool spray) {
 			var p = emit_;
 			// many small particles rather than a few big ones: the puff's shape comes from how they spread
-			int count = spray ? 4 : 8;
-			float life = spray ? 1.6f : 4.5f + strength * 3.0f;
-			float size = (spray ? 3.0f : 4.0f + strength * 4.0f) * 0.55f;
+			// spray: a fine mist of droplets thrown up and back off the top of the tread (the rooster tail), smaller and
+			// whiter than smoke, gone in about a second as the drops fall out
+			int count = spray ? 6 : 8;
+			float life = spray ? 1.0f : 4.5f + strength * 3.0f;
+			float size = (spray ? 1.8f : 4.0f + strength * 4.0f) * 0.55f;
+			var flat = new Vector3(velocity.x, 0.0f, velocity.z);
+			float speed = flat.magnitude;
+			var throwOff = spray ? -flat * 0.15f + Vector3.up * Mathf.Min(speed * 0.12f, 3.5f) : Vector3.zero;
 			for (int i = 0; i < count; ++i) {
-				p.position = point + Vector3.up * 0.25f + Random.insideUnitSphere * 0.4f;
-				p.velocity = velocity * (spray ? 0.5f : 0.25f) + Random.insideUnitSphere * 0.9f;
+				p.position = point + Vector3.up * (spray ? 0.4f : 0.25f) + Random.insideUnitSphere * (spray ? 0.25f : 0.4f);
+				p.velocity = velocity * (spray ? 0.55f : 0.25f) + throwOff * Random.Range(0.6f, 1.2f) + Random.insideUnitSphere * (spray ? 0.6f : 0.9f);
 				p.startLifetime = life * Random.Range(0.8f, 1.2f);
 				p.startSize = size * Random.Range(0.7f, 1.1f);
 				p.rotation = Random.Range(0.0f, 360.0f);
-				p.startColor = spray ? new Color(0.8f, 0.83f, 0.86f, Mathf.Clamp01(0.3f + strength * 0.5f)) : new Color(0.88f, 0.88f, 0.9f, Mathf.Clamp01(0.45f + strength * 0.55f));
+				p.startColor = spray ? new Color(0.92f, 0.94f, 0.96f, Mathf.Clamp01(0.15f + strength * 0.35f)) : new Color(0.88f, 0.88f, 0.9f, Mathf.Clamp01(0.45f + strength * 0.55f));
 				particles_.Emit(p, 1);
 			}
 			if (!particles_.isPlaying) {
@@ -614,7 +619,8 @@ namespace NatureFX.Rendering {
 			float dt = Time.deltaTime;
 			float t = Time.time;
 			var w = Weather.Current;
-			float wet = Mathf.Max(w.Wetness, w.Rain);
+			// the ground's wetness as it built up (AccumulationController), not the rain: no spray off a road still dry
+			float wet = Mathf.Clamp01(Shader.GetGlobalVector(NatureFX.Nature.ShaderGlobals.Accumulation).w);
 			var windGlobal = Shader.GetGlobalVector("_NFX_Wind");
 			var wind = new Vector3(windGlobal.x, 0.0f, windGlobal.z) * windGlobal.w * 2.5f;
 
@@ -657,7 +663,8 @@ namespace NatureFX.Rendering {
 					// smoke from a tyre hot enough to burn its rubber (TyreSmokeRate), spray from any fast tyre on a wet one
 					float smoke = TyreSmokeRate(c, dt, wet, ambient);
 					HottestTyre = Mathf.Max(HottestTyre, heat_[c.Wheel].Temperature);
-					float spray = wet > 0.25f ? Mathf.Clamp01((speed - 8.0f) / 20.0f) * Mathf.Clamp01(wet) : 0.0f;
+					// spray from about 20 km/h, more as standing water builds up (a soaked road throws far more)
+					float spray = wet > 0.2f ? Mathf.Clamp01((speed - 5.0f) / 15.0f) * Mathf.Clamp01(wet * wet * 1.3f) : 0.0f;
 					if (smoke < 0.15f && spray < 0.15f) {
 						continue;
 					}

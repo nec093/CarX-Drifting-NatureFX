@@ -879,6 +879,11 @@ namespace NatureFX {
 				d.PostBloom = 0.02f;
 				d.ConfigVersion = 73;
 			}
+			if (d.ConfigVersion < 74) {
+				// no rainbow oil film on car paint (a clear coat does not carry one)
+				d.OilFilm = 0.0f;
+				d.ConfigVersion = 74;
+			}
 		}
 
 		public static void Save() {

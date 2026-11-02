@@ -19,6 +19,18 @@ Shader "Hidden/NatureFX/CarRain"
     float4 _NFX_SunDirWS;   // xyz: direction towards the sun
     float4 _NFX_CarDirt;    // x: mud on the lower body, y: dust, z: snow on top, w: the car's ground height (absolute world)
     float4 _NFX_CarLight;   // x: sun illuminance on a facing panel (lux), y: sky illuminance (lux); for the dirt's own shading
+    StructuredBuffer<float4> _NFX_CarSkyProbe; // the own engine's sky as SH9 (HDRP's packing): what a drop mirrors
+    float _NFX_CarSkyProbeOn;
+
+    float3 CarSkySH9(float3 n)
+    {
+        float4 vA = float4(n, 1.0);
+        float3 x1 = float3(dot(_NFX_CarSkyProbe[0], vA), dot(_NFX_CarSkyProbe[1], vA), dot(_NFX_CarSkyProbe[2], vA));
+        float4 vB = n.xyzz * n.yzzx;
+        float3 x2 = float3(dot(_NFX_CarSkyProbe[3], vB), dot(_NFX_CarSkyProbe[4], vB), dot(_NFX_CarSkyProbe[5], vB));
+        float vC = n.x * n.x - n.y * n.y;
+        return max(x1 + x2 + _NFX_CarSkyProbe[6].rgb * vC, 0.0);
+    }
     float4 _NFX_CarAir;     // xyz: the car's velocity (m/s, world): the air it drives through blows the drops (set per car)
 
     struct Attributes
@@ -241,10 +253,15 @@ Shader "Hidden/NatureFX/CarRain"
         float glint = pow(saturate(dot(r, _NFX_SunDirWS.xyz)), 600.0) * beads;
         float fresnel = 0.02 + 0.98 * pow(1.0 - saturate(dot(dn, V)), 5.0);
         float luma = dot(behind, float3(0.2126, 0.7152, 0.0722));
-        // what it mirrors: the sky above brighter than the ground below (the scene's own level as the scale)
-        float sky = luma * (0.4 + 0.8 * saturate(r.y * 0.5 + 0.5)) + 0.01;
+        float exposure = GetCurrentExposureMultiplier();
+        // what it mirrors: the sky as it is (the own engine's sky probe in the mirrored direction; the ground below
+        // the horizon dim), else a guess from the scene's own level
+        float3 sky = _NFX_CarSkyProbeOn > 0.5
+            ? CarSkySH9(r) * exposure * lerp(0.2, 1.0, saturate(r.y * 4.0 + 0.5))
+            : (float3)(luma * (0.4 + 0.8 * saturate(r.y * 0.5 + 0.5)) + 0.01);
         float edgeDark = lerp(1.0, 0.35, smoothstep(0.75, 1.0, rim) * saturate(beads * 2.0));
-        float3 water = behind * (1.0 - fresnel) * edgeDark + sky * fresnel + glint * (luma * 25.0 + 0.5);
+        // the sun's glint as bright as the sun is now (none under thick cloud or at night)
+        float3 water = behind * (1.0 - fresnel) * edgeDark + sky * fresnel + glint * _NFX_CarLight.x * exposure * 0.5;
 
         // oily thin film on wet horizontal panels: interference colours shift with view angle and thickness
         float3 color = water;

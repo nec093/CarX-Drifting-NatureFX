@@ -57,6 +57,8 @@ namespace NatureFX.Rendering {
 		public const string ShaderName = "Hidden/NatureFX/CarRain";
 
 		private static readonly int Params = Shader.PropertyToID("_NFX_CarRain");
+		private static readonly int SkyProbeId = Shader.PropertyToID("_NFX_CarSkyProbe");
+		private static readonly int SkyProbeOnId = Shader.PropertyToID("_NFX_CarSkyProbeOn");
 		private static readonly int DirtId = Shader.PropertyToID("_NFX_CarDirt");
 		private static readonly int LightId = Shader.PropertyToID("_NFX_CarLight");
 
@@ -122,6 +124,13 @@ namespace NatureFX.Rendering {
 			}
 
 			material_.SetVector(Params, new Vector4(s.CarRainDrops, s.OilFilm, wet, Time.time));
+			// the drops mirror the own engine's sky
+			if (NativeEngine.SkyProbe != null) {
+				material_.SetBuffer(SkyProbeId, NativeEngine.SkyProbe);
+				material_.SetFloat(SkyProbeOnId, 1.0f);
+			} else {
+				material_.SetFloat(SkyProbeOnId, 0.0f);
+			}
 			material_.SetVector(DirtId, new Vector4(Mud, Dust, Snow, groundY_));
 			// light for the dirt's own shading: the sun on a panel facing it, and the sky (an eighth of the sun by day)
 			float sunLux = sun != null && sun.isActiveAndEnabled ? sun.intensity * Mathf.Max(0.0f, -sun.transform.forward.y + 0.1f) : 0.0f;
