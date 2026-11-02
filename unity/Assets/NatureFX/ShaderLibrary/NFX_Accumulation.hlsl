@@ -195,7 +195,8 @@ void NFX_ApplyAccumulation(inout NFXSurface s, float3 positionAWS, float3 geomNo
 	float wetMask = wet * exposure * saturate(0.65 + (large - 0.5) * 0.9 + up * 0.25) * (1.0 - track.g * 0.8);
 	float soaked = saturate(wetMask * 1.6);
 	s.baseColor *= lerp(1.0, 0.35, soaked * saturate(porosity));
-	s.smoothness = lerp(s.smoothness, lerp(0.62, 0.8, 1.0 - saturate(porosity)), soaked);
+	// glossier mostly where water can lie (steep faces shed it)
+	s.smoothness = lerp(s.smoothness, lerp(0.62, 0.8, 1.0 - saturate(porosity)), soaked * lerp(0.4, 1.0, up));
 	// the water film: the level rises once the surface is soaked, the relief's low parts (its height) fill first
 	float level = saturate((wetMask - 0.5) * 2.0) * pow(up, 4.0);
 	float film = saturate((level * 1.1 - s.height * 0.6) * 5.0);

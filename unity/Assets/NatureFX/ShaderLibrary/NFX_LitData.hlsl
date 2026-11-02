@@ -197,7 +197,15 @@ void GetSurfaceAndBuiltinData(FragInputs input, float3 V, inout PositionInputs p
 	NFX_ApplyPaint(s, positionAWS, geomNormalWS);
 	// the map's decals under the weather: snow and leaves cover them
 	NFX_ApplyDecals(s, positionAWS, geomNormalWS, V);
+	#ifdef NFX_WIND
+	// leaves and grass: wet, only a little glossier (a soaked forest at mirror gloss sent every reflection ray deep
+	// into the alpha tested foliage: the reflections' trace went from 1.5 to 13.6 ms in rain)
+	float foliageSmoothness = s.smoothness;
+	#endif
 	NFX_ApplyAccumulation(s, positionAWS, geomNormalWS, V, porosity, exposure, _TimeParameters.x, length(posInput.positionWS));
+	#ifdef NFX_WIND
+	s.smoothness = min(s.smoothness, max(foliageSmoothness, 0.0) + 0.15);
+	#endif
 	NFX_ApplyBeading(s, positionAWS, geomNormalWS, max(_NFX_Accumulation.w, _NFX_Weather.x));
 	NFX_ApplyPuddleMarkers(s, positionAWS, geomNormalWS, exposure, _TimeParameters.x);
 	// white lines, signs and reflectors send the headlights' light back towards them (after snow and dirt: a covered
