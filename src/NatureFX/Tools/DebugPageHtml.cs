@@ -31,6 +31,12 @@ td.k.i { padding-left:16px; }
 td.v.n { text-align:right; white-space:nowrap; width:14ch; }
 td.g { width:28%; }
 td.g div { height:7px; margin-top:4px; background:var(--bar); }
+#events { table-layout:auto; }
+#events td { white-space:nowrap; }
+#events td.s { white-space:normal; width:40%; }
+#events td.n { text-align:right; }
+#events td.up { color:var(--warn); }
+#events tr.head td { color:var(--dim); }
 tr.l1 td.v { color:var(--warn); }
 tr.l2 td.v { color:var(--bad); }
 .off { color:var(--dim); }
@@ -58,6 +64,10 @@ pre { margin:0; padding:4px; height:420px; overflow:auto; border:1px solid var(-
   <canvas id='chart'></canvas>
   <div class='tools'><span id='range'>-</span><button id='clear'>clear</button></div>
 </section>
+<section id='s-events'>
+  <h2>events (memory at each step after a scene load; deltas against the step before, MB)</h2>
+  <table id='events'></table>
+</section>
 <div id='cols'></div>
 <section id='s-log'>
   <h2>log (NatureFX lines of kino/output.log)</h2>
@@ -67,7 +77,24 @@ pre { margin:0; padding:4px; height:420px; overflow:auto; border:1px solid var(-
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-let hist = [], logText = '', built = '';
+let hist = [], logText = '', built = '', marks = [];
+
+function events() {
+  const keys = [['gpu', 'gpu'], ['native', 'engine'], ['buffers', 'trace buf'], ['targets', 'nfx targets'], ['other', 'other RT'], ['textures', 'game tex'], ['meshes', 'meshes']];
+  const MB = 1048576;
+  let html = `<tr class='head'><td>#</td><td>t (s)</td><td class='s'>step</td>` + keys.map(k => `<td class='n'>${k[1]}</td>`).join('') + '</tr>';
+  marks.forEach((m, i) => {
+    const p = i > 0 ? marks[i - 1] : null;
+    html += `<tr><td>${i + 1}</td><td>${m.t}</td><td class='s'>${esc(m.label)}</td>` + keys.map(k => {
+      const v = m[k[0]] / MB;
+      if (!p) return `<td class='n'>${v.toFixed(0)}</td>`;
+      const dv = (m[k[0]] - p[k[0]]) / MB;
+      const big = Math.abs(dv) >= 32;
+      return `<td class='n${dv >= 32 ? ' up' : ''}'>${v.toFixed(0)} ${big ? (dv > 0 ? '+' : '') + dv.toFixed(0) : ''}</td>`;
+    }).join('') + '</tr>';
+  });
+  $('events').innerHTML = marks.length ? html : `<tr><td class='k'>no steps yet: they are recorded while the debug page is on (load a map)</td></tr>`;
+}
 
 function table(sec) {
   const bars = sec.rows.filter(r => r[2] >= 0);
@@ -96,10 +123,12 @@ function show(d) {
   if (ids !== built) {
     built = ids;
     $('cols').innerHTML = d.sections.map(s => `<section id='s-${s.id}'></section>`).join('');
-    $('nav').innerHTML = ['chart'].concat(d.sections.map(s => s.id), ['log']).map(id => `<a href='#s-${id}'>${id}</a>`).join('');
+    $('nav').innerHTML = ['chart', 'events'].concat(d.sections.map(s => s.id), ['log']).map(id => `<a href='#s-${id}'>${id}</a>`).join('');
   }
   for (const s of d.sections) { const e = $('s-' + s.id); if (e) e.innerHTML = table(s); }
-  hist.push({ u: d.gpuUsedMB, b: d.gpuBudgetMB, n: d.oursMB });
+  hist.push({ t: d.time, u: d.gpuUsedMB, b: d.gpuBudgetMB, n: d.oursMB });
+  marks = d.marks || [];
+  events();
   if (hist.length > 3600) hist.shift();
   chart();
 }
@@ -121,6 +150,15 @@ function chart() {
     g.fillStyle = col('--dim'); g.fillText(String(Math.round(v)), 3 * r, y - 2 * r);
   }
   const x = i => i / (hist.length - 1) * w, y = v => h - v / top * h;
+  // the events' times, as numbered lines
+  g.fillStyle = col('--dim'); g.strokeStyle = col('--dim'); g.lineWidth = 1;
+  const t0 = hist[0].t, t1 = hist[hist.length - 1].t;
+  marks.forEach((m, i) => {
+    if (m.t < t0 || m.t > t1 || t1 <= t0) return;
+    const mx = (m.t - t0) / (t1 - t0) * w;
+    g.setLineDash([3 * r, 3 * r]); g.beginPath(); g.moveTo(mx, 0); g.lineTo(mx, h); g.stroke(); g.setLineDash([]);
+    g.fillText(String(i + 1), mx + 2 * r, 24 * r + (i % 3) * 11 * r);
+  });
   for (const [k, n] of [['b', '--c'], ['u', '--a'], ['n', '--b']]) {
     g.strokeStyle = col(n); g.lineWidth = 1.5 * r; g.beginPath();
     hist.forEach((p, i) => i ? g.lineTo(x(i), y(p[k])) : g.moveTo(x(i), y(p[k])));

@@ -103,6 +103,67 @@ namespace NatureFX.Tools {
 			Status = "off";
 		}
 
+		// ------------------------------------------------------------------ events: memory at each step of a load
+		// NatureFXMod marks the steps after a scene load (the ray tracing scene, the material replacement, ...); each
+		// mark counts the memory by kind there and then, so the page can show which step added what. Only while the
+		// page is on (a count walks every texture and mesh: some tens of ms at a load).
+		private sealed class Mark {
+			public float Time;
+			public string Label;
+			public long Gpu, Native, Buffers, Targets, OtherTargets, GameTextures, Meshes;
+		}
+		private static readonly List<Mark> marks_ = new();
+		private static readonly object marksLock_ = new();
+
+		public static void MarkStep(string label) {
+			if (!running_) {
+				return;
+			}
+			try {
+				CountTextures();
+				var m = new Mark { Time = UnityEngine.Time.unscaledTime, Label = label };
+				NativeEngine.GpuMemoryMB(out ulong used, out _);
+				m.Gpu = (long)used << 20;
+				var native = NativeEngine.NativeMemory();
+				if (native != null) {
+					for (int i = 0; i < native.Length; ++i) {
+						m.Native += NativeEngine.NativeMemoryNames[i].Contains("(used)") ? 0 : (long)native[i];
+					}
+				}
+				foreach (var (_, bytes) in NativeEngine.TraceMemory()) {
+					m.Buffers += bytes;
+				}
+				foreach (var (_, bytes, _) in nfxTargets_) {
+					m.Targets += bytes;
+				}
+				m.OtherTargets = otherTargets_;
+				m.GameTextures = gameTextures_;
+				m.Meshes = meshes_;
+				lock (marksLock_) {
+					marks_.Add(m);
+					if (marks_.Count > 80) {
+						marks_.RemoveAt(0);
+					}
+				}
+			} catch (Exception e) {
+				Kino.Log.Warning($"[NatureFX] Debug page: mark '{label}' failed ({e.Message})");
+			}
+		}
+
+		private static void AppendMarks(StringBuilder sb, CultureInfo inv) {
+			sb.Append(",\"marks\":[");
+			lock (marksLock_) {
+				for (int i = 0; i < marks_.Count; ++i) {
+					var m = marks_[i];
+					sb.Append(i > 0 ? "," : "").Append("{\"t\":").Append(m.Time.ToString("0.0", inv)).Append(",\"label\":").Append(Json(m.Label))
+					  .Append(",\"gpu\":").Append(m.Gpu).Append(",\"native\":").Append(m.Native).Append(",\"buffers\":").Append(m.Buffers)
+					  .Append(",\"targets\":").Append(m.Targets).Append(",\"other\":").Append(m.OtherTargets)
+					  .Append(",\"textures\":").Append(m.GameTextures).Append(",\"meshes\":").Append(m.Meshes).Append('}');
+				}
+			}
+			sb.Append(']');
+		}
+
 		// ------------------------------------------------------------------ server thread
 		private static void Serve() {
 			while (running_) {
@@ -723,6 +784,7 @@ namespace NatureFX.Tools {
 			sb.Append(",\"fps\":").Append(fps_.ToString("0.0", inv));
 			sb.Append(",\"gpuUsedMB\":").Append(used).Append(",\"gpuBudgetMB\":").Append(budget);
 			sb.Append(",\"oursMB\":").Append((ours / 1048576.0).ToString("0.0", inv));
+			AppendMarks(sb, inv);
 			sb.Append(",\"sections\":[");
 			for (int i = 0; i < sections.Count; ++i) {
 				var sec = sections[i];

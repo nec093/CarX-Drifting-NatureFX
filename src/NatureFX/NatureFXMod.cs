@@ -409,6 +409,7 @@ namespace NatureFX {
 		}
 
 		private void OnSceneLoaded(Scene scene, LoadSceneMode mode) {
+			NatureFX.Tools.DebugPage.MarkStep($"scene loaded: {scene.name} ({mode})");
 			if (mode == LoadSceneMode.Single) {
 				newMap_ = true; // the own engine starts its scene over at the rescan (not for the small additive scenes)
 				NatureFX.Tools.MapDataProbe.Reset();
@@ -432,14 +433,19 @@ namespace NatureFX {
 			yield return new WaitForSecondsRealtime(delay);
 			pendingRescan_ = null;
 
+			NatureFX.Tools.DebugPage.MarkStep("rescan: start");
 			Capabilities.Refresh();
 			// what the bundle build may leave out (render path, lightmap modes, LOD cross fade): facts of this map
 			NatureFX.Tools.VariantProfileDump.Write(Camera.main);
 			Sun.Refresh();
+			NatureFX.Tools.DebugPage.MarkStep("rescan: sun");
 			RT.PrepareSceneForRayTracing(newMap_);
 			newMap_ = false;
+			NatureFX.Tools.DebugPage.MarkStep("rescan: ray tracing scene built");
 			Accumulation.CollectSceneMaterials();
+			NatureFX.Tools.DebugPage.MarkStep("rescan: build-up materials");
 			RefreshMap(false);
+			NatureFX.Tools.DebugPage.MarkStep("rescan: map (grass, forest, shrubs, markers)");
 			NatureFX.Tools.MapDataProbe.Run();
 			if (Settings.Data.RecordShaderVariants) {
 				NatureFX.Tools.ShaderVariantRecorder.Save(); // variants used by the previous map
@@ -447,11 +453,20 @@ namespace NatureFX {
 			// the game's materials as they are, before any switch: data for the translators (stages 1 to 4)
 			Replacer.Full = Settings.Data.FullReplacement;
 			NatureFX.Tools.MaterialInventory.Write(Replacer);
+			NatureFX.Tools.DebugPage.MarkStep("rescan: material inventory");
 			if (Settings.Data.Enabled && Settings.Data.ReplaceShaders) {
 				ApplyReplacement();
 				NatureFX.Tools.SceneShaderDumper.MergeVariants(Replacer.UsedVariants);
+				NatureFX.Tools.DebugPage.MarkStep("rescan: game shaders replaced");
 			}
 			MarkDirty();
+			// what the next frames add (shaders compiled for their first draw, passes making their targets)
+			yield return null;
+			NatureFX.Tools.DebugPage.MarkStep("rescan: +1 frame");
+			yield return new WaitForSecondsRealtime(1.0f);
+			NatureFX.Tools.DebugPage.MarkStep("rescan: +1 s");
+			yield return new WaitForSecondsRealtime(4.0f);
+			NatureFX.Tools.DebugPage.MarkStep("rescan: +5 s");
 		}
 	}
 }
