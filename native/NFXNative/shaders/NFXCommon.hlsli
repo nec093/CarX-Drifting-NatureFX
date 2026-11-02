@@ -54,6 +54,9 @@ static const uint NoDescriptor = 0xFFFFFFFFu;
 // instance masks (NFX_Native_SetInstances): the scene every trace sees, and glass, which only Glass.hlsl looks for
 #define NFX_SCENE_MASK 0x01
 #define NFX_GLASS_MASK 0x02
+#define NFX_GROUND_MASK 0x04  // the ground (terrain, wide flat meshes): GroundMap.hlsl; also in NFX_SCENE_MASK's instances
+#define NFX_ROAD_MASK 0x08    // the road among them
+#define NFX_FOLIAGE_MASK 0x10 // plants (alpha tested or swaying): the ground map's cover
 
 // ------------------------------------------------------------------ sampling
 
@@ -330,6 +333,12 @@ bool Closest(float3 origin, float3 direction, float maxDist, bool coarse, out Hi
     return NfxToHit(NfxTrace(origin, direction, maxDist, coarse ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, NFX_SCENE_MASK), hit);
 }
 
+// the closest of the instances in mask (alpha tested)
+bool ClosestMasked(float3 origin, float3 direction, float maxDist, uint mask, out Hit hit)
+{
+    return NfxToHit(NfxTrace(origin, direction, maxDist, RAY_FLAG_NONE, mask), hit);
+}
+
 // The closest glass along the ray (glass is opaque to this query: no alpha test)
 bool ClosestGlass(float3 origin, float3 direction, float maxDist, out Hit hit)
 {
@@ -380,6 +389,28 @@ bool Closest(float3 origin, float3 direction, float maxDist, bool coarse, out Hi
 {
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
     q.TraceRayInline(Scene, coarse ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, NFX_SCENE_MASK, MakeRay(origin, direction, maxDist));
+    while (q.Proceed())
+    {
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            AlphaSolid(q.CandidateInstanceID(), q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+            q.CommitNonOpaqueTriangleHit();
+    }
+    hit = (Hit)0;
+    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+        return false;
+    hit.t = q.CommittedRayT();
+    hit.instance = q.CommittedInstanceID();
+    hit.primitive = q.CommittedPrimitiveIndex();
+    hit.barycentrics = q.CommittedTriangleBarycentrics();
+    hit.objectToWorld = q.CommittedObjectToWorld3x4();
+    return true;
+}
+
+// the closest of the instances in mask (alpha tested)
+bool ClosestMasked(float3 origin, float3 direction, float maxDist, uint mask, out Hit hit)
+{
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    q.TraceRayInline(Scene, RAY_FLAG_NONE, mask, MakeRay(origin, direction, maxDist));
     while (q.Proceed())
     {
         if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
@@ -626,9 +657,10 @@ float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
     }
     float cut = -0.6 + (h < 0.0 ? min(-h * 0.267949, 1.6) : 0.0);
     float below = cut - a;
-    float edge = saturate(below / 0.35 + 0.5);
-    float hotSpot = exp(-(h / 9.0) * (h / 9.0) - ((a + 2.0) / 2.5) * ((a + 2.0) / 2.5));
-    float fill = exp(-(h / 28.0) * (h / 28.0)) * exp(-max(0.0, below - 1.0) / 9.0) * 0.35;
+    float edge = saturate(below / 0.5 + 0.5);
+    float spread = a < -1.2 ? 2.2 : 1.2; // the peak 1.2° down: slower below it than above
+    float hotSpot = exp(-(h / 9.0) * (h / 9.0) - ((a + 1.2) / spread) * ((a + 1.2) / spread));
+    float fill = exp(-(h / 22.0) * (h / 22.0)) * exp(-max(0.0, below - 1.0) / 2.0) * 0.25 * saturate((38.0 - sqrt(h * h + a * a)) / 8.0);
     return lerp(0.015, min(1.0, hotSpot + fill), edge);
 }
 

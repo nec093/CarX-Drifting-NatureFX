@@ -34,7 +34,9 @@ namespace NatureFX.Editor {
 			"float4 _NFX_Water;          // x: 1 = water surface, y: flow direction (radians), z: flow speed (m/s), w: wind ripples\n" +
 			"float4 _NFX_Terrain;        // x: 1 = triplanar, y: metres per texture tile (0: no [terrain]), z: slope where the steep look starts (0 flat .. 1 wall), w: blend width\n" +
 			"float4 _NFX_Terrain2;       // x: 1 = steep map set, y: 1 = flat map set, z: noise in the blend, w: tile of the steep / flat maps (m)\n" +
-			"float4 _NFX_Surface;        // x: anti-tiling (hex tiles, 0 off .. 1), y: large scale variation (0 .. 1), z: its size (m), w: unused\n\n";
+			"float4 _NFX_Surface;        // x: anti-tiling (hex tiles, 0 off .. 1), y: large scale variation (0 .. 1), z: its size (m), w: ground blend (m; 0 the map's, < 0 off)\n" +
+			"float4 _NFX_Surface2;       // x: 1 = the height map gives the height fill (else the colour's brightness), yzw: unused\n" +
+			"float4 _NFX_Impostor;       // x: frames per side, y: tile size (m), z: centre height (m), w: 1 = octahedral impostor (NFX_Impostor.hlsl)\n\n";
 
 		private const string NfxMaterialProperties =
 			"        [HideInInspector] _NFX_Material(\"NFX Material\", Vector) = (-1, 0, 0, 0)\n" +
@@ -48,6 +50,8 @@ namespace NatureFX.Editor {
 			"        [HideInInspector] _NFX_Terrain(\"NFX Terrain\", Vector) = (0, 0, 0.55, 0.15)\n" +
 			"        [HideInInspector] _NFX_Terrain2(\"NFX Terrain 2\", Vector) = (0, 0, 0.5, 4)\n" +
 			"        [HideInInspector] _NFX_Surface(\"NFX Surface\", Vector) = (0, 0, 20, 0)\n" +
+			"        [HideInInspector] _NFX_Surface2(\"NFX Surface 2\", Vector) = (0, 0, 0, 0)\n" +
+			"        [HideInInspector] _NFX_Impostor(\"NFX Impostor\", Vector) = (0, 0, 0, 0)\n" +
 			"        [HideInInspector] _NFX_SteepMap(\"NFX Steep Map\", 2D) = \"grey\" {}\n" +
 			"        [HideInInspector] _NFX_FlatMap(\"NFX Flat Map\", 2D) = \"grey\" {}\n";
 

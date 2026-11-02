@@ -63,7 +63,7 @@ void NFX_ApplyAgeing(inout NFXSurface s, float3 positionAWS, float3 geomNormalWS
 	// moss: upward faces and crevices (low occlusion), in patches
 	if (moss > 0.0) {
 		float crevice = 1.0 - s.occlusion;
-		float m = saturate((big * 0.7 + fine * 0.3 + up * 0.35 + crevice * 0.8 - (1.0 - moss)) * 2.5);
+		float m = NFX_HeightFill(saturate((big * 0.7 + fine * 0.3 + up * 0.35 + crevice * 0.8 - (1.0 - moss)) * 2.5), s.height);
 		s.baseColor = lerp(s.baseColor, NFX_MossColor * (0.7 + fine * 0.6), m * 0.9);
 		s.smoothness = lerp(s.smoothness, 0.15, m);
 		s.metallic = lerp(s.metallic, 0.0, m);
@@ -99,7 +99,7 @@ void NFX_ApplyAgeing(inout NFXSurface s, float3 positionAWS, float3 geomNormalWS
 
 	// dirt: dull, darker grime in patches
 	if (dirt > 0.0) {
-		float m = dirt * (0.4 + big * 0.6);
+		float m = NFX_HeightFill(dirt * (0.4 + big * 0.6), s.height);
 		s.baseColor *= lerp(1.0, (0.75 + fine * 0.25) * float3(0.9, 0.85, 0.78), m);
 		s.smoothness *= 1.0 - m * 0.5;
 	}

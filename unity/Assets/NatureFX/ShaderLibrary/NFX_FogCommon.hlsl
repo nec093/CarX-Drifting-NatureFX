@@ -79,9 +79,10 @@ float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
     }
     float cut = -0.6 + (h < 0.0 ? min(-h * 0.267949, 1.6) : 0.0);
     float below = cut - a;
-    float edge = saturate(below / 0.35 + 0.5);
-    float hotSpot = exp(-(h / 9.0) * (h / 9.0) - ((a + 2.0) / 2.5) * ((a + 2.0) / 2.5));
-    float fill = exp(-(h / 28.0) * (h / 28.0)) * exp(-max(0.0, below - 1.0) / 9.0) * 0.35;
+    float edge = saturate(below / 0.5 + 0.5);
+    float spread = a < -1.2 ? 2.2 : 1.2; // the peak 1.2° down: slower below it than above
+    float hotSpot = exp(-(h / 9.0) * (h / 9.0) - ((a + 1.2) / spread) * ((a + 1.2) / spread));
+    float fill = exp(-(h / 22.0) * (h / 22.0)) * exp(-max(0.0, below - 1.0) / 2.0) * 0.25 * saturate((38.0 - sqrt(h * h + a * a)) / 8.0);
     return lerp(0.015, min(1.0, hotSpot + fill), edge);
 }
 

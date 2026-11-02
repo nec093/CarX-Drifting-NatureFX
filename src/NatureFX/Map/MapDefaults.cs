@@ -6,11 +6,11 @@ using UnityEngine;
 
 namespace NatureFX.Map {
 	// The weather and wind values a map profile can set ([defaults] and [zone.<id>], docs/map-authoring.md 1 and 3)
-	public enum MapKey { Snow, Leaves, Dust, Wetness, WindStrength, WindGust, WindDirection, FogDistance, FogHeight }
+	public enum MapKey { Snow, Leaves, Dust, Wetness, WindStrength, WindGust, WindDirection, FogDistance, FogHeight, GroundBlend }
 
 	// One section's values; NaN = not set there
 	public class MapValues {
-		public const int Count = 9;
+		public const int Count = 10;
 		private readonly float[] v_ = new float[Count];
 
 		private static readonly (string Name, MapKey Key, float Min, float Max)[] Keys = {
@@ -22,7 +22,9 @@ namespace NatureFX.Map {
 			("wind.gust", MapKey.WindGust, 0.0f, 1.0f),
 			("wind.direction", MapKey.WindDirection, -720.0f, 720.0f),
 			("fog.distance", MapKey.FogDistance, 0.0f, 100000.0f),
-			("fog.height", MapKey.FogHeight, 1.0f, 10000.0f)
+			("fog.height", MapKey.FogHeight, 1.0f, 10000.0f),
+			// how high objects take the ground's colour where they stand in it (m; NFX_Ground.hlsl), 0 off
+			("groundblend", MapKey.GroundBlend, 0.0f, 3.0f)
 		};
 
 		// season = a shortcut for the accumulation values not written out: snow, leaves, dust, wetness

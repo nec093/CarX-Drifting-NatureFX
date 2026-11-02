@@ -464,6 +464,13 @@ namespace NatureFX.Rendering {
 				wsum += weights_[i];
 			}
 			float log2L = wsum > 0.0f ? sum / wsum : 0.0f;
+			// the eye also settles on what is bright in view: the brightest 3 % at most 2.5 stops over mid grey (a road
+			// under the headlights in a black night opened the exposure to its darkest and blew out; the lit road there
+			// is less than a tenth of the picture, so the brightest tenth still held dark cells)
+			float bright = sorted_[(int)(sorted_.Length * 0.97f)];
+			if (!float.IsNaN(bright)) {
+				log2L = Mathf.Max(log2L, bright - 2.5f);
+			}
 			return log2L + Mathf.Log(100.0f / 12.5f, 2.0f);
 		}
 	}

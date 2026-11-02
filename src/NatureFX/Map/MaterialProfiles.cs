@@ -19,6 +19,8 @@ namespace NatureFX.Map {
 			// anti-tiling (NFX_AntiTiling.hlsl): hex tiles against a texture's visible repeat, 0 .. 1; a large scale
 			// variation of brightness and roughness over Size metres against the same ground going on and on
 			public float AntiTiling, Variation, VariationSize = 20.0f;
+			// the ground blend's height (m; NFX_Ground.hlsl): 0 the map's ([defaults] groundblend), < 0 off
+			public float GroundBlend;
 
 			public Look Clone() {
 				return (Look)MemberwiseClone();
@@ -57,6 +59,7 @@ namespace NatureFX.Map {
 		private static readonly int MaterialId = Shader.PropertyToID("_NFX_Material");
 		private static readonly int Material2Id = Shader.PropertyToID("_NFX_Material2");
 		private static readonly int SurfaceId = Shader.PropertyToID("_NFX_Surface");
+		private static readonly int Surface2Id = Shader.PropertyToID("_NFX_Surface2");
 		private static readonly int EmissionId = Shader.PropertyToID("_NFX_Emission");
 		private static readonly int EmissionParamsId = Shader.PropertyToID("_NFX_EmissionParams");
 		private static readonly int LightsId = Shader.PropertyToID("_NFX_Lights");
@@ -144,7 +147,12 @@ namespace NatureFX.Map {
 			m.SetVector(MaterialId, new Vector4(look.Porosity, look.Moss, look.Rust, look.Stain));
 			m.SetVector(Material2Id, new Vector4(look.Wear, look.Dirt, look.Beading, look.Retro));
 			if (m.HasProperty(SurfaceId)) {
-				m.SetVector(SurfaceId, new Vector4(look.AntiTiling, look.Variation, look.VariationSize, 0.0f));
+				m.SetVector(SurfaceId, new Vector4(look.AntiTiling, look.Variation, look.VariationSize, look.GroundBlend));
+			}
+			// the height fill from the material's height map when it has one
+			if (m.HasProperty(Surface2Id)) {
+				bool height = m.HasProperty("_HeightMap") && m.GetTexture("_HeightMap") != null;
+				m.SetVector(Surface2Id, new Vector4(height ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f));
 			}
 			if (look.Mirror) {
 				m.SetColor("_BaseColor", new Color(0.95f, 0.95f, 0.95f, 1.0f));
@@ -333,6 +341,7 @@ namespace NatureFX.Map {
 					case "antitiling": look.AntiTiling = Mathf.Clamp01(f); break;
 					case "variation": look.Variation = Mathf.Clamp01(f); break;
 					case "variation_size": look.VariationSize = Mathf.Max(1.0f, f); break;
+					case "groundblend": look.GroundBlend = f > 0.0f ? Mathf.Min(f, 3.0f) : -1.0f; break;
 					default: Kino.Log.Warning($"[NatureFX] Map profile: unknown key '{key}' in '{line}'"); break;
 				}
 			}

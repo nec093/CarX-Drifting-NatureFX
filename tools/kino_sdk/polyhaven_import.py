@@ -103,6 +103,14 @@ for asset in sorted(os.listdir(model_root)):
             if entry['cutoff'] is not None and os.path.exists(alpha_src):
                 rgb = Image.open(base_src).convert('RGB')
                 a = Image.open(alpha_src).convert('L').resize(rgb.size)
+                # the colour under the cut-out parts is black in the scans: the nearest leaf's colour instead, so the
+                # mip maps do not draw dark rims round the leaves
+                av = np.asarray(a)
+                solid = av > 127
+                if solid.any() and not solid.all():
+                    from scipy import ndimage
+                    _, (iy, ix) = ndimage.distance_transform_edt(~solid, return_indices=True)
+                    rgb = Image.fromarray(np.asarray(rgb)[iy, ix])
                 rgb.putalpha(a)
                 rgb.save(target)
             else:

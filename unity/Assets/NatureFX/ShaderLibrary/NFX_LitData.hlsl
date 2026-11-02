@@ -20,12 +20,21 @@
 #include "NFX_Wind.hlsl"
 #include "NFX_Accumulation.hlsl"
 #include "NFX_MaterialProfile.hlsl"
+#include "NFX_Ground.hlsl"
 #include "NFX_Foliage.hlsl"
+#include "NFX_Impostor.hlsl"
 
 // Called from VertMesh.hlsl (HAVE_VERTEX_MODIFICATION is defined by Lit.shader).
 // The motion vector pass calls it again with the previous frame's time, so wind uses timeParameters.
 void ApplyVertexModification(AttributesMesh input, float3 normalWS, inout float3 positionRWS, float3 timeParameters) {
 	NFX_ApplyVertexModification_Lit(input, normalWS, positionRWS, timeParameters);
+#ifdef NFX_WIND
+	// a far plant's impostor: the quad turned to the camera (NFX_Impostor.hlsl), still
+	if (_NFX_Impostor.w > 0.5) {
+		positionRWS = NFX_ImpostorVertexRWS(input.positionOS);
+		return;
+	}
+#endif
 	float3 positionAWS = GetAbsolutePositionWS(positionRWS);
 #ifdef NFX_WIND
 	float3 originAWS = GetAbsolutePositionWS(UNITY_MATRIX_M._m03_m13_m23);
@@ -74,6 +83,12 @@ void ApplyVertexModification(AttributesMesh input, float3 normalWS, inout float3
 }
 
 void GetSurfaceAndBuiltinData(FragInputs input, float3 V, inout PositionInputs posInput, out SurfaceData surfaceData, out BuiltinData builtinData RAY_TRACING_OPTIONAL_PARAMETERS) {
+#if defined(NFX_WIND) && !defined(SHADER_STAGE_RAY_TRACING)
+	// a far plant's impostor: the tile of the frame the camera sees, lit through the quad's tangent frame
+	if (_NFX_Impostor.w > 0.5) {
+		NFX_ImpostorFragment(input);
+	}
+#endif
 	NFX_GetSurfaceAndBuiltinData_Lit(input, V, posInput, surfaceData, builtinData);
 #ifdef _MASKMAP
 	// CarX Colormask (parked cars, props): the mask map is HDRP's layout (r metal, g AO, a smoothness) with the
@@ -111,6 +126,13 @@ void GetSurfaceAndBuiltinData(FragInputs input, float3 V, inout PositionInputs p
 	s.metallic = surfaceData.metallic;
 	s.normalWS = surfaceData.normalWS;
 	s.occlusion = surfaceData.ambientOcclusion;
+	// the surface's height for the height fill: its height map where the material has one, else its brightness (the
+	// gaps between stones, cracks and joints are dark)
+	s.height = saturate(dot(s.baseColor, float3(0.2126, 0.7152, 0.0722)) * 2.2);
+	if (_NFX_Surface2.x > 0.5) {
+		float2 heightUV = input.texCoord0.xy * _BaseColorMap_ST.xy + _BaseColorMap_ST.zw;
+		s.height = SAMPLE_TEXTURE2D(_HeightMap, sampler_HeightMap, heightUV).r;
+	}
 	// the map's vertex colour A: how open to the sky (0 under roofs, bridges and in tunnels: no snow, leaves or wet)
 	float exposure = 1.0;
 	#ifdef VARYINGS_NEED_COLOR
@@ -152,8 +174,27 @@ void GetSurfaceAndBuiltinData(FragInputs input, float3 V, inout PositionInputs p
 		#endif
 	}
 	#endif
+	#if defined(NFX_WIND) && defined(_ALPHATEST_ON) && !defined(SHADER_STAGE_RAY_TRACING)
+	// a plant's card where it meets the ground: shaded, the ground's colour, the last few cm fading out unevenly
+	if (_NFX_Foliage2.x < 0.5 && _NFX_Impostor.w < 0.5) {
+		NFX_ApplyFoliageFoot(s, positionAWS);
+	}
+	#endif
 	NFX_ApplyTerrain(s.baseColor, positionAWS, geomNormalWS);
 	NFX_ApplyAgeing(s, positionAWS, geomNormalWS);
+	// where it stands in the ground, the ground's colour (not grass blades or leaf cards: they grow out of it)
+	#ifdef NFX_WIND
+	#ifndef _ALPHATEST_ON
+	if (_NFX_Foliage2.x < 0.5)
+		NFX_ApplyGroundBlend(s, positionAWS, geomNormalWS);
+	#endif
+	#else
+	NFX_ApplyGroundBlend(s, positionAWS, geomNormalWS);
+	// the ground under and around plants: shaded, damp, litter (the ground map's cover)
+	NFX_ApplyGroundCover(s, positionAWS, geomNormalWS);
+	#endif
+	// the map's painted dirt: mud up the verges, water stains down the walls, ruts
+	NFX_ApplyPaint(s, positionAWS, geomNormalWS);
 	// the map's decals under the weather: snow and leaves cover them
 	NFX_ApplyDecals(s, positionAWS, geomNormalWS, V);
 	NFX_ApplyAccumulation(s, positionAWS, geomNormalWS, V, porosity, exposure, _TimeParameters.x, length(posInput.positionWS));

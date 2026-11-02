@@ -74,6 +74,7 @@ namespace NatureFX {
 		public float HeadlightShafts { get; set; }
 		public int HeadlightType { get; set; }              // 0 the game's own, 1 halogen, 2 HID, 3 LED (a real low beam)
 		public float HeadlightAim { get; set; }             // the low beam's axis below level (°)
+		public float HeadlightKelvin { get; set; }          // the lamps' colour temperature (K); 0: the type's own
 		public float SurfaceDetail { get; set; }
 
 		// tire marks / car rain
@@ -151,6 +152,8 @@ namespace NatureFX {
 		public int Season { get; set; }
 		public float GrassDensity { get; set; }
 		public float GrassDistance { get; set; }
+		public float ShrubDensity { get; set; }            // the map's thickets of scanned shrubs (ShrubRenderer): density, 0 off
+		public float ShrubDistance { get; set; }           // m: where the scans give way to their billboard clouds (impostors at 3x)
 		public bool MapEffects { get; set; }
 		// sky: HDRP volumetric clouds following the weather (and the map's cloud sea), the strength of their shadows,
 		// the blue haze over distant mountains (0 off)
@@ -195,6 +198,8 @@ namespace NatureFX {
 		public float MotionBlur { get; set; }              // own post: the shutter's share of a frame (0.5: 180°), 0 off
 		public float DofFStop { get; set; }                // own post's depth of field: the lens's f-number
 		public bool RTTransparentShadows { get; set; }     // the sun's ray traced shadow on transparent surfaces (SunShadowMap)
+		public bool MapGroundDetail { get; set; }          // the ground map: ground blend, painted dirt and debris on the map
+		public float Detritus { get; set; }                // debris (pebbles, twigs, leaves) along the road's edges: density, 0 off
 		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
 		public bool MapProbes { get; set; }
 		// draw the map's markers over the picture (F8 > Map), for map authors
@@ -277,6 +282,7 @@ namespace NatureFX {
 		public float HeadlightShafts { get; set; }
 		public int HeadlightType { get; set; }              // 0 the game's own, 1 halogen, 2 HID, 3 LED (a real low beam)
 		public float HeadlightAim { get; set; }             // the low beam's axis below level (°)
+		public float HeadlightKelvin { get; set; }          // the lamps' colour temperature (K); 0: the type's own
 		public float SurfaceDetail { get; set; }
 
 		// tire marks / car rain
@@ -354,6 +360,8 @@ namespace NatureFX {
 		public int Season { get; set; }
 		public float GrassDensity { get; set; }
 		public float GrassDistance { get; set; }
+		public float ShrubDensity { get; set; }            // the map's thickets of scanned shrubs (ShrubRenderer): density, 0 off
+		public float ShrubDistance { get; set; }           // m: where the scans give way to their billboard clouds (impostors at 3x)
 		public bool MapEffects { get; set; }
 		// sky: HDRP volumetric clouds following the weather (and the map's cloud sea), the strength of their shadows,
 		// the blue haze over distant mountains (0 off)
@@ -398,6 +406,8 @@ namespace NatureFX {
 		public float MotionBlur { get; set; }              // own post: the shutter's share of a frame (0.5: 180°), 0 off
 		public float DofFStop { get; set; }                // own post's depth of field: the lens's f-number
 		public bool RTTransparentShadows { get; set; }     // the sun's ray traced shadow on transparent surfaces (SunShadowMap)
+		public bool MapGroundDetail { get; set; }          // the ground map: ground blend, painted dirt and debris on the map
+		public float Detritus { get; set; }                // debris (pebbles, twigs, leaves) along the road's edges: density, 0 off
 		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
 		public bool MapProbes { get; set; }
 		// draw the map's markers over the picture (F8 > Map), for map authors
@@ -756,6 +766,18 @@ namespace NatureFX {
 				// the sun's ray traced shadow on transparent surfaces
 				d.RTTransparentShadows = true;
 				d.ConfigVersion = 59;
+			}
+			if (d.ConfigVersion < 60) {
+				// the ground map's details: ground blend, painted dirt, debris
+				d.MapGroundDetail = true;
+				d.Detritus = 1.0f;
+				d.ConfigVersion = 60;
+			}
+			if (d.ConfigVersion < 61) {
+				// thickets of scanned shrubs
+				d.ShrubDensity = 1.0f;
+				d.ShrubDistance = 25.0f;
+				d.ConfigVersion = 61;
 			}
 		}
 

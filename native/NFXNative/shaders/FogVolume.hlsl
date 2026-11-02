@@ -142,6 +142,7 @@ NFX_ENTRY(id)
                 light += SunColor * FogPhaseMix(dot(SunDir, view)) * SmokeTransmittance(p, p + toSun * 30.0);
         }
         light += 0.5 * (SampleSH9(float3(0.0, 1.0, 0.0)) + SampleSH9(float3(0.0, -1.0, 0.0)));
+        float3 sunSkyLight = light;
         // lamps and headlights: their beams in the mist (HDRP's punctual light falloff, the spot's cone)
         uint count = min((uint)LightCount.x, (uint)NFX_MAX_LOCAL_LIGHTS);
         for (uint i = 0; i < count; ++i)
@@ -169,7 +170,12 @@ NFX_ENTRY(id)
             spot *= SmokeTransmittance(p, LightPos[i].xyz);
             light += LightColor[i].rgb / d2 * window * window * spot * FogPhaseMix(dot(L, view));
         }
-        result = float4(min(light * sigma * albedo, 1e7), sigma);
+        // the lamps scatter in what the air holds: the weather's fog, the map's fog boxes and the smoke in full, the
+        // distance haze (a track's own short fog distance) no more than clear air does (ReflParams.w, 1/m): on a clear
+        // night the headlights lit a white dome over the road
+        float lampSigma = boxes + min(baseSigma, ReflParams.w);
+        float3 lampLight = light - sunSkyLight;
+        result = float4(min((sunSkyLight * sigma + lampLight * lampSigma) * albedo, 1e7), sigma);
     }
     Output.Store4(index * 16, asuint(result));
 }

@@ -17,7 +17,14 @@ struct NFXSurface {
 	float metallic;
 	float3 normalWS;
 	float occlusion;
+	float height;    // 0 low .. 1 high on the surface (its height map, else its brightness): the height fill
 };
+
+// a cover from 0 (none) to 1 (whole) laid over height h (0 low .. 1 high): the low parts take it first, the high ones
+// last, the amount on the whole about the same (dirt and soil settle in the gaps, not on the stones)
+float NFX_HeightFill(float c, float h) {
+	return saturate(c + (0.5 - h) * 0.9 * (1.0 - abs(2.0 * c - 1.0)));
+}
 
 // Snow / ground height field used for both the vertex displacement and the surface normal
 float NFX_SnowHeight(float2 xz) {
@@ -173,7 +180,7 @@ void NFX_ApplyAccumulation(inout NFXSurface s, float3 positionAWS, float3 geomNo
 	s.smoothness = lerp(s.smoothness, 0.5, rubber * 0.6);
 
 	// --- dust: settles on upward faces, breaks up with noise
-	float dustMask = saturate(dust * (0.4 + up * 0.8) * (0.6 + detail * 0.8));
+	float dustMask = NFX_HeightFill(saturate(dust * (0.4 + up * 0.8) * (0.6 + detail * 0.8)), s.height);
 	s.baseColor = lerp(s.baseColor, NFX_DustColor * (0.85 + detail * 0.3), dustMask * 0.75);
 	s.smoothness = lerp(s.smoothness, 0.12, dustMask);
 	s.metallic = lerp(s.metallic, 0.0, dustMask);
@@ -209,7 +216,7 @@ void NFX_ApplyAccumulation(inout NFXSurface s, float3 positionAWS, float3 geomNo
 	// --- fallen leaves: two overlapping layers, lifted with a soft shadow
 	if (leaves > 0.001) {
 		// tyres sweep leaves out of the driven line
-		float patch = smoothstep(1.0 - leaves, 1.0 - leaves + 0.3, large + detail * 0.25) * pow(up, 2.0) * saturate(leaves * 3.0) * exposure * (1.0 - track.b * 0.85);
+		float patch = NFX_HeightFill(smoothstep(1.0 - leaves, 1.0 - leaves + 0.3, large + detail * 0.25) * pow(up, 2.0) * saturate(leaves * 3.0) * exposure * (1.0 - track.b * 0.85), s.height);
 		[loop]
 		for (int layer = 0; layer < 2; ++layer) {
 			float3 leafColor;
@@ -229,7 +236,7 @@ void NFX_ApplyAccumulation(inout NFXSurface s, float3 positionAWS, float3 geomNo
 	}
 
 	// --- snow: soft drifts with bumps, covering everything below it, glints in the light
-	float snowMask = NFX_SnowMask(up, xz, snow) * exposure;
+	float snowMask = NFX_HeightFill(NFX_SnowMask(up, xz, snow) * exposure, s.height);
 	// ruts: compressed snow is thinner, greyer slush with the ground showing through
 	float rut = track.b * snowMask;
 	snowMask *= 1.0 - track.b * 0.75;
@@ -286,6 +293,7 @@ void NFX_Accumulation_float(
 	float3 PositionAWS, float3 NormalWS, float3 BaseColor, float Smoothness, float Metallic, float Exposure, float Porosity,
 	out float3 OutBaseColor, out float OutSmoothness, out float OutMetallic, out float NormalFlatten) {
 	NFXSurface s;
+	s.height = 0.5;
 	s.baseColor = BaseColor;
 	s.smoothness = Smoothness;
 	s.metallic = Metallic;

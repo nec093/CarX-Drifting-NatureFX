@@ -342,6 +342,18 @@ namespace NatureFX.Nature {
 			return path;
 		}
 
+		// A copy of source on targetName, converted as the map's own materials are (ShrubRenderer's prototypes, whose
+		// renderers stay off); null when it cannot be. Nothing to restore: the copy is the caller's
+		public Material ConvertCopy(Material source, ShaderBundle bundle, string targetName, string objectPath) {
+			var m = new Material(source) { name = source.name, hideFlags = HideFlags.DontSave };
+			if (!TryReplace(m, objectPath, bundle, targetName)) {
+				Object.Destroy(m);
+				return null;
+			}
+			originals_.Remove(m);
+			return m;
+		}
+
 		private bool TryReplace(Material m, string objectPath, ShaderBundle bundle, string targetName) {
 			if (m == null || m.shader == null || originals_.ContainsKey(m) || targetName == null) {
 				return false;

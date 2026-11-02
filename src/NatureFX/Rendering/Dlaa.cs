@@ -60,6 +60,7 @@ namespace NatureFX.Rendering {
 		private static int matricesFrame_ = -10;
 		private static string failure_;
 		private static int contextsLogged_, mainChanges_, missedLogged_, otherLogged_;
+		private static string lastMode_;
 		private static string lastContext_;
 		private static Camera lastMain_;
 		private static int postFrame_ = -1;
@@ -243,6 +244,12 @@ namespace NatureFX.Rendering {
 			// the sun shadows' rays kept about the display resolution's: a moving shadow over still ground has no
 			// history, and the render resolution's noise was upscaled with it (TAAU the same: not DLSS's doing)
 			NativeEngine.SunSamples = Upscaling ? Mathf.Clamp(Mathf.RoundToInt(1.0f / (Shares[quality] * Shares[quality])), 1, 4) : 1;
+			// each mode change in the log, with the frame: a GPU hang after one (NFXNative-gpu-hang.txt) can be matched to it
+			string mode = $"{Qualities[quality]}{(Upscaling ? " upscaling" : "")}{(RayReconstruction ? " + RR" : "")}";
+			if (mode != lastMode_) {
+				Kino.Log.Info($"[NatureFX] DLSS mode: {lastMode_ ?? "-"} -> {mode} at frame {Time.frameCount} ({cam.pixelWidth}x{cam.pixelHeight}, sun rays {NativeEngine.SunSamples})");
+				lastMode_ = mode;
+			}
 			if (Upscaling) {
 				// HDRP's TAAU path: it jitters the camera (taaJitter) and upscales in its TAA pass, drawn by NFX_Upscaled;
 				// its anti-flicker at 0 tells that pass from the one after a physically based depth of field (3.5)
