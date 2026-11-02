@@ -28,7 +28,9 @@ namespace NatureFX.Rendering {
 		// the high beam: the same lamp, its light gathered on the axis without a cut-off (some 2.5 times the low
 		// beam's peak; the regulations allow up to about 215 000 cd for all the car's high beams together)
 		private const float HighBeamGain = 2.5f;
-		private const float BeamAngle = 80.0f; // the cookie spans it: the low beam's wide near field included
+		// the cookie spans it: the low beam's wide near field included (a real low beam lights the verges out to some 45°
+		// either side, 2 to 4° down: at 80° the beam looked narrow, a lit tunnel down the road)
+		private const float BeamAngle = 110.0f;
 
 		private struct Original {
 			public float Intensity, Temperature, SpotAngle, Range, Inner;
@@ -214,7 +216,10 @@ namespace NatureFX.Rendering {
 		// a while when only the intensity, cookie, angle and aim were watched)
 		private int heldLogged_;
 
+		private readonly HashSet<string> heldKinds_ = new();
+
 		private bool Holds(Light light, Texture cookie, int type) {
+			var hd = light.GetComponent<HDAdditionalLightData>();
 			if (!held_.TryGetValue(light, out var h)) {
 				return false;
 			}
@@ -225,11 +230,17 @@ namespace NatureFX.Rendering {
 				: !light.useColorTemperature || Mathf.Abs(light.colorTemperature - Kelvin(type)) > 1.0f ? $"colour temperature -> {light.colorTemperature:0} K"
 				: light.color != Color.white ? "colour"
 				: !Mathf.Approximately(light.range, 120.0f) ? $"range -> {light.range:0}"
+				: !Mathf.Approximately(light.innerSpotAngle, BeamAngle * 0.95f) ? $"inner angle -> {light.innerSpotAngle:0}"
+				: hd != null && hd.spotLightShape != SpotLightShape.Cone ? $"shape -> {hd.spotLightShape}"
+				: hd != null && !Mathf.Approximately(hd.shapeRadius, 0.04f) ? $"radius -> {hd.shapeRadius:0.000}"
+				: hd != null && hd.lightUnit != LightUnit.Candela ? $"unit -> {hd.lightUnit}"
 				: null;
 			if (changed == null) {
 				return true;
 			}
-			if (heldLogged_ < 12) {
+			// each kind of change in the log (the first 12 of any kind left out what the game did later, on the throttle)
+			string kind = changed.Split(' ')[0];
+			if (heldLogged_ < 40 && heldKinds_.Add(kind + "|" + Path(light.transform))) {
 				++heldLogged_;
 				KSL.API.Kino.Log.Info($"[NatureFX] Headlights: the game set '{Path(light.transform)}' again ({changed}); ours put back");
 			}
@@ -254,6 +265,9 @@ namespace NatureFX.Rendering {
 			hd.SetIntensity(t.Candela * (beamHigh ? HighBeamGain : 1.0f), LightUnit.Candela);
 			hd.SetCookie(beamHigh ? HighCookie(type) : Cookie(type));
 			hd.shapeRadius = 0.04f;
+			if (hd.spotLightShape != SpotLightShape.Cone) {
+				hd.spotLightShape = SpotLightShape.Cone;
+			}
 			held_[light] = (light.intensity, light.transform.localRotation);
 			// 1 the low beam (driving on the left), 3 the same mirrored (on the right), 2 the high beam (NFX_BeamPattern)
 			Beams[light] = beamHigh ? 2 : rightTraffic_ ? 3 : 1;
@@ -370,12 +384,13 @@ namespace NatureFX.Rendering {
 					float spread = a < -1.2f ? 2.2f : 1.2f;
 					// the hot spot a little to the kerb side (Japan's measuring points: the brightest some 1 to 2° left of the
 					// middle, under the cut-off), so the near verge and the lane are lit more than the oncoming lane
-					float hot = Mathf.Exp(-Mathf.Pow((h + 1.5f) / 9.0f, 2.0f) - Mathf.Pow((a + 1.2f) / spread, 2.0f));
+					float hot = Mathf.Exp(-Mathf.Pow((h + 1.5f) / 12.0f, 2.0f) - Mathf.Pow((a + 1.2f) / spread, 2.0f));
 					// steeply down (the road a few metres ahead) a real low beam sends little: under 2 % of its peak 8° down,
 					// so the road just in front is no brighter than the road 30 m on (with 5 % it was a white blob at night);
 					// to the sides it fades out before the spot's edge, which drew a round rim on the verges
-					float fill = Mathf.Exp(-Mathf.Pow(h / 22.0f, 2.0f)) * Mathf.Exp(-Mathf.Max(0.0f, below - 1.0f) / 2.0f) * 0.25f
-					             * Mathf.Clamp01((38.0f - Mathf.Sqrt(h * h + a * a)) / 8.0f);
+					// (NFX_BeamPatternSoft has the same numbers)
+					float fill = Mathf.Exp(-Mathf.Pow(h / 34.0f, 2.0f)) * Mathf.Exp(-Mathf.Max(0.0f, below - 1.0f) / 2.0f) * 0.3f
+					             * Mathf.Clamp01((53.0f - Mathf.Sqrt(h * h + a * a)) / 10.0f);
 					float value = Mathf.Lerp(0.015f, Mathf.Min(1.0f, hot + fill), edge);
 					var c = new Color(value, value, value, 1.0f);
 					if (type >= 2) {
@@ -385,7 +400,7 @@ namespace NatureFX.Rendering {
 						// a cooler cyan-blue, thinner and fainter
 						bool xenon = type == 2;
 						float level = Mathf.Min(1.0f, hot + fill);
-						float across = Mathf.Exp(-Mathf.Pow(h / 30.0f, 2.0f)) * level * (xenon ? 0.55f : 0.35f);
+						float across = Mathf.Exp(-Mathf.Pow(h / 40.0f, 2.0f)) * level * (xenon ? 0.55f : 0.35f);
 						float blueWidth = xenon ? 0.13f : 0.09f;
 						float blue = Mathf.Exp(-Mathf.Pow((below + blueWidth * 0.8f) / blueWidth, 2.0f)) * across;
 						float amber = Mathf.Exp(-Mathf.Pow((below - 0.18f) / (xenon ? 0.14f : 0.1f), 2.0f)) * across * (xenon ? 0.5f : 0.3f);
