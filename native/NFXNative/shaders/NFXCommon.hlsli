@@ -472,6 +472,36 @@ struct HitSurface
     float3 emission; // light the surface gives off (radiance, before exposure)
 };
 
+// The colour texture's mip at a hit, as the rasteriser picks it (a ray cone): the triangle's texels per metre from its
+// UV and world areas, the footprint of one pixel's ray at the hit's distance, stretched where the surface is seen at a
+// grazing angle (partly: the rasteriser's anisotropic filtering keeps such surfaces sharper than a plain cone).
+// Was "a texture spans about 4 m": a building's 2048 texture over 20 m came out four mips too coarse, which blurred
+// what the composite rebuilds from this colour (walls and windows in the shade).
+static const float NfxPixelAngle = 0.0009; // radians a pixel spans (about 1080 lines over a 55 degree view)
+float HitMip(Record r, uint3 tri, Hit hit, float3 rayDir, float3 normal, Texture2D texture)
+{
+    uint w, h;
+    texture.GetDimensions(w, h);
+    ByteAddressBuffer positions = ResourceDescriptorHeap[r.positions];
+    ByteAddressBuffer uvs = ResourceDescriptorHeap[r.uvs];
+    float3 p0 = mul((float3x3)hit.objectToWorld, asfloat(positions.Load3(tri.x * 12)));
+    float3 p1 = mul((float3x3)hit.objectToWorld, asfloat(positions.Load3(tri.y * 12)));
+    float3 p2 = mul((float3x3)hit.objectToWorld, asfloat(positions.Load3(tri.z * 12)));
+    float2 t0 = asfloat(uvs.Load2(tri.x * 8)) * r.st.xy;
+    float2 t1 = asfloat(uvs.Load2(tri.y * 8)) * r.st.xy;
+    float2 t2 = asfloat(uvs.Load2(tri.z * 8)) * r.st.xy;
+    float worldArea = length(cross(p1 - p0, p2 - p0));
+    float2 e1 = (t1 - t0) * float2(w, h);
+    float2 e2 = (t2 - t0) * float2(w, h);
+    float texelArea = abs(e1.x * e2.y - e1.y * e2.x);
+    if (worldArea < 1e-12 || texelArea < 1e-12)
+        return 0.0;
+    float texelsPerMetre = sqrt(texelArea / worldArea);
+    float facing = sqrt(max(abs(dot(normal, rayDir)), 0.0625));
+    float footprint = hit.t * NfxPixelAngle / facing;
+    return clamp(log2(max(footprint * texelsPerMetre, 1e-4)), 0.0, 12.0);
+}
+
 // The surface where a ray hit: colour, normal, metalness and smoothness from the instance's mesh and material.
 // lod: the colour texture's mip (-1: from the hit distance, as the ray cone of NFX_RTLitHit.hlsl)
 HitSurface SurfaceAt(Hit hit, float3 rayDir, float lod)
@@ -524,12 +554,7 @@ HitSurface SurfaceAt(Hit hit, float3 rayDir, float lod)
             Texture2D texture = ResourceDescriptorHeap[r.texture];
             float mip = lod;
             if (mip < 0.0)
-            {
-                uint w, h;
-                texture.GetDimensions(w, h);
-                // a texture spans about 4 m; the footprint grows with the distance
-                mip = clamp(log2(max(hit.t * 0.002 * w / 4.0, 1e-4)), 0.0, 10.0);
-            }
+                mip = HitMip(r, tri, hit, rayDir, s.normal, texture);
             s.albedo *= texture.SampleLevel(LinearWrap, uv, mip).rgb;
         }
         if (r.emissionMap != NoDescriptor && any(r.emission > 0.0))
