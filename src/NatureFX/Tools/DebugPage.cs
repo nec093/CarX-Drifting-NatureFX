@@ -230,11 +230,35 @@ namespace NatureFX.Tools {
 			return name;
 		}
 
+		// the game's own textures (materials, lightmaps) and every mesh: what makes up the "rest"
+		private static long gameTextures_, gameTexturesReadable_;
+		private static int gameTextureCount_;
+		private static List<(string Name, long Bytes)> bigGameTextures_ = new();
+		private static List<(string Format, long Bytes, int Count)> gameTextureFormats_ = new();
+		private static long meshes_, rtMeshes_, natureMeshes_;
+		private static int meshCount_, rtMeshCount_, natureMeshCount_;
+		private static List<(string Name, long Bytes)> bigMeshes_ = new();
+
+		// What a mesh's vertex and index buffers take on the GPU
+		private static long MeshBytes(Mesh m) {
+			long bytes = 0;
+			for (int s = 0; s < m.vertexBufferCount; ++s) {
+				bytes += (long)m.vertexCount * m.GetVertexBufferStride(s);
+			}
+			long indices = 0;
+			for (int sub = 0; sub < m.subMeshCount; ++sub) {
+				indices += (long)m.GetIndexCount(sub);
+			}
+			return bytes + indices * (m.indexFormat == UnityEngine.Rendering.IndexFormat.UInt16 ? 2 : 4);
+		}
+
 		private static void CountTextures() {
 			var groups = new Dictionary<string, (long Bytes, int Count)>();
 			var big = new List<(string, long)>();
-			long other = 0;
-			int otherCount = 0;
+			var bigGame = new List<(string, long)>();
+			var formats = new Dictionary<string, (long Bytes, int Count)>();
+			long other = 0, game = 0, readable = 0;
+			int otherCount = 0, gameCount = 0;
 			foreach (var t in Resources.FindObjectsOfTypeAll<Texture>()) {
 				if (t == null) {
 					continue;
@@ -244,9 +268,6 @@ namespace NatureFX.Tools {
 				}
 				string name = t.name ?? "";
 				bool ours = name.StartsWith("NFX_", StringComparison.Ordinal) || name.StartsWith("NatureFX", StringComparison.Ordinal);
-				if (!ours && !(t is RenderTexture)) {
-					continue; // the game's own textures (materials): not what this page is about
-				}
 				long bytes = TextureBytes(t);
 				if (ours) {
 					string g = Group(name);
@@ -255,8 +276,24 @@ namespace NatureFX.Tools {
 				} else if (t is RenderTexture) {
 					other += bytes;
 					++otherCount;
-					if (bytes >= 16L << 20) {
+					if (bytes >= 4L << 20) {
 						big.Add(($"{name} ({t.width}x{t.height} {t.graphicsFormat})", bytes));
+					}
+				} else {
+					// streamed textures hold only some of their mips
+					if (t is Texture2D t2 && t2.streamingMipmaps && t2.loadedMipmapLevel > 0) {
+						bytes >>= 2 * Math.Min(t2.loadedMipmapLevel, 15);
+					}
+					game += bytes;
+					++gameCount;
+					if (t.isReadable) {
+						readable += bytes;
+					}
+					string f = t.graphicsFormat.ToString();
+					formats.TryGetValue(f, out var fv);
+					formats[f] = (fv.Bytes + bytes, fv.Count + 1);
+					if (bytes >= 4L << 20) {
+						bigGame.Add(($"{(name.Length > 0 ? name : "(no name)")} ({t.GetType().Name} {t.width}x{t.height} {t.graphicsFormat}{(t.isReadable ? ", readable" : "")})", bytes));
 					}
 				}
 			}
@@ -266,10 +303,129 @@ namespace NatureFX.Tools {
 			}
 			list.Sort((a, b) => b.Item2.CompareTo(a.Item2));
 			big.Sort((a, b) => b.Item2.CompareTo(a.Item2));
+			bigGame.Sort((a, b) => b.Item2.CompareTo(a.Item2));
+			var formatList = new List<(string, long, int)>();
+			foreach (var pair in formats) {
+				formatList.Add((pair.Key, pair.Value.Bytes, pair.Value.Count));
+			}
+			formatList.Sort((a, b) => b.Item2.CompareTo(a.Item2));
 			nfxTargets_ = list;
-			bigTargets_ = big.Count > 20 ? big.GetRange(0, 20) : big;
+			bigTargets_ = big.Count > 30 ? big.GetRange(0, 30) : big;
 			otherTargets_ = other;
 			otherTargetCount_ = otherCount;
+			gameTextures_ = game;
+			gameTexturesReadable_ = readable;
+			gameTextureCount_ = gameCount;
+			bigGameTextures_ = bigGame.Count > 30 ? bigGame.GetRange(0, 30) : bigGame;
+			gameTextureFormats_ = formatList.Count > 12 ? formatList.GetRange(0, 12) : formatList;
+
+			// meshes: the game's, NatureFX's own (grass, forest, debris), and the ones made only for the ray tracing
+			// scene (NFX_RT_*: terrain chunks, baked skinned meshes; the engine keeps its own copy of their data)
+			long all = 0, rtOnly = 0, nature = 0;
+			int count = 0, rtCount = 0, natureCount = 0;
+			var bigMeshes = new List<(string, long)>();
+			foreach (var m in Resources.FindObjectsOfTypeAll<Mesh>()) {
+				if (m == null) {
+					continue;
+				}
+				long bytes;
+				try {
+					bytes = MeshBytes(m);
+				} catch (Exception) {
+					continue;
+				}
+				string name = m.name ?? "";
+				all += bytes;
+				++count;
+				if (name.StartsWith("NFX_RT_", StringComparison.Ordinal)) {
+					rtOnly += bytes;
+					++rtCount;
+				} else if (name.StartsWith("NatureFX", StringComparison.Ordinal)) {
+					nature += bytes;
+					++natureCount;
+				}
+				if (bytes >= 4L << 20) {
+					bigMeshes.Add(($"{(name.Length > 0 ? name : "(no name)")} ({m.vertexCount:N0} vertices, {m.subMeshCount} sub meshes{(m.isReadable ? ", readable" : "")})", bytes));
+				}
+			}
+			bigMeshes.Sort((a, b) => b.Item2.CompareTo(a.Item2));
+			meshes_ = all;
+			rtMeshes_ = rtOnly;
+			natureMeshes_ = nature;
+			meshCount_ = count;
+			rtMeshCount_ = rtCount;
+			natureMeshCount_ = natureCount;
+			bigMeshes_ = bigMeshes.Count > 20 ? bigMeshes.GetRange(0, 20) : bigMeshes;
+		}
+
+		// HDRP's own features as the game camera runs them now (its frame settings) and the volume values that decide
+		// whether they do any work: where the own engine replaces one, HDRP running it too is wasted time and memory
+		private static void HdrpState(Section sec) {
+			var cam = Camera.main;
+			if (cam == null) {
+				sec.Add("camera", "none");
+				return;
+			}
+			UnityEngine.Rendering.HighDefinition.FrameSettings fs;
+			try {
+				fs = UnityEngine.Rendering.HighDefinition.HDCamera.GetOrCreate(cam).frameSettings;
+			} catch (Exception e) {
+				sec.Add("frame settings", $"({e.GetType().Name})", -1.0, false, 1);
+				return;
+			}
+			string[] fields = {
+				"Volumetrics", "VolumetricClouds", "AtmosphericScattering", "SSR", "SSAO", "SSGI", "ContactShadows", "ScreenSpaceShadows",
+				"ShadowMaps", "Shadowmask", "ReflectionProbe", "PlanarProbe", "SkyReflection", "Bloom", "LensFlareScreenSpace",
+				"LensFlareDataDriven", "MotionBlur", "DepthOfField", "Antialiasing", "Postprocess", "Decals", "LowResTransparent",
+				"Refraction", "Distortion", "Water", "SubsurfaceScattering", "Transmission", "CustomPass"
+			};
+			foreach (string f in fields) {
+				if (Enum.TryParse(f, out UnityEngine.Rendering.HighDefinition.FrameSettingsField field)) {
+					sec.Add($"camera: {f}", fs.IsEnabled(field) ? "on" : "off");
+				}
+			}
+			var stack = VolumeOverhaul.Stack();
+			if (stack == null) {
+				return;
+			}
+			sec.Try("volume: fog", () => {
+				var fog = stack.GetComponent<UnityEngine.Rendering.HighDefinition.Fog>();
+				return fog == null ? "-" : $"{(fog.enabled.value ? "on" : "off")}, volumetric {(fog.enableVolumetricFog.value ? "on" : "off")}, mean free path {fog.meanFreePath.value:0} m";
+			});
+			sec.Try("volume: volumetric clouds", () => {
+				var c = stack.GetComponent<UnityEngine.Rendering.HighDefinition.VolumetricClouds>();
+				return c == null ? "-" : c.enable.value ? "on" : "off";
+			});
+			sec.Try("volume: bloom", () => {
+				var b = stack.GetComponent<UnityEngine.Rendering.HighDefinition.Bloom>();
+				return b == null ? "-" : $"intensity {b.intensity.value:0.###}";
+			});
+			sec.Try("volume: screen space lens flare", () => {
+				var l = stack.GetComponent<UnityEngine.Rendering.HighDefinition.ScreenSpaceLensFlare>();
+				return l == null ? "-" : $"intensity {l.intensity.value:0.###}";
+			});
+			sec.Try("volume: SSR", () => {
+				var r = stack.GetComponent<UnityEngine.Rendering.HighDefinition.ScreenSpaceReflection>();
+				return r == null ? "-" : r.enabled.value ? "on" : "off";
+			});
+			sec.Try("volume: SSAO", () => {
+				var a = stack.GetComponent<UnityEngine.Rendering.HighDefinition.ScreenSpaceAmbientOcclusion>();
+				return a == null ? "-" : $"intensity {a.intensity.value:0.###}";
+			});
+			sec.Try("volume: SSGI", () => {
+				var g = stack.GetComponent<UnityEngine.Rendering.HighDefinition.GlobalIllumination>();
+				return g == null ? "-" : g.enable.value ? "on" : "off";
+			});
+			sec.Try("volume: contact shadows", () => {
+				var c = stack.GetComponent<UnityEngine.Rendering.HighDefinition.ContactShadows>();
+				return c == null ? "-" : c.enable.value ? "on" : "off";
+			});
+			sec.Try("volume: shadow distance", () => {
+				var sh = stack.GetComponent<UnityEngine.Rendering.HighDefinition.HDShadowSettings>();
+				return sh == null ? "-" : $"{sh.maxShadowDistance.value:0} m, {sh.cascadeShadowSplitCount.value} cascades";
+			});
+			sec.Try("quality: texture mip limit", () => $"{QualitySettings.globalTextureMipmapLimit} (0 full size)");
+			sec.Try("quality: mip streaming", () => QualitySettings.streamingMipmapsActive ? $"on, budget {QualitySettings.streamingMipmapsMemoryBudget:0} MB" : "off");
 		}
 
 		// ------------------------------------------------------------------ the snapshot: sections of rows
@@ -347,7 +503,9 @@ namespace NatureFX.Tools {
 			split.Bytes("trace buffers", bufferTotal);
 			split.Bytes("NatureFX render targets / textures", targetTotal);
 			split.Bytes("other render targets (game, HDRP)", otherTargets_);
-			split.Bytes("rest (game textures and meshes, DLSS, ...)", Math.Max(0, usedBytes - ours - otherTargets_));
+			split.Bytes("game textures", gameTextures_);
+			split.Bytes("meshes", meshes_);
+			split.Bytes("rest (HDRP's buffers, DLSS, driver, ...)", Math.Max(0, usedBytes - ours - otherTargets_ - gameTextures_ - meshes_));
 
 			// performance
 			var perf = new Section("perf", "Performance");
@@ -455,6 +613,26 @@ namespace NatureFX.Tools {
 			world.Try("debris", () => mod.Debris.Status);
 			world.Try("decals, water", () => $"decals {mod.Decals.Count}, puddles {mod.Water.PuddleCount} (water {mod.Water.Level:P0}), water surfaces {mod.Water.SurfaceCount}");
 
+			// the "rest": the game's textures and meshes, HDRP's features
+			var gameTex = new Section("game-textures", "Game textures (GPU copies; mip streamed ones as loaded)");
+			gameTex.Add($"all ({gameTextureCount_})", Mb(gameTextures_), gameTextures_);
+			gameTex.Add("of them readable (a CPU copy too)", Mb(gameTexturesReadable_), gameTexturesReadable_, true);
+			foreach (var (format, bytes, count) in gameTextureFormats_) {
+				gameTex.Add($"format {format} ({count})", Mb(bytes), bytes, true);
+			}
+			foreach (var (name, bytes) in bigGameTextures_) {
+				gameTex.Bytes(name, bytes, true);
+			}
+			var meshes = new Section("meshes", "Meshes (vertex and index buffers)");
+			meshes.Add($"all ({meshCount_})", Mb(meshes_), meshes_);
+			meshes.Add($"made for the ray tracing scene only, NFX_RT_* ({rtMeshCount_})", Mb(rtMeshes_), rtMeshes_, true);
+			meshes.Add($"NatureFX's own (grass, forest, debris) ({natureMeshCount_})", Mb(natureMeshes_), natureMeshes_, true);
+			foreach (var (name, bytes) in bigMeshes_) {
+				meshes.Bytes(name, bytes, true);
+			}
+			var hdrp = new Section("hdrp", "HDRP features now (the game camera)");
+			HdrpState(hdrp);
+
 			sections.Add(perf);
 			sections.Add(split);
 			sections.Add(timings);
@@ -462,6 +640,9 @@ namespace NatureFX.Tools {
 			sections.Add(buffers);
 			sections.Add(targets);
 			sections.Add(others);
+			sections.Add(gameTex);
+			sections.Add(meshes);
+			sections.Add(hdrp);
 			sections.Add(scene);
 			sections.Add(features);
 			sections.Add(denoisers);
