@@ -25,6 +25,11 @@ Shader "Hidden/NatureFX/RTReflect"
     TEXTURE2D_X(_NFX_HistoryTex);   // accumulated reflection of the previous frame
     TEXTURE2D_X(_NFX_DistTex);      // distance from the surface to what it reflects (0: nothing)
     float4 _NFX_ComposeParams;      // z: share of the new frame
+    // HDRP's sky as it mirrors it (the own engine's sky cube, in nits) and x 1 when HDRP uses it: the composite takes
+    // that mirrored sky away where the traced reflection replaces it
+    TEXTURECUBE(_NFX_HdrpSkyCube);
+    SAMPLER(sampler_NFX_HdrpSkyCube);
+    float4 _NFX_HdrpSky;
 
     TEXTURE2D_X(_NFX_SurfaceAlbedo);  // RTSurfaceTrace: rgb albedo, a metalness and clear coat
     TEXTURE2D_X(_NFX_SurfaceNormal);  // w != 0: the trace found the surface the pixel shows
@@ -145,7 +150,19 @@ Shader "Hidden/NatureFX/RTReflect"
         // refl.rgb = Fresnel * reflected light, refl.a = Fresnel (from the Reflection trace). Swap that share of the
         // image (HDRP's own probe / screen space reflection) for the traced one.
         float weight = smooth * _NFX_ReflCompose.x;
-        float3 result = color * (1.0 - saturate(refl.a * weight)) + refl.rgb * weight;
+        float share = saturate(refl.a * weight);
+        // what to take away: the Fresnel share of the image, or at least HDRP's own mirrored sky in that share (taking
+        // only a share of the whole image left nearly all of HDRP's sky reflection on a car's paint, whose colour is
+        // mostly its diffuse red: indoors the open sky still showed in the doors, under the traced garage)
+        float3 removed = color * share;
+        if (_NFX_HdrpSky.x > 0.5)
+        {
+            float3 posWS = ComputeWorldSpacePosition(uv, depth, UNITY_MATRIX_I_VP); // camera relative
+            float3 R = reflect(normalize(posWS), nd.normalWS);
+            float3 sky = SAMPLE_TEXTURECUBE_LOD(_NFX_HdrpSkyCube, sampler_NFX_HdrpSkyCube, R, 0).rgb * GetCurrentExposureMultiplier();
+            removed = min(max(removed, sky * share), color);
+        }
+        float3 result = color - removed + refl.rgb * weight;
         return float4(max(result, 0.0), 1);
     }
 

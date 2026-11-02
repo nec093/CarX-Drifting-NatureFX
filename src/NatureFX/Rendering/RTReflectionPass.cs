@@ -21,6 +21,8 @@ namespace NatureFX.Rendering {
 		private static readonly int DenoiseStep = Shader.PropertyToID("_NFX_DenoiseStep");
 		private static readonly int LowSize = Shader.PropertyToID("_NFX_LowSize");
 		private static readonly int ReflCompose = Shader.PropertyToID("_NFX_ReflCompose");
+		private static readonly int HdrpSkyCubeId = Shader.PropertyToID("_NFX_HdrpSkyCube");
+		private static readonly int HdrpSkyId = Shader.PropertyToID("_NFX_HdrpSky");
 		private static readonly int DistTex = Shader.PropertyToID("_NFX_DistTex");
 		private static readonly int ExposureTexture = Shader.PropertyToID("_ExposureTexture");
 
@@ -186,6 +188,15 @@ namespace NatureFX.Rendering {
 			props_.SetTexture(ColorTex, color_);
 			props_.SetTexture(SourceTex, trace_);
 			props_.SetVector(ReflCompose, new Vector4(Intensity, RoughnessCutoff, 0.0f, 0.0f));
+			// HDRP mirrors the own engine's sky (VolumeOverhaul A3): the composite takes that mirrored sky away
+			var hdri = VolumeOverhaul.Stack()?.GetComponent<UnityEngine.Rendering.HighDefinition.HDRISky>();
+			var env = VolumeOverhaul.Stack()?.GetComponent<UnityEngine.Rendering.HighDefinition.VisualEnvironment>();
+			bool hdrpSky = AtmospherePass.SkyCube != null && hdri != null && hdri.hdriSky.value == AtmospherePass.SkyCube
+			               && env != null && env.skyType.value == (int)UnityEngine.Rendering.HighDefinition.SkyType.HDRI;
+			if (hdrpSky) {
+				props_.SetTexture(HdrpSkyCubeId, AtmospherePass.SkyCube);
+			}
+			props_.SetVector(HdrpSkyId, new Vector4(hdrpSky ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f));
 			CoreUtils.SetRenderTarget(cmd, ctx.cameraColorBuffer, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, CompositeMaterial, props_, 0);
 			RTTimings.ReflectionFilter.End(cmd);

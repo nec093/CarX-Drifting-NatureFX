@@ -904,6 +904,16 @@ namespace NatureFX.Rendering {
 			cloudNoiseMade_ = false;
 		}
 
+		// the sky's cross-fade at a hand-over of its light (TraceSky)
+		public const float SkyFadeSeconds = 6.0f;
+		private static GraphicsBuffer skyViewOld_;
+		private static int skyFadeGeneration_ = -1;
+		private static float skyFadeStart_ = -1000.0f;
+		private static bool skyViewMade_;
+		private static readonly int SkyFadeCurrentId = Shader.PropertyToID("_NFX_SkyFadeCurrent");
+		private static readonly int SkyFadeOldId = Shader.PropertyToID("_NFX_SkyFadeOld");
+		private static readonly int SkyFadeParamsId = Shader.PropertyToID("_NFX_SkyFadeParams");
+
 		private static TraceBuffers SkyBuffer(ref TraceBuffers b, int texels, string name) {
 			if (b == null) {
 				var buffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, texels, 16) { name = name };
@@ -932,7 +942,34 @@ namespace NatureFX.Rendering {
 			}
 			// every frame (cheap): an unpacked table survives a lost render texture this way
 			Unpack4(cmd, bridge, t, transmittance, new Vector4(TransmittanceW, TransmittanceH, 1.0f / TransmittanceW, 1.0f / TransmittanceH));
+			// the sky's hand-over between the sun's twilight and the moon (SunController.SkyGeneration): the sky view table
+			// of the last frame before it is kept, and the new light's table eased in from it over some seconds. The
+			// screen's sky, the sky light (probe), HDRP's cube and the sky the reflections see all come from this table,
+			// so all of them change together and smoothly instead of at once.
+			int skyFade = bridge.FindKernel("SkyFade");
+			int generation = SunController.SkyGeneration;
+			if (generation != skyFadeGeneration_) {
+				bool first = skyFadeGeneration_ < 0;
+				skyFadeGeneration_ = generation;
+				if (!first && skyViewMade_) {
+					skyViewOld_ ??= new GraphicsBuffer(GraphicsBuffer.Target.Structured, SkyViewW * SkyViewH, 16) { name = "NFX_SkyViewBefore" };
+					cmd.SetComputeBufferParam(bridge, skyFade, SkyFadeCurrentId, v.Result);
+					cmd.SetComputeBufferParam(bridge, skyFade, SkyFadeOldId, skyViewOld_);
+					cmd.SetComputeVectorParam(bridge, SkyFadeParamsId, new Vector4(SkyViewW * SkyViewH, -1.0f, 0.0f, 0.0f)); // copy
+					cmd.DispatchCompute(bridge, skyFade, (SkyViewW * SkyViewH + 63) / 64, 1, 1);
+					skyFadeStart_ = Time.unscaledTime;
+				}
+			}
 			Issue(cmd, TraceSkyView_, m.ResultPtr, v.ResultPtr, SkyViewW, SkyViewH, t.ResultPtr);
+			skyViewMade_ = true;
+			float fadeAge = Time.unscaledTime - skyFadeStart_;
+			if (skyViewOld_ != null && fadeAge < SkyFadeSeconds) {
+				float keep = 1.0f - Mathf.SmoothStep(0.0f, 1.0f, fadeAge / SkyFadeSeconds); // the old sky's share
+				cmd.SetComputeBufferParam(bridge, skyFade, SkyFadeCurrentId, v.Result);
+				cmd.SetComputeBufferParam(bridge, skyFade, SkyFadeOldId, skyViewOld_);
+				cmd.SetComputeVectorParam(bridge, SkyFadeParamsId, new Vector4(SkyViewW * SkyViewH, keep, 0.0f, 0.0f));
+				cmd.DispatchCompute(bridge, skyFade, (SkyViewW * SkyViewH + 63) / 64, 1, 1);
+			}
 			Unpack4(cmd, bridge, v, view, new Vector4(SkyViewW, SkyViewH, 1.0f / SkyViewW, 1.0f / SkyViewH));
 			// the clouds' noise once, whether or not the clouds are drawn: the 3D fog's boxes and the tyre smoke read
 			// its Worley noise too (FogVolume.hlsl), and were empty in a session that never showed clouds

@@ -30,6 +30,7 @@
 #pragma kernel UnpackDlss
 #pragma kernel PrepareMotion
 #pragma kernel ScatterDetritus
+#pragma kernel SkyFade
 
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
 #include "Packages/com.unity.render-pipelines.high-definition/Runtime/ShaderLibrary/ShaderVariables.hlsl"
@@ -988,4 +989,24 @@ void ScatterDetritus(uint3 id : SV_DispatchThreadID)
         piece.tilt = float4(b.xyz, frac(r.x * 5.31) * 6.2831853);
         _NFX_Detritus.Append(piece);
     }
+}
+
+
+// The sky's hand-over (NativeEngine.TraceSky): params x the texels, y < 0 copies the table into the kept one, else the
+// kept (old) table's share mixed into this frame's
+RWStructuredBuffer<float4> _NFX_SkyFadeCurrent;
+RWStructuredBuffer<float4> _NFX_SkyFadeOld;
+float4 _NFX_SkyFadeParams;
+
+[numthreads(64, 1, 1)]
+void SkyFade(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_NFX_SkyFadeParams.x)
+        return;
+    if (_NFX_SkyFadeParams.y < 0.0)
+    {
+        _NFX_SkyFadeOld[id.x] = _NFX_SkyFadeCurrent[id.x];
+        return;
+    }
+    _NFX_SkyFadeCurrent[id.x] = lerp(_NFX_SkyFadeCurrent[id.x], _NFX_SkyFadeOld[id.x], _NFX_SkyFadeParams.y);
 }

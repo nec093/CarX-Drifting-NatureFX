@@ -80,7 +80,7 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			// often: the sky's hand-over (SunController.SkyMeasured) matches the sky's brightness by these readings
-			nextProbeRead_ = Time.unscaledTime + 0.1f;
+			nextProbeRead_ = Time.unscaledTime + 2.0f;
 			int generation = SunController.SkyGeneration;
 			float rawAbove = SunController.SkyLightAboveRaw, scale = SunController.SkyScale;
 			UnityEngine.Rendering.AsyncGPUReadback.Request(NativeEngine.SkyProbe, s => {
