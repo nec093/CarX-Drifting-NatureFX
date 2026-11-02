@@ -139,6 +139,7 @@ Shader "Hidden/NatureFX/RTShadow"
                                                 // own engine's once it replaces HDRP's sky light (OwnLighting)
     float _NFX_OwnAmbient;                      // 1: HDRP's sky light is off; the composite adds the own sky's light
     float _NFX_OwnSun;                          // 1: HDRP's sun lights nothing; the composite adds the sun's light
+    float _NFX_OwnSkyStrength;                  // the own sky's light on surfaces (Settings.SkyLightStrength)
     float4 _NFX_LeafParams;           // x: share of the sun leaves let through, y: 1 = light shafts, z: 1 = local light shadows,
                                       // w: own engine GI bounce strength (0: the ambient texture is the one bounce factor)
     float4 _NFX_SunExact;             // x: 1 when _NFX_SunExactTex holds this frame's exact sun light
@@ -654,7 +655,7 @@ Shader "Hidden/NatureFX/RTShadow"
         {
             float ownMetal = known ? saturate((surface.a - (surface.a > 0.495 ? 0.5 : 0.0)) / 0.49) : 0.0;
             float3 ownAlbedo = (known ? surface.rgb : 0.3) * (1.0 - ownMetal);
-            ownSky = ownAlbedo * ProbeSH9(n) * GetCurrentExposureMultiplier() * ambientFactor;
+            ownSky = ownAlbedo * ProbeSH9(n) * GetCurrentExposureMultiplier() * ambientFactor * _NFX_OwnSkyStrength;
             skyDelta = 0.0;
         }
         // the sun light HDRP added here, worked out from the G-buffer as HDRP does (a = 0 where it is not known)
@@ -709,7 +710,7 @@ Shader "Hidden/NatureFX/RTShadow"
             float sunShade = 1.0 - (1.0 - sunVisible) * shadowStrength;
             // the sky's light from the sky as it is now (HDRP's probe is the own engine's sky, A3), not what the G-buffer
             // baked: a track's lightmaps were baked under its own weak sun (Units) and left the shade black
-            float3 skyLight = albedoD * ProbeSH9(n) * GetCurrentExposureMultiplier() * ambientFactor;
+            float3 skyLight = albedoD * ProbeSH9(n) * GetCurrentExposureMultiplier() * ambientFactor * (ownAmbient ? _NFX_OwnSkyStrength : 1.0);
             float3 relit = glow + skyLight + skyDelta + sunAll * sunShade + lampsLit + nativeAdded
                          // the rest is mostly HDRP's reflection of the sky, which it mirrors under any roof (its probes
                          // know no garage): only as much as the sky is seen from here (with the sun at full strength

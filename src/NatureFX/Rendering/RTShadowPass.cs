@@ -140,6 +140,7 @@ namespace NatureFX.Rendering {
 		private static readonly int SkyAmbientOnId = Shader.PropertyToID("_NFX_SkyAmbientOn");
 		private static readonly int OwnAmbientId = Shader.PropertyToID("_NFX_OwnAmbient");
 		private static readonly int OwnSunId = Shader.PropertyToID("_NFX_OwnSun");
+		private static readonly int OwnSkyStrengthId = Shader.PropertyToID("_NFX_OwnSkyStrength");
 		private static readonly int OwnLampsId = Shader.PropertyToID("_NFX_OwnLamps");
 		public static readonly int SkyShareTexId = Shader.PropertyToID("_NFX_SkyShareTex");
 		public static readonly int SkyShareParamsId = Shader.PropertyToID("_NFX_SkyShareParams");
@@ -666,6 +667,7 @@ namespace NatureFX.Rendering {
 			// OwnLighting: HDRP's sky light is off (its indirect diffuse multiplier 0): the composite adds the own sky's
 			// light on the surface's colour through the GI's sky share instead of darkening HDRP's
 			props_.SetFloat(OwnAmbientId, OwnLighting.Ambient ? 1.0f : 0.0f);
+			props_.SetFloat(OwnSkyStrengthId, OwnLighting.SkyStrength);
 			// OwnLighting.Sun: HDRP's sun is off; only with the exact sun light worked out (it is the sun's light then)
 			props_.SetFloat(OwnSunId, OwnLighting.Sun && exactUsed_ ? 1.0f : 0.0f);
 			if (exactUsed_ && TraceShadows) {

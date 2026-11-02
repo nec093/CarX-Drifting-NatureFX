@@ -913,6 +913,8 @@ namespace NatureFX {
 			Widgets.BeginDependent(S.RTGIMultiBounce);
 			Other(Widgets.Slider("GI distance", S.RTGIDistance, 2, 60, v => S.RTGIDistance = v, "0", " m"));
 			Other(Widgets.Slider("Bounce intensity", S.RTGIIntensity, 0, 3, v => S.RTGIIntensity = v, "0.00"));
+			Other(Widgets.Slider("Sky light in the shade", S.SkyLightStrength, 0, 3, v => S.SkyLightStrength = v, "0.00"));
+			Widgets.Info("How bright the sky makes what the sun does not reach (with the sky light from the own engine, Sky & fog). 1: as the sky is.");
 			Widgets.Info("How strongly the light bounced in (and its colour) is added; 1 is physically right.");
 			Widgets.EndDependent();
 			Widgets.EndDependent();

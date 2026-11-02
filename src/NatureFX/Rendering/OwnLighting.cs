@@ -20,6 +20,7 @@ namespace NatureFX.Rendering {
 		public static bool Ambient { get; private set; }      // HDRP's indirect diffuse is off; the shadow composite adds the sky
 		public static bool Reflections { get; private set; }  // HDRP's reflections are off; the reflections composite adds them
 		public static bool Sky => Ambient && Reflections;     // HDRP draws no sky at all
+		public static float SkyStrength = 1.0f;               // Settings.SkyLightStrength: the own sky's light on surfaces
 		public static bool ShadowsRunning { get; private set; } // the shadow composite ran (the traced sun and lamp shadows)
 		// 4. HDRP's sun (the light the own engine follows) lights nothing: the shadow composite adds the exact sun light
 		//    (NFX_SunExact, from the G-buffer as HDRP would) or its own BSDF under the traced shadow, instead of taking
