@@ -483,10 +483,11 @@ namespace NatureFX.Rendering {
 			exposure_.active = true;
 			if (gameMode_ == ExposureMode.Automatic || gameMode_ == ExposureMode.AutomaticHistogram) {
 				exposure_.mode.Override(gameMode_);
-				exposure_.limitMin.Override(gameMin_ + up);
-				exposure_.limitMax.Override(gameMax_ + up);
+				// widened rather than moved: a game whose own range already reached real sunshine stays as it was
+				exposure_.limitMin.Override(gameMin_);
+				exposure_.limitMax.Override(Mathf.Max(gameMax_, gameMax_ + up));
 				exposure_.compensation.Override(gameCompensation_);
-				gameWhat_ = FormattableString.Invariant($"(automatic, {gameMin_ + up:0.0} to {gameMax_ + up:0.0} EV, +{up:0.0} for the real sun)");
+				gameWhat_ = FormattableString.Invariant($"(automatic, {gameMin_:0.0} to {gameMax_ + up:0.0} EV, the top raised {up:0.0} for the real sun)");
 			} else {
 				exposure_.mode.Override(ExposureMode.Fixed);
 				exposure_.fixedExposure.Override(gameFixed_ + up);
