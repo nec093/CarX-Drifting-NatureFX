@@ -855,11 +855,15 @@ namespace NatureFX {
 			Widgets.Info($"Now: {mod_.Post.Status}");
 			Widgets.EndCard();
 
-			Widgets.BeginCard("Exposure", "The game's own exposure is fixed; eye adaptation brightens shade and tunnels and settles back in sunlight.");
+			Widgets.BeginCard("Exposure", "Fixed: one exposure for every scene, like a camera set by hand; eye adaptation brightens shade and tunnels and settles back in sunlight.");
 			int mode = Mathf.Clamp(S.ExposureMode, 0, 1);
-			if (Widgets.Chips(ref mode, new[] { "Game", "Eye adaptation" })) {
+			if (Widgets.Chips(ref mode, new[] { "Fixed", "Eye adaptation" })) {
 				S.ExposureMode = mode;
 				Other(true);
+			}
+			if (mode == 0) {
+				Other(Widgets.Slider("Fixed exposure", S.FixedExposure, -2, 18, v => S.FixedExposure = v, "0.0", " EV"));
+				Widgets.Info("Real-world EV: a sunny day about 15, overcast 12, a lit street at night about 3.");
 			}
 			Widgets.BeginDependent(mode == 1);
 			Other(Widgets.Slider("Darkest scene", S.AutoExposureMin, -6, 16, v => S.AutoExposureMin = v, "0.0", " EV"));

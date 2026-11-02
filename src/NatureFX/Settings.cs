@@ -61,6 +61,7 @@ namespace NatureFX {
 		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral, 2 Filmic (GT-style custom curve), 3 None
 		public float WhiteBalance { get; set; }       // 0..1 how much the eye takes the light around as white (PostProcess)
 		public float NightDarkness { get; set; }      // 0..1 a dark scene seen dark, not lifted to grey (PostProcess.NightKey)
+		public float FixedExposure { get; set; }      // EV100 with the exposure fixed (ExposureMode 0)
 
 		// --- added in config version 3: screen space path tracing ---
 
@@ -286,6 +287,7 @@ namespace NatureFX {
 		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral, 2 Filmic (GT-style custom curve), 3 None
 		public float WhiteBalance { get; set; }       // 0..1 how much the eye takes the light around as white (PostProcess)
 		public float NightDarkness { get; set; }      // 0..1 a dark scene seen dark, not lifted to grey (PostProcess.NightKey)
+		public float FixedExposure { get; set; }      // EV100 with the exposure fixed (ExposureMode 0)
 
 		// --- added in config version 3: screen space path tracing ---
 
@@ -888,6 +890,11 @@ namespace NatureFX {
 				// DXR 1.1 (inline ray queries) by default: what the user tests with
 				d.RTBackend = 1;
 				d.ConfigVersion = 75;
+			}
+			if (d.ConfigVersion < 76) {
+				// the exposure's first choice is a fixed EV now (the game's own did not fit real sunshine): a sunny day's
+				d.FixedExposure = 14.0f;
+				d.ConfigVersion = 76;
 			}
 		}
 

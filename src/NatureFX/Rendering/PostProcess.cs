@@ -459,8 +459,8 @@ namespace NatureFX.Rendering {
 				exposure_.active = false;
 				ev_ = float.NaN;
 				if (gameScaled) {
-					GameExposure();
-					Status = FormattableString.Invariant($"HDRP's post-processing; the game's exposure {gameWhat_}");
+					FixedExposure(s, true);
+					Status = FormattableString.Invariant($"HDRP's post-processing; fixed exposure {s.FixedExposure:0.0} EV100");
 					return;
 				}
 				Status = pass_ == null ? "not in the shader bundle (HDRP's post-processing)" : "off (HDRP's post-processing)";
@@ -489,8 +489,8 @@ namespace NatureFX.Rendering {
 			Dlaa.RayReconstructionWanted = s.DlssRayReconstruction;
 			Adapt(s);
 			string[] curves = { "ACES", "Neutral", "AgX", "none" };
-			Status = s.ExposureMode == 0 && !float.IsNaN(ev_)
-				? FormattableString.Invariant($"own: the game's automatic exposure metered here {ev_:0.00} EV100 {gameWhat_}, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
+			Status = s.ExposureMode == 0
+				? FormattableString.Invariant($"own: fixed exposure {s.FixedExposure:0.0} EV100, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
 				: s.ExposureMode == 1
 				? FormattableString.Invariant($"own: exposure {ev_:0.00} EV100, eye adaptation, white balance {(warm_ >= 0 ? "cooler" : "warmer")} by {Mathf.Abs(warm_):0.00} stops (red / blue), bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
 				: FormattableString.Invariant($"own: the game's exposure {gameWhat_}, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}");
@@ -503,6 +503,14 @@ namespace NatureFX.Rendering {
 		private string gameWhat_ = "";
 		private ExposureMode gameMode_ = ExposureMode.Fixed;
 		private float gameFixed_, gameMin_, gameMax_, gameCompensation_;
+		// Settings.FixedExposure as HDRP's fixed exposure; without the own final pass the compensation goes in here
+		private void FixedExposure(ISettings s, bool hdrpPost) {
+			exposure_.active = true;
+			exposure_.mode.Override(ExposureMode.Fixed);
+			exposure_.fixedExposure.Override(s.FixedExposure - (hdrpPost ? s.Exposure : 0.0f));
+			OwnExposure = true;
+		}
+
 		private void GameExposure() {
 			if (Time.unscaledTime >= nextGameScan_) {
 				nextGameScan_ = Time.unscaledTime + 2.0f;
@@ -552,11 +560,10 @@ namespace NatureFX.Rendering {
 			bool eye = s.ExposureMode == 1;
 			bool gameAuto = false;
 			if (s.ExposureMode == 0) {
-				GameExposure();
-				gameAuto = !pass_.MeterOnly && (gameMode_ == ExposureMode.Automatic || gameMode_ == ExposureMode.AutomaticHistogram);
-				if (!gameAuto) {
-					ev_ = float.NaN; // HDRP's (the game's) exposure: nothing of the eye adaptation's left over
-				}
+				// a fixed exposure (the game's own was set for its sun of a few lux: against real sunshine it left the
+				// picture white, and HDRP's automatic exposure metered the tone mapped picture)
+				ev_ = float.NaN;
+				FixedExposure(s, pass_.MeterOnly);
 			}
 			bool metering = eye || gameAuto;
 			if (metering) {

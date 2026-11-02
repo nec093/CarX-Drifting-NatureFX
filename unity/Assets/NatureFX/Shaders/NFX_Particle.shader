@@ -187,6 +187,9 @@ Shader "NatureFX/Particle"
         float exposure = GetCurrentExposureMultiplier();
         float3 tint = _BaseColor.rgb * i.color.rgb;
         float fade = DistanceFade(i.positionRWS);
+        // the sun as it reaches the particle: the own engine's traced sun map (roofs, bridges, the car, trees), as it
+        // shadows NatureFX's transparent surfaces; no shadow maps of HDRP's
+        float3 sunLight = _NFX_PSun.rgb * NFX_SunMapVisibility(i.positionRWS);
 
         if (mode == 0)
         {
@@ -199,7 +202,7 @@ Shader "NatureFX/Particle"
             float front = saturate(dot(n, sunL));
             float back = saturate(dot(-n, sunL));
             float3 through = albedo * sqrt(max(albedo, 1e-4)) * 1.6; // light passing through is filtered twice
-            float3 lit = _NFX_PSun.rgb * (albedo * front + through * back * 0.6);
+            float3 lit = sunLight * (albedo * front + through * back * 0.6);
             lit += _NFX_PSky.rgb * albedo * (0.55 + 0.35 * n.y);
             float3 facing, diffuse, behind;
             LampLight(i.positionRWS, V, n, true, facing, diffuse, behind);
@@ -216,9 +219,8 @@ Shader "NatureFX/Particle"
             float shape = tex.a;
             float3 facing, diffuse, behind;
             LampLight(i.positionRWS, V, V, true, facing, diffuse, behind);
-            float sunVisible = NFX_SunMapVisibility(i.positionRWS);
             float sunBehind = pow(saturate(dot(-V, _NFX_PSunDir.xyz)), 12.0);
-            float3 radiance = _NFX_PSky.rgb * 0.4 + _NFX_PSun.rgb * sunVisible * (0.015 + sunBehind * 0.5) + facing * 0.08 + behind * 1.0;
+            float3 radiance = _NFX_PSky.rgb * 0.4 + sunLight * (0.015 + sunBehind * 0.5) + facing * 0.08 + behind * 1.0;
             float3 color = radiance * INV_PI * exposure * tint;
             float alpha = shape * _BaseColor.a * i.color.a * fade;
             return float4(color, alpha);
@@ -228,7 +230,7 @@ Shader "NatureFX/Particle"
             // snow: a soft, very white flake lit from all round
             float3 facing, diffuse, behind;
             LampLight(i.positionRWS, V, V, true, facing, diffuse, behind);
-            float3 lit = _NFX_PSun.rgb * (0.55 + 0.45 * saturate(dot(V, _NFX_PSunDir.xyz))) + _NFX_PSky.rgb + facing * 0.8 + behind * 0.6;
+            float3 lit = sunLight * (0.55 + 0.45 * saturate(dot(V, _NFX_PSunDir.xyz))) + _NFX_PSky.rgb + facing * 0.8 + behind * 0.6;
             float3 color = lit * 0.9 * tint * INV_PI * exposure;
             return float4(color, tex.a * _BaseColor.a * i.color.a * fade);
         }
@@ -270,7 +272,7 @@ Shader "NatureFX/Particle"
             // and the smoke itself: what of the cloud lies between this puff and the sun (its far side is darker), one
             // value for the whole puff (looked up per pixel of the billboard it drew the map's cells as streaks)
             float smokeSun = 1.0 - i.smokeShadow;
-            float3 lit = _NFX_PSun.rgb * (1.0 - i.sunShadow) * smokeSun * (0.25 + 0.75 * front * front + sunBehind * 1.5)
+            float3 lit = sunLight * (1.0 - i.sunShadow) * smokeSun * (0.25 + 0.75 * front * front + sunBehind * 1.5)
                        + _NFX_PSky.rgb * lerp(0.8, 1.1, smokeSun) + diffuse * 0.7 + behind * 1.2;
             float3 color = lit * albedo * INV_PI * exposure;
             return float4(color, density * _BaseColor.a * i.color.a * soft * fade);
@@ -299,7 +301,7 @@ Shader "NatureFX/Particle"
             float sunBehind = pow(saturate(dot(-V, sunL)), 6.0);
             float3 facingT, diffuseT, behindT;
             LampLight(i.positionRWS, V, n, true, facingT, diffuseT, behindT);
-            float3 lit = _NFX_PSun.rgb * (0.25 + 0.75 * front * front + sunBehind * 1.2) + _NFX_PSky.rgb + diffuseT * 0.7 + behindT;
+            float3 lit = sunLight * (0.25 + 0.75 * front * front + sunBehind * 1.2) + _NFX_PSky.rgb + diffuseT * 0.7 + behindT;
             float sceneDepth = LinearEyeDepth(LOAD_TEXTURE2D_X(_CameraDepthTexture, (uint2)i.positionCS.xy).r, _ZBufferParams);
             float ownDepth = -mul(UNITY_MATRIX_V, float4(i.positionRWS, 1.0)).z;
             float soft = saturate((sceneDepth - ownDepth) / 0.5);
@@ -314,7 +316,7 @@ Shader "NatureFX/Particle"
         float3 facing, diffuse, behind;
         LampLight(i.positionRWS, V, V, true, facing, diffuse, behind);
         float sunBehind = pow(saturate(dot(-V, _NFX_PSunDir.xyz)), 4.0);
-        float3 lit = _NFX_PSun.rgb * (0.3 + sunBehind * 2.5) + _NFX_PSky.rgb * 0.6 + facing * 0.3 + behind * 2.0;
+        float3 lit = sunLight * (0.3 + sunBehind * 2.5) + _NFX_PSky.rgb * 0.6 + facing * 0.3 + behind * 2.0;
         float3 color = lit * tex.rgb * tint * INV_PI * exposure;
         return float4(color, tex.a * _BaseColor.a * i.color.a * fade);
     }
