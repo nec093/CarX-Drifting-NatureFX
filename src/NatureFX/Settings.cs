@@ -79,6 +79,7 @@ namespace NatureFX {
 		public float MoonBrightness { get; set; }           // the moon's light against its physical strength (1 = real)
 		public float HeadlightShafts { get; set; }
 		public int HeadlightType { get; set; }              // 0 the game's own, 1 halogen, 2 HID, 3 LED (a real low beam)
+		public int HeadlightStandard { get; set; }          // 0 Japan (driving on the left), 1 Europe / US (on the right): the low beam's side
 		public float HeadlightAim { get; set; }             // the low beam's axis below level (°)
 		public float HeadlightKelvin { get; set; }          // the lamps' colour temperature (K); 0: the type's own
 		public float SurfaceDetail { get; set; }
@@ -298,6 +299,7 @@ namespace NatureFX {
 		public float MoonBrightness { get; set; }           // the moon's light against its physical strength (1 = real)
 		public float HeadlightShafts { get; set; }
 		public int HeadlightType { get; set; }              // 0 the game's own, 1 halogen, 2 HID, 3 LED (a real low beam)
+		public int HeadlightStandard { get; set; }          // 0 Japan (driving on the left), 1 Europe / US (on the right): the low beam's side
 		public float HeadlightAim { get; set; }             // the low beam's axis below level (°)
 		public float HeadlightKelvin { get; set; }          // the lamps' colour temperature (K); 0: the type's own
 		public float SurfaceDetail { get; set; }
@@ -830,6 +832,11 @@ namespace NatureFX {
 				// the shade's brightness (the own sky's light), as it is
 				d.SkyLightStrength = 1.0f;
 				d.ConfigVersion = 67;
+			}
+			if (d.ConfigVersion < 68) {
+				// the low beam for driving on the left (Japan), as it was
+				d.HeadlightStandard = 0;
+				d.ConfigVersion = 68;
 			}
 		}
 

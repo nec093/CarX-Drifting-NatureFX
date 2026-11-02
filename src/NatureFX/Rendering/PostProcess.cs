@@ -274,6 +274,8 @@ namespace NatureFX.Rendering {
 		private float ev_ = float.NaN;
 		private int lastMeter_ = -1;
 		private float lastMeterTime_ = -1.0f;
+		private const float FlashSeconds = 0.5f;
+		private readonly System.Collections.Generic.List<(float Time, float Target)> recent_ = new();
 		// the exposure is NatureFX's alone (HDRP's own automatic exposure off: VolumeOverhaul): eye adaptation on and
 		// the own post-processing running. HDRP's histogram is only the fallback while it is not
 		public static bool OwnExposure { get; private set; }
@@ -402,6 +404,18 @@ namespace NatureFX.Rendering {
 				lastMeter_ = pass_.MeterFrame;
 				// real-world EVs (the sun is raised to real sunshine, Units): a moonlit night and a sunny day where they are
 				float target = Mathf.Clamp(MeteredEV(pass_.Meter), s.AutoExposureMin, Mathf.Max(s.AutoExposureMin + 0.5f, s.AutoExposureMax));
+				// a flash (an afterfire, a spark, a lamp swinging past) is not adapted to: the eye closes only to light
+				// that stays, so going brighter takes the darkest reading of the last half second (the headlights' road
+				// went dark at every afterfire)
+				recent_.Add((Time.unscaledTime, target));
+				recent_.RemoveAll(r => Time.unscaledTime - r.Time > FlashSeconds);
+				float lasting = target;
+				foreach (var r in recent_) {
+					lasting = Mathf.Min(lasting, r.Target);
+				}
+				if (!float.IsNaN(ev_) && target > ev_) {
+					target = Mathf.Max(ev_, lasting);
+				}
 				// the time since the last reading (readings come every frame or two): adapting by one frame's time per
 				// reading made the eye half as fast when they came every other frame, and uneven
 				float dt = lastMeterTime_ < 0.0f ? Time.unscaledDeltaTime : Mathf.Clamp(Time.unscaledTime - lastMeterTime_, 0.0f, 0.25f);

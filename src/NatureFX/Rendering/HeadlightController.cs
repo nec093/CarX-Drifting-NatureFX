@@ -65,6 +65,9 @@ namespace NatureFX.Rendering {
 		private float nextScan_;
 		private float applied_ = -1.0f;
 		private int appliedType_ = -1;
+		// the low beam's side: false Japan (driving on the left: the cut-off rises on the left), true Europe / US
+		private static bool rightTraffic_;
+		private bool appliedRight_;
 		private readonly Dictionary<int, Texture2D> cookies_ = new();
 
 		public string Status { get; private set; } = "the game's own";
@@ -136,11 +139,13 @@ namespace NatureFX.Rendering {
 			var player = PlayerCar();
 			bool high = highBeam_;
 			kelvin_ = s.HeadlightKelvin >= 2700.0f ? Mathf.Min(s.HeadlightKelvin, 8000.0f) : 0.0f;
-			bool changed = !(Mathf.Approximately(shafts, applied_) && type == appliedType_ && Mathf.Approximately(s.HeadlightAim, appliedAim_)
+			rightTraffic_ = s.HeadlightStandard == 1;
+			bool changed = !(Mathf.Approximately(shafts, applied_) && type == appliedType_ && rightTraffic_ == appliedRight_ && Mathf.Approximately(s.HeadlightAim, appliedAim_)
 			                 && Mathf.Approximately(kelvin_, appliedKelvin_)
 			                 && player == appliedPlayer_ && high == appliedHigh_);
 			applied_ = shafts;
 			appliedType_ = type;
+			appliedRight_ = rightTraffic_;
 			appliedAim_ = s.HeadlightAim;
 			appliedKelvin_ = kelvin_;
 			appliedPlayer_ = player;
@@ -250,7 +255,8 @@ namespace NatureFX.Rendering {
 			hd.SetCookie(beamHigh ? HighCookie(type) : Cookie(type));
 			hd.shapeRadius = 0.04f;
 			held_[light] = (light.intensity, light.transform.localRotation);
-			Beams[light] = beamHigh ? 2 : 1;
+			// 1 the low beam (driving on the left), 3 the same mirrored (on the right), 2 the high beam (NFX_BeamPattern)
+			Beams[light] = beamHigh ? 2 : rightTraffic_ ? 3 : 1;
 		}
 
 		private bool appliedHigh_;
@@ -333,12 +339,13 @@ namespace NatureFX.Rendering {
 		// above) a hot spot a few degrees down, a wide fill that falls off to the sides, and the road close in front
 		// dimmer (it is near: little light makes it bright); above it 1.5 % stray light. HID: a faint blue edge.
 		private Texture2D Cookie(int type) {
-			if (cookies_.TryGetValue(type, out var tex) && tex != null) {
+			int key = type + (rightTraffic_ ? 100 : 0);
+			if (cookies_.TryGetValue(key, out var tex) && tex != null) {
 				return tex;
 			}
 			const int size = 256;
 			tex = new Texture2D(size, size, TextureFormat.RGBA32, true, true) {
-				name = $"NatureFX.LowBeam.{Types[type].Name}", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear, hideFlags = HideFlags.DontSave
+				name = $"NatureFX.LowBeam.{Types[type].Name}{(rightTraffic_ ? ".right" : "")}", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear, hideFlags = HideFlags.DontSave
 			};
 			var px = new Color32[size * size];
 			float half = Mathf.Tan(BeamAngle * 0.5f * Mathf.Deg2Rad);
@@ -346,6 +353,10 @@ namespace NatureFX.Rendering {
 				for (int x = 0; x < size; ++x) {
 					float u = ((x + 0.5f) / size * 2.0f - 1.0f) * half, v = ((y + 0.5f) / size * 2.0f - 1.0f) * half;
 					float h = Mathf.Atan(u) * Mathf.Rad2Deg, a = Mathf.Atan(v) * Mathf.Rad2Deg;
+					// driving on the right: the same pattern mirrored (the kerb on the right)
+					if (rightTraffic_) {
+						h = -h;
+					}
 					// the cut-off: flat on the right, rising on the left (kerb side) by 15° up to 1°
 					float cut = -0.6f + (h < 0.0f ? Mathf.Min(-h * Mathf.Tan(15.0f * Mathf.Deg2Rad), 1.6f) : 0.0f);
 					float below = cut - a; // degrees under the cut-off
@@ -353,7 +364,9 @@ namespace NatureFX.Rendering {
 					// the peak as the regulations measure it (ECE R149 class B: the 75R / 50V points, 0.5 to 1.5° down, 25
 					// to 75 m ahead), falling off fast above it and slower below
 					float spread = a < -1.2f ? 2.2f : 1.2f;
-					float hot = Mathf.Exp(-Mathf.Pow(h / 9.0f, 2.0f) - Mathf.Pow((a + 1.2f) / spread, 2.0f));
+					// the hot spot a little to the kerb side (Japan's measuring points: the brightest some 1 to 2° left of the
+					// middle, under the cut-off), so the near verge and the lane are lit more than the oncoming lane
+					float hot = Mathf.Exp(-Mathf.Pow((h + 1.5f) / 9.0f, 2.0f) - Mathf.Pow((a + 1.2f) / spread, 2.0f));
 					// steeply down (the road a few metres ahead) a real low beam sends little: under 2 % of its peak 8° down,
 					// so the road just in front is no brighter than the road 30 m on (with 5 % it was a white blob at night);
 					// to the sides it fades out before the spot's edge, which drew a round rim on the verges

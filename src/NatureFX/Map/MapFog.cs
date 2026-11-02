@@ -178,7 +178,10 @@ namespace NatureFX.Map {
 				baseHeight = 0.0f;
 				layer = 1000.0f;
 			}
-			LampAirSigma = weight > 0.0f ? 1e6f : 1e-4f;
+			// clear air scatters a lamp's light at about 2e-5 per metre (1e-4 drew a white veil out of the headlights on a
+			// clear night), times the Headlight beams setting (0: none); the weather's fog in full
+			float beams = NatureFX.Settings.Data != null ? Mathf.Max(0.0f, NatureFX.Settings.Data.HeadlightShafts) : 1.0f;
+			LampAirSigma = weight > 0.0f ? 1e6f : 2e-5f * beams;
 			// HDRP's fog falls off from its base to its maximum height; as an exponential, a third of the layer
 			NativeParams = new Vector4(float.IsInfinity(meanFreePath) ? 0.0f : 1.0f / meanFreePath, baseHeight, Mathf.Max(20.0f, layer / 3.0f), 1.0f);
 			volume_.weight = 1.0f;

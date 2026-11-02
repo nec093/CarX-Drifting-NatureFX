@@ -54,8 +54,9 @@ float NFX_SmokeTransmittance(float3 positionAWS)
 }
 
 // A headlight's beam as HeadlightController's cookies draw it (relative to its peak), for what does not see HDRP's
-// cookies: kind 1 the low beam (the cut-off 0.6° below the axis, rising 15° on the left to 1° up, the hot spot under
-// it, a wide fill, 1.5 % above), 2 the high beam (gathered on the axis). forward: the lamp's axis; dir: from the lamp
+// cookies: kind 1 the low beam for driving on the left (Japan: the cut-off 0.6° below the axis, rising 15° on the left
+// to 1° up, the hot spot under it a little to the left, a wide fill, 1.5 % above), 3 the same mirrored (driving on the
+// right), 2 the high beam (gathered on the axis). forward: the lamp's axis; dir: from the lamp
 // to the point; roll: the lamp's turn about its axis from level (radians: a car leaning in a drift or on a bank).
 float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
 {
@@ -70,7 +71,10 @@ float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
     float z = max(dot(dir, forward), 1e-3);
     float h = degrees(atan2(dot(dir, right), z));
     float a = degrees(atan2(dot(dir, up), z));
-    if (kind > 1.5)
+    // kind 3: the low beam for driving on the right (Europe / US), the pattern mirrored
+    if (kind > 2.5)
+        h = -h;
+    if (kind > 1.5 && kind < 2.5)
     {
         float hot = exp(-(h / 5.0) * (h / 5.0) - (a / 2.5) * (a / 2.5));
         float glow = exp(-(h / 20.0) * (h / 20.0) - (a / 7.0) * (a / 7.0)) * 0.25;
@@ -81,7 +85,7 @@ float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
     float below = cut - a;
     float edge = saturate(below / 0.5 + 0.5);
     float spread = a < -1.2 ? 2.2 : 1.2; // the peak 1.2° down: slower below it than above
-    float hotSpot = exp(-(h / 9.0) * (h / 9.0) - ((a + 1.2) / spread) * ((a + 1.2) / spread));
+    float hotSpot = exp(-((h + 1.5) / 9.0) * ((h + 1.5) / 9.0) - ((a + 1.2) / spread) * ((a + 1.2) / spread));
     float fill = exp(-(h / 22.0) * (h / 22.0)) * exp(-max(0.0, below - 1.0) / 2.0) * 0.25 * saturate((38.0 - sqrt(h * h + a * a)) / 8.0);
     return lerp(0.015, min(1.0, hotSpot + fill), edge);
 }

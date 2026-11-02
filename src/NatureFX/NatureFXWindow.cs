@@ -501,6 +501,7 @@ namespace NatureFX {
 			Widgets.BeginCard("HDRP's fog", "Only with Native fog off (HDRP's volumetric fog in its place).", true);
 			Widgets.BeginDependent(!(S.NativeSky && S.NativeFog));
 			Other(Widgets.Slider("Headlight beams", S.HeadlightShafts, 0, 4, v => S.HeadlightShafts = v));
+			Widgets.Info("How much clear air shows the headlights' and lamps' beams (0: not at all; 1: about real clear air). In the weather's fog and the map's fog they show in full.");
 			Other(Widgets.Slider("Sun in the fog", S.LightShafts, 0, 4, v => S.LightShafts = v));
 			Widgets.Info("How strongly the sun (and moon) light HDRP's volumetric fog: its shafts between trees and buildings. Needs volumetric fog in the map.");
 			Widgets.EndDependent();
@@ -681,6 +682,14 @@ namespace NatureFX {
 			}
 			Widgets.Info("Halogen: warm 3200 K, 18 000 cd a lamp. HID (xenon): 4300 K, 36 000 cd, a faint blue edge at the cut-off. LED: 5800 K, 30 000 cd.");
 			Widgets.BeginDependent(S.HeadlightType != 0);
+			int standard = Mathf.Clamp(S.HeadlightStandard, 0, 1);
+			if (Widgets.Chips(ref standard, new[] { "Japan (left-hand traffic)", "Europe / US (right-hand traffic)" })) {
+				S.HeadlightStandard = standard;
+				Other(true);
+			}
+			Widgets.Info(S.HeadlightStandard == 0
+				? "Japan's low beam (the safety standard, harmonised with UN R112 / R149 for driving on the left): flat cut-off on the right, the oncoming side, rising 15° on the left to light the kerb and the signs; the brightest part a little left of the middle, about 1° down."
+				: "Europe's and America's low beam (driving on the right): the same mirrored, the cut-off rising on the right.");
 			Other(Widgets.Slider("Beam aim", S.HeadlightAim, -1, 3, v => S.HeadlightAim = v, "0.0", "° down"));
 			Other(Widgets.Slider("Colour temperature", S.HeadlightKelvin, 0, 8000, v => S.HeadlightKelvin = v < 2700.0f ? 0.0f : v, "0", " K"));
 			Widgets.Info(S.HeadlightKelvin > 0.0f ? "Your colour; 0 (far left) is the lamp type's own." : "The lamp type's own (halogen 3200 K, HID 4300 K, LED 5800 K); move it for your own (2700 to 8000 K).");
