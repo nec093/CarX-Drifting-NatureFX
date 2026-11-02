@@ -144,7 +144,12 @@ NFX_ENTRY(id)
             if (!Blocked(p, toSun, 2000.0, distance > CoarseDistance))
                 light += SunColor * FogPhaseMix(dot(SunDir, view)) * SmokeTransmittance(p, p + toSun * 30.0);
         }
-        light += 0.5 * (SampleSH9(float3(0.0, 1.0, 0.0)) + SampleSH9(float3(0.0, -1.0, 0.0)));
+        // the sky's light only as far as the sky is seen from here: one ray a frame towards the sky (the history averages
+        // them), covered: 0.15 of it as the GI counts a sky behind something. Unblocked, a room under a roof in a hazy
+        // map filled with the bright day sky's glow, a white veil over everything inside (fine at night: the sky dark)
+        float3 skyDir = CosineSampleHemisphere(float3(0.0, 1.0, 0.0), Hash22(uint2(x + s * 7u, y), FrameIndex, 41));
+        float skySeen = Blocked(p, skyDir, 300.0, true) ? 0.15 : 1.0;
+        light += 0.5 * (SampleSH9(float3(0.0, 1.0, 0.0)) + SampleSH9(float3(0.0, -1.0, 0.0))) * skySeen;
         float3 sunSkyLight = light;
         // lamps and headlights: their beams in the mist (HDRP's punctual light falloff, the spot's cone)
         uint count = min((uint)LightCount.x, (uint)NFX_MAX_LOCAL_LIGHTS);
