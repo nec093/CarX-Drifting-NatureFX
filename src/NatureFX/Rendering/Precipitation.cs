@@ -82,12 +82,14 @@ namespace NatureFX.Rendering {
 			var wind = Shader.GetGlobalVector(ShaderGlobals.Wind);
 			var windVelocity = new Vector3(wind.x, 0.0f, wind.z) * wind.w * 8.0f;
 
-			Drive(rain_, rain * RainRate, eye + velocity_ * 0.8f + Vector3.up * 12.0f, windVelocity * 0.7f + Vector3.down * 9.0f);
+			// drops of 1 to 5 mm fall at 4 to 9 m/s (Gunn and Kinzer): each drop its own speed between them
+			Drive(rain_, rain * RainRate, eye + velocity_ * 0.8f + Vector3.up * 12.0f, windVelocity * 0.7f + Vector3.down * 9.0f, 4.0f);
 			Drive(snow_, snow * SnowRate, eye + velocity_ * 1.5f + Vector3.up * 8.0f, windVelocity + Vector3.down * 1.0f);
 			State = rain > 0.0f || snow > 0.0f ? $"rain {rain:P0} ({rain_.particleCount} drops), snow {snow:P0} ({snow_.particleCount} flakes)" : (on ? "waiting for rain or snow" : "off");
 		}
 
-		private static void Drive(ParticleSystem ps, float rate, Vector3 at, Vector3 velocity) {
+		// spread: how much slower than velocity's fall the slowest falls (each particle its own, between the two)
+		private static void Drive(ParticleSystem ps, float rate, Vector3 at, Vector3 velocity, float spread = 0.0f) {
 			if (ps == null) {
 				return;
 			}
@@ -95,9 +97,10 @@ namespace NatureFX.Rendering {
 			var emission = ps.emission;
 			emission.rateOverTime = rate;
 			var vel = ps.velocityOverLifetime;
-			vel.x = velocity.x;
-			vel.y = velocity.y;
-			vel.z = velocity.z;
+			// all three in the same mode (Unity wants them alike)
+			vel.x = new ParticleSystem.MinMaxCurve(velocity.x, velocity.x);
+			vel.y = new ParticleSystem.MinMaxCurve(velocity.y + spread, velocity.y);
+			vel.z = new ParticleSystem.MinMaxCurve(velocity.z, velocity.z);
 			if (rate > 0.0f && !ps.isPlaying) {
 				ps.Play();
 			}
@@ -144,14 +147,16 @@ namespace NatureFX.Rendering {
 		}
 
 		private ParticleSystem MakeRain(Material material) {
-			var ps = Make("Rain", material, RainBox, 2.0f, 16000);
+			// lives long enough for the slowest drops (4 m/s) to reach the ground from 12 m up
+			var ps = Make("Rain", material, RainBox, 3.5f, 24000);
 			var main = ps.main;
-			main.startSize = new ParticleSystem.MinMaxCurve(0.008f, 0.014f);
-			main.startColor = new ParticleSystem.MinMaxGradient(new Color(1, 1, 1, 0.6f), Color.white);
+			// real drops are 1 to 5 mm (8 to 14 mm drew rods); thin streaks, faint unless lit
+			main.startSize = new ParticleSystem.MinMaxCurve(0.0025f, 0.005f);
+			main.startColor = new ParticleSystem.MinMaxGradient(new Color(1, 1, 1, 0.5f), Color.white);
 			var renderer = ps.GetComponent<ParticleSystemRenderer>();
-			// a drop seen through a 1/60 s shutter: a streak as long as it falls in that time
+			// a drop seen through a 1/50 s shutter: a streak as long as it falls in that time
 			renderer.renderMode = ParticleSystemRenderMode.Stretch;
-			renderer.velocityScale = 0.022f;
+			renderer.velocityScale = 0.02f;
 			renderer.lengthScale = 1.0f;
 			renderer.cameraVelocityScale = 0.01f;
 			return ps;

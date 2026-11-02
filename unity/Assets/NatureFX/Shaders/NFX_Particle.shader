@@ -37,6 +37,8 @@ Shader "NatureFX/Particle"
     #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
     #include "Packages/com.unity.render-pipelines.high-definition/Runtime/ShaderLibrary/ShaderVariables.hlsl"
     #include "Assets/NatureFX/ShaderLibrary/NFX_FogCommon.hlsl"
+    #define NFX_SUNMAP_ONLY
+    #include "Assets/NatureFX/ShaderLibrary/NFX_TransparentShadow.hlsl"
     TEXTURE2D(_NFX_NoiseTex); // ShaderGlobals.EnsureNoiseTexture: r value noise, 256 cells over the texture
 
     TEXTURE2D(_MainTex);
@@ -207,13 +209,16 @@ Shader "NatureFX/Particle"
         }
         if (mode == 1)
         {
-            // rain: the drop refracts the bright world around it into a thin streak. Against the sky it is faint; with a
-            // lamp or the sun behind it, it lights up (forward scattering); along the streak it thins out at the ends
+            // rain: a drop is a tiny lens: it shows the whole sky above it squeezed into a streak (about the sky's mean
+            // radiance, a little less), so against a dark background it shows grey, against the sky hardly at all; a
+            // lamp or the sun in front of the eye behind it lights it up (forward scattering, the bright streaks in a
+            // headlight's beam). In the shade of a roof, a bridge or the car the sun's part is gone (the traced sun map)
             float shape = tex.a;
             float3 facing, diffuse, behind;
             LampLight(i.positionRWS, V, V, true, facing, diffuse, behind);
-            float sunBehind = pow(saturate(dot(-V, _NFX_PSunDir.xyz)), 8.0);
-            float3 radiance = _NFX_PSky.rgb * 0.5 + _NFX_PSun.rgb * (0.04 + sunBehind * 0.6) + facing * 0.15 + behind * 1.2;
+            float sunVisible = NFX_SunMapVisibility(i.positionRWS);
+            float sunBehind = pow(saturate(dot(-V, _NFX_PSunDir.xyz)), 12.0);
+            float3 radiance = _NFX_PSky.rgb * 0.4 + _NFX_PSun.rgb * sunVisible * (0.015 + sunBehind * 0.5) + facing * 0.08 + behind * 1.0;
             float3 color = radiance * INV_PI * exposure * tint;
             float alpha = shape * _BaseColor.a * i.color.a * fade;
             return float4(color, alpha);
