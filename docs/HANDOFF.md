@@ -426,3 +426,9 @@
   - 2 雨粒: 幅 2.5〜5 mm、粒ごとに 4〜9 m/s（velocityOverLifetime の 2 定数）、寿命 3.5 s、最大 24000、1/50 s の筋。NFX_Particle mode 1 は空の平均の光、太陽は透明面用の太陽マップ（NFX_SunMapVisibility、NFX_SUNMAP_ONLY で関数だけ取り込み）で影、前方散乱。
   - 3 路面: 濡れは AccumulationController が雨量に応じて（1 mm/h で約 5 分、20 mm/h で約 30 秒）、シェーダーは雨そのものでなく蓄積値。Lagarde の 2 段階（染み込み: アルベド ×0.35・つや 0.62〜0.8、水膜: 高さの低いところから、法線を平らに・つや 0.95・波紋）。波紋は 4 層 10〜25 cm。反射の伸びも蓄積値。
   - 4 車: 水滴が独自の空のプローブを映す（_NFX_CarSkyProbe）、太陽のきらめきは今の日差しの強さ、油膜の虹は既定 0（移行 74）。水しぶきは地面の濡れから、時速約 20 km から、細かく白い霧がタイヤの上後方へ（約 1 秒）。未対応: 塗装そのものの濡れ（ゲームの Shader Graph）、屋根の下の乾き（雨の当たる地図が必要）、雲の雨の筋。
+- **11-02 独自のポストプロセスがオンのとき HDRP を使わない（ユーザー依頼: 露出の適用・アンチエイリアス・HDRP の霧・データ駆動のレンズフレア）**:
+  - 「Game」の露出の白飛び: HDRP の自動露出が独自パスのトーンマップ済み画像を測って下限まで開いていた → Game でも NatureFX が測る（ゲームの範囲、上限 +Units.Log2Scale）。固定ならずらす。最初の読み取り前も HDRP の自動露出を使わない（13 EV か HdrpEV から）。
+  - アンチエイリアス: DLSS が動かないときは独自の TAA（Dlaa の jitter をそのまま使い、PostPass.Taa: 動きベクトルで履歴を引き、YCoCg の分散クリップ、Karis の重み、動きで保持率 0.92〜0.8）。HDRP の TAA は使わない。DLSS のアップスケール（品質 > 0）は従来どおり HDRP の TAAU パスを借りる。
+  - フレーム設定オフ（独自ポスト中）: LensFlareDataDriven, ColorGrading, Tonemapping, Vignette, ChromaticAberration, FilmGrain, LensDistortion, PaniniProjection（名前で解決、無ければ飛ばす）。
+  - HDRP の Fog コンポーネント: 独自の霧のときは enabled オフ。
+  - DXR 1.1 既定（移行 75）。

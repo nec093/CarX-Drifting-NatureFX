@@ -63,6 +63,13 @@ namespace NatureFX.Rendering {
 		private RTHandle fullSource_, fullFinal_, fullWork_;
 		// motion blur and depth of field: the motion at the render resolution, a second colour target
 		private RTHandle motion_, work_;
+		// the own TAA's history (Dlaa.OwnTaa), two in turn
+		private RTHandle taaA_, taaB_;
+		private bool taaFlip_, taaValid_;
+		private Vector3 taaLastPosition_;
+		private static readonly int HistoryId = Shader.PropertyToID("_NFX_PostHistory");
+		private static readonly int TaaId = Shader.PropertyToID("_NFX_PostTaa");
+		private const int PassTaa = 7;
 		private readonly RTHandle[] fullDown_ = new RTHandle[BloomLevels], fullUp_ = new RTHandle[BloomLevels];
 		private int fullWidth_, fullHeight_;
 		private bool pending_;
@@ -127,6 +134,9 @@ namespace NatureFX.Rendering {
 			ReleaseFull();
 			motion_?.Release();
 			work_?.Release();
+			taaA_?.Release();
+			taaB_?.Release();
+			taaA_ = taaB_ = null;
 			SharedColor.Release(source_);
 			source_ = null;
 			for (int i = 0; i < BloomLevels; ++i) {
@@ -175,6 +185,12 @@ namespace NatureFX.Rendering {
 				Dlaa.Run(ctx, source_, source_, renderWidth, renderHeight, renderWidth, renderHeight);
 			}
 			var source = upscaled ? fullSource_ : source_;
+			// the own TAA where DLSS did not run: the jittered picture against its reprojected history (HDRP's TAA off)
+			if (!upscaled && !Dlaa.RanThisFrame && Dlaa.OwnTaaFor(cam)) {
+				source = Taa(ctx, cmd, source_, renderWidth, renderHeight);
+			} else {
+				taaValid_ = false;
+			}
 			var down = upscaled ? fullDown_ : down_;
 			var up = upscaled ? fullUp_ : up_;
 			var target = upscaled ? fullFinal_ : ctx.cameraColorBuffer;
@@ -250,6 +266,35 @@ namespace NatureFX.Rendering {
 			if (upscaled) {
 				cmd.SetGlobalTexture(UpscaledFinalId, fullFinal_);
 			}
+		}
+
+		private RTHandle Taa(CustomPassContext ctx, CommandBuffer cmd, RTHandle current, int width, int height) {
+			if (taaA_ == null) {
+				taaA_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.R16G16B16A16_SFloat,
+					useDynamicScale: true, name: "NFX_Post_TaaA");
+				taaB_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.R16G16B16A16_SFloat,
+					useDynamicScale: true, name: "NFX_Post_TaaB");
+				taaValid_ = false;
+			}
+			var position = ctx.hdCamera.camera.transform.position;
+			// a camera cut: the history thrown away
+			if ((position - taaLastPosition_).sqrMagnitude > 25.0f * 25.0f || NativeEngine.NrdReset) {
+				taaValid_ = false;
+			}
+			taaLastPosition_ = position;
+			var history = taaFlip_ ? taaB_ : taaA_;
+			var output = taaFlip_ ? taaA_ : taaB_;
+			taaFlip_ = !taaFlip_;
+			NativeEngine.PrepareMotion(cmd, NativeEngine.Bridge, ctx, motion_, width, height, false);
+			props_.SetTexture(SourceId, current);
+			props_.SetTexture(HistoryId, history);
+			props_.SetTexture(MotionId, motion_);
+			props_.SetVector(SourceSizeId, Size(width, height));
+			var jitter = Dlaa.Jitter;
+			props_.SetVector(TaaId, new Vector4(taaValid_ ? 1.0f : 0.0f, jitter.x / Mathf.Max(1, width), jitter.y / Mathf.Max(1, height), 0.0f));
+			Draw(cmd, output, PassTaa, Size(width, height));
+			taaValid_ = true;
+			return output;
 		}
 
 		// the meter (64x36 cells of the picture's light), read back without waiting
@@ -403,6 +448,8 @@ namespace NatureFX.Rendering {
 				pass_.enabled = active || meterOnly;
 				pass_.MeterOnly = meterOnly;
 			}
+			// with the own post-processing HDRP's TAA is never used: DLSS, else the own TAA
+			Dlaa.OwnTaaWanted = active;
 			if (!active) {
 				HdrpBlur(false);
 				Dlaa.Wanted = false;
@@ -518,9 +565,11 @@ namespace NatureFX.Rendering {
 			}
 			float lowest = eye ? s.AutoExposureMin : gameMin_;
 			float highest = eye ? Mathf.Max(s.AutoExposureMin + 0.5f, s.AutoExposureMax) : Mathf.Max(gameMin_ + 0.5f, gameMax_ + Units.Log2Scale);
-			if (metering && float.IsNaN(ev_) && !float.IsNaN(HdrpEV)) {
-				// taking over: from where HDRP's exposure is (it adapted until now), not a jump to the first reading
-				ev_ = Mathf.Clamp(HdrpEV, lowest, highest);
+			if (metering && float.IsNaN(ev_)) {
+				// taking over: from where HDRP's exposure is (it adapted until now), not a jump to the first reading; with
+				// none known a bright day's, so HDRP's own automatic exposure never runs on the own picture (it metered
+				// the tone mapped picture and opened up all the way: white)
+				ev_ = Mathf.Clamp(float.IsNaN(HdrpEV) ? 13.0f : HdrpEV, lowest, highest);
 			}
 			if (metering && pass_.MeterFrame != lastMeter_ && pass_.MeterFrame >= 0) {
 				lastMeter_ = pass_.MeterFrame;

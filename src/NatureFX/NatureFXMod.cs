@@ -75,6 +75,20 @@ namespace NatureFX {
 		// HDRP's bloom and screen space lens flare (strength 0 already): the own post-processing draws both
 		internal readonly CameraVolumetrics HdrpBloomOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.Bloom, "the own post-processing draws the bloom", false);
 		internal readonly CameraVolumetrics HdrpFlareOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.LensFlareScreenSpace, "the own post-processing draws the lens flare", false);
+		// The rest of HDRP's post-processing the game's volumes could still put on the own picture: data driven lens
+		// flares, colour grading (white balance, lift / gamma / gain, curves, LUTs), vignette, chromatic aberration, film
+		// grain, lens distortion, Panini projection. Off while the own post-processing runs (by name: a field this HDRP
+		// version lacks is left out)
+		internal readonly CameraVolumetrics[] HdrpPostOff = PostFields();
+		private static CameraVolumetrics[] PostFields() {
+			var list = new System.Collections.Generic.List<CameraVolumetrics>();
+			foreach (string name in new[] { "LensFlareDataDriven", "ColorGrading", "Tonemapping", "Vignette", "ChromaticAberration", "FilmGrain", "LensDistortion", "PaniniProjection" }) {
+				if (System.Enum.TryParse(name, out UnityEngine.Rendering.HighDefinition.FrameSettingsField field)) {
+					list.Add(new CameraVolumetrics(field, "the own post-processing draws the picture", false));
+				}
+			}
+			return list.ToArray();
+		}
 		internal readonly LensEffects Lens = new();
 		internal readonly PostProcess Post = new();
 		internal readonly GameParticles GameFx = new();
@@ -201,6 +215,9 @@ namespace NatureFX {
 			foreach (var off in new[] { HdrpFogOff, HdrpCloudsOff, HdrpScatterOff, HdrpSsrOff, HdrpProbesOff, HdrpPlanarOff, HdrpSkyReflOff, HdrpSsaoOff, HdrpSsgiOff, HdrpContactOff, HdrpShadowMapsOff, HdrpShadowmaskOff, HdrpBloomOff, HdrpFlareOff }) {
 				off.Restore();
 			}
+			foreach (var off in HdrpPostOff) {
+				off.Restore();
+			}
 			GroundMap.Release();
 			ShaderGlobals.DestroyNoiseTexture();
 		}
@@ -256,6 +273,9 @@ namespace NatureFX {
 			HdrpShadowmaskOff.Update(cam, OwnLighting.Sun && OwnLighting.Lamps);
 			HdrpBloomOff.Update(cam, s.Enabled && PostProcess.Active);
 			HdrpFlareOff.Update(cam, s.Enabled && PostProcess.Active);
+			foreach (var off in HdrpPostOff) {
+				off.Update(cam, s.Enabled && PostProcess.Active);
+			}
 			Volume.UpdateSky(Sun.Sun, s.Enabled && s.SunOverride, s.Enabled && s.NativeSky);
 			Weather.UpdateIce(s.Enabled && s.Accumulation, Sun.Sun);
 			PhotoMode.Update(cam);

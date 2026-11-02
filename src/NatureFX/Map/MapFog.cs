@@ -120,6 +120,7 @@ namespace NatureFX.Map {
 				UpdateNative(camera, weight, distance, haze);
 				return;
 			}
+			fog_.enabled.Override(true);
 			// follows the camera's height slowly, so jumps and crests do not pump the fog
 			baseHeight_ = float.IsNaN(baseHeight_) ? camera.y : Mathf.Lerp(baseHeight_, camera.y, 1.0f - Mathf.Exp(-Time.unscaledDeltaTime * 0.5f));
 			float scale = Weather.Current.FogScale > 0.0f ? Weather.Current.FogScale : 1.0f;
@@ -223,6 +224,8 @@ namespace NatureFX.Map {
 			fog_.maximumHeight.overrideState = false;
 			fog_.maxFogDistance.overrideState = false;
 			fog_.meanFreePath.Override(100000.0f);
+			// HDRP's fog off altogether: the own engine draws all of it (HDRP's fog with nothing in it still ran)
+			fog_.enabled.Override(false);
 		}
 	}
 }

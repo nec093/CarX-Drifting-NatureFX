@@ -86,6 +86,13 @@ namespace NatureFX.Rendering {
 		// DLSS ran on this frame (NativeEngine.DlssBuffer holds its motion and depth)
 		public static bool RanThisFrame => ranFrame_ == Time.frameCount;
 
+		// The own TAA (PostPass) where DLSS does not run and the own post-processing does: the camera jittered here as
+		// for DLAA, HDRP's TAA off, the picture resolved against its history in PostPass
+		public static bool OwnTaaWanted;
+		public static bool OwnTaa { get; private set; }
+		public static bool OwnTaaFor(Camera cam) => OwnTaa && jittered_ == cam && cam != null;
+		public static Vector2 Jitter => jitter_;
+
 		public static bool Active => Wanted && !failed_ && NativeEngine.Ready && NativeEngine.Bridge != null && NativeEngine.Supports("dlss") && Settled;
 
 		// DLSS started while the game was still starting up (its first scenes loading) left parts of the menu UI and
@@ -124,7 +131,7 @@ namespace NatureFX.Rendering {
 					return $"off, TAA kept ({failure_})";
 				}
 				if (!Wanted) {
-					return "off (HDRP's TAA)";
+					return OwnTaaWanted ? "off (the own TAA)" : "off (HDRP's TAA)";
 				}
 				if (!Active) {
 					if (NativeEngine.Ready && !NativeEngine.Supports("dlss")) {
@@ -206,7 +213,9 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			CheckFailure();
-			if (!Active) {
+			bool ownTaa = !Active && OwnTaaWanted;
+			OwnTaa = false;
+			if (!Active && !ownTaa) {
 				RestoreAll();
 				return;
 			}
@@ -233,6 +242,25 @@ namespace NatureFX.Rendering {
 			position_ = cam.transform.position;
 			matricesFrame_ = Time.frameCount;
 
+			if (ownTaa) {
+				// the own TAA: no DLSS, no upscaling; jittered like DLAA, HDRP's TAA off
+				RayReconstruction = false;
+				Upscaling = false;
+				NativeEngine.SunSamples = 1;
+				SetDynamicResolution(-1.0f);
+				SwapTaa(false);
+				data.allowDynamicResolution = originalDynamicRes_;
+				data.taaAntiFlicker = originalAntiFlicker_;
+				data.antialiasing = HDAdditionalCameraData.AntialiasingMode.None;
+				phase_ = (phase_ + 1) % Phases;
+				jitter_ = new Vector2(Halton(phase_ + 1, 2) - 0.5f, Halton(phase_ + 1, 3) - 0.5f);
+				projection.m02 += jitter_.x * 2.0f / Mathf.Max(1, cam.pixelWidth);
+				projection.m12 += jitter_.y * 2.0f / Mathf.Max(1, cam.pixelHeight);
+				cam.projectionMatrix = projection;
+				jittered_ = cam;
+				OwnTaa = true;
+				return;
+			}
 			// Ray Reconstruction: the guides come from the exact sun light's G-buffer (RTShadowPass): only while that
 			// is drawn
 			// with DLAA only for now: upscaling with it shook the picture, threw light noise and once hung the GPU
@@ -273,7 +301,7 @@ namespace NatureFX.Rendering {
 
 		private static void End(ScriptableRenderContext context, List<Camera> cameras) {
 			// a frame jittered without DLSS run on it: the raw jittered picture went to the screen
-			if (jittered_ != null && ranFrame_ != Time.frameCount && missedLogged_ < 12) {
+			if (jittered_ != null && !OwnTaa && ranFrame_ != Time.frameCount && missedLogged_ < 12) {
 				++missedLogged_;
 				Kino.Log.Info($"[NatureFX] DLSS diagnostics: frame {Time.frameCount} {jittered_.name} jittered but DLSS did not run (post pass for it: frame {postFrame_})");
 			}

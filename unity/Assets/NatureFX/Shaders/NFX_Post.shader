@@ -464,6 +464,60 @@ Shader "Hidden/NatureFX/Post"
         return w > 1e-3 ? float4(sum / w, 1.0) : float4(c0, 1.0);
     }
 
+    // --- the own TAA (Dlaa.OwnTaa: the camera jittered, HDRP's TAA off): this frame's picture against its history
+    // reprojected by the motion vectors, the history held to this frame's 3 x 3 neighbourhood (mean and spread in
+    // YCoCg, Salvi's variance clipping), blended with weights that tame bright pixels (Karis)
+    TEXTURE2D_X(_NFX_PostHistory);
+    float4 _NFX_PostTaa;            // x 1 the history is valid, yz this frame's jitter (uv)
+
+    float3 ToYCoCg(float3 c)
+    {
+        return float3(dot(c, float3(0.25, 0.5, 0.25)), dot(c, float3(0.5, 0.0, -0.5)), dot(c, float3(-0.25, 0.5, -0.25)));
+    }
+
+    float3 FromYCoCg(float3 c)
+    {
+        return float3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z);
+    }
+
+    float4 Taa(Varyings v) : SV_Target
+    {
+        float2 uv = TargetUV(v);
+        float2 texel = _NFX_PostSourceSize.zw;
+        float3 current = max(SampleRT(_NFX_PostSource, uv).rgb, 0.0);
+        float3 m1 = 0.0, m2 = 0.0;
+        [unroll]
+        for (int y = -1; y <= 1; ++y)
+        {
+            [unroll]
+            for (int x = -1; x <= 1; ++x)
+            {
+                float3 s = ToYCoCg(max(SampleRT(_NFX_PostSource, uv + float2(x, y) * texel).rgb, 0.0));
+                m1 += s;
+                m2 += s * s;
+            }
+        }
+        m1 /= 9.0;
+        float3 sigma = sqrt(max(m2 / 9.0 - m1 * m1, 0.0));
+        float2 previous = uv + MotionAt(uv);
+        if (_NFX_PostTaa.x < 0.5 || any(previous < 0.0) || any(previous > 1.0))
+            return float4(current, 1.0);
+        float3 history = ToYCoCg(max(SampleRT(_NFX_PostHistory, previous).rgb, 0.0));
+        // clipped towards the neighbourhood's mean into its box (mean +- 1.25 sigma)
+        float3 lo = m1 - 1.25 * sigma, hi = m1 + 1.25 * sigma;
+        float3 centre = 0.5 * (hi + lo), extent = 0.5 * (hi - lo) + 1e-5;
+        float3 offset = history - centre;
+        float3 units = abs(offset / extent);
+        float k = max(units.x, max(units.y, units.z));
+        history = FromYCoCg(k > 1.0 ? centre + offset / k : history);
+        // a moving picture keeps less of its history (less ghosting), a still one more (smoother)
+        float speed = length(MotionAt(uv) * _NFX_PostSourceSize.xy);
+        float keep = lerp(0.92, 0.8, saturate(speed / 8.0));
+        float wc = (1.0 - keep) / (1.0 + dot(current, float3(0.2126, 0.7152, 0.0722)));
+        float wh = keep / (1.0 + dot(history, float3(0.2126, 0.7152, 0.0722)));
+        return float4((current * wc + history * wh) / (wc + wh), 1.0);
+    }
+
     ENDHLSL
 
     SubShader
@@ -498,6 +552,10 @@ Shader "Hidden/NatureFX/Post"
         Pass { Name "DepthOfField" HLSLPROGRAM
             #pragma vertex Vert
             #pragma fragment DepthOfField
+            ENDHLSL }
+        Pass { Name "Taa" HLSLPROGRAM
+            #pragma vertex Vert
+            #pragma fragment Taa
             ENDHLSL }
 
     }
