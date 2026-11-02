@@ -1,7 +1,9 @@
 namespace NatureFX.Tools {
 	// The debug page's HTML (DebugPage.cs serves it at /). Self contained: no scripts or fonts from the internet.
 	// Written without double quotes, so the C# verbatim string needs no escaping. Plain on purpose: a dense,
-	// monospaced tool page (tables, rules, one chart), colour only for warnings.
+	// monospaced tool page (tables, rules, charts), colour only for warnings. Tabs down the left (overview,
+	// performance, memory, scene, developer, log), each a grid of panels as wide as the window allows, so little
+	// scrolling; the developer tab holds the switches and tools that were the F8 window's Developer tab (DevControls).
 	internal static class Page {
 		public const string Html = @"<!doctype html>
 <html lang='en'>
@@ -10,88 +12,143 @@ namespace NatureFX.Tools {
 <meta name='viewport' content='width=device-width, initial-scale=1'>
 <title>NatureFX debug</title>
 <style>
-:root { --bg:#111; --fg:#d4d4d4; --dim:#808080; --rule:#333; --head:#1a1a1a; --bar:#5a5a5a; --warn:#d7ba7d; --bad:#f48771; --a:#9cdcfe; --b:#b5cea8; --c:#d7ba7d; }
-@media (prefers-color-scheme: light) { :root { --bg:#fff; --fg:#1e1e1e; --dim:#6e6e6e; --rule:#d0d0d0; --head:#f3f3f3; --bar:#b0b0b0; --warn:#9a6700; --bad:#c42b1c; --a:#0451a5; --b:#267f00; --c:#9a6700; } }
+:root { --bg:#111; --fg:#d4d4d4; --dim:#808080; --rule:#333; --head:#1a1a1a; --bar:#5a5a5a; --sel:#262626; --warn:#d7ba7d; --bad:#f48771; --a:#9cdcfe; --b:#b5cea8; --c:#d7ba7d; --on:#4ec9b0; }
+@media (prefers-color-scheme: light) { :root { --bg:#fff; --fg:#1e1e1e; --dim:#6e6e6e; --rule:#d0d0d0; --head:#f3f3f3; --bar:#b0b0b0; --sel:#e8e8e8; --warn:#9a6700; --bad:#c42b1c; --a:#0451a5; --b:#267f00; --c:#9a6700; --on:#007a65; } }
 * { box-sizing:border-box; }
-html, body { margin:0; background:var(--bg); color:var(--fg); }
-body { font:12px/1.4 Consolas, 'Cascadia Mono', ui-monospace, Menlo, monospace; padding:0 12px 24px; }
-#bar { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--rule); padding:6px 0; display:flex; flex-wrap:wrap; gap:4px 16px; z-index:1; }
+html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); }
+body { font:12px/1.4 Consolas, 'Cascadia Mono', ui-monospace, Menlo, monospace; display:grid; grid-template-columns:120px 1fr; grid-template-rows:auto 1fr; }
+#bar { grid-column:1 / 3; position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--rule); padding:6px 12px; display:flex; flex-wrap:wrap; gap:4px 16px; z-index:2; }
 #bar b { font-weight:normal; color:var(--dim); }
-#nav { padding:6px 0; border-bottom:1px solid var(--rule); display:flex; flex-wrap:wrap; gap:2px 12px; }
-#nav a { color:var(--dim); text-decoration:none; }
-#nav a:hover { color:var(--fg); text-decoration:underline; }
-#cols { display:grid; grid-template-columns:1fr; gap:0 24px; }
-@media (min-width:1100px) { #cols { grid-template-columns:1fr 1fr; } }
-section { min-width:0; margin-top:14px; }
+#bar a { color:var(--dim); }
+#tabs { border-right:1px solid var(--rule); padding:8px 0; position:sticky; top:31px; align-self:start; }
+#tabs button { display:block; width:100%; text-align:left; border:0; background:none; color:var(--dim); padding:4px 12px; font:inherit; cursor:pointer; }
+#tabs button:hover { color:var(--fg); }
+#tabs button.cur { color:var(--fg); background:var(--sel); border-left:2px solid var(--a); padding-left:10px; }
+main { min-width:0; padding:0 12px 24px; }
+.tab { display:none; }
+.tab.cur { display:grid; grid-template-columns:repeat(auto-fill, minmax(480px, 1fr)); gap:12px; align-items:start; padding-top:12px; }
+.wide { grid-column:1 / -1; }
+section { min-width:0; }
 h2 { font-size:12px; font-weight:bold; margin:0; padding:2px 4px; background:var(--head); border:1px solid var(--rule); border-bottom:0; }
 table { width:100%; border-collapse:collapse; table-layout:fixed; border:1px solid var(--rule); }
 td { padding:1px 4px; border-top:1px solid var(--rule); vertical-align:top; overflow-wrap:anywhere; }
-td.k { width:38%; color:var(--dim); }
+td.k { width:42%; color:var(--dim); }
 td.k.i { padding-left:16px; }
-td.v.n { text-align:right; white-space:nowrap; width:14ch; }
-td.g { width:28%; }
+td.v.n { text-align:right; white-space:nowrap; width:12ch; }
+td.g { width:24%; }
 td.g div { height:7px; margin-top:4px; background:var(--bar); }
-#chart2 { height:150px; }
+.scroll { max-height:420px; overflow:auto; border-bottom:1px solid var(--rule); }
+.scroll table { border-bottom:0; }
 #events, #spikes { table-layout:auto; }
-#spikes td { white-space:nowrap; }
-#spikes td.s { white-space:normal; }
-#spikes td.n { text-align:right; }
-#spikes td.up { color:var(--warn); }
-#spikes tr.head td { color:var(--dim); }
-#events td { white-space:nowrap; }
-#events td.s { white-space:normal; width:40%; }
-#events td.n { text-align:right; }
-#events td.up { color:var(--warn); }
-#events tr.head td { color:var(--dim); }
+#spikes td, #events td { white-space:nowrap; }
+#spikes td.s, #events td.s { white-space:normal; }
+#spikes td.n, #events td.n { text-align:right; }
+#spikes td.up, #events td.up { color:var(--warn); }
+#spikes tr.head td, #events tr.head td { color:var(--dim); }
 tr.l1 td.v { color:var(--warn); }
 tr.l2 td.v { color:var(--bad); }
 .off { color:var(--dim); }
 canvas { display:block; width:100%; height:180px; border:1px solid var(--rule); border-top:0; }
 .tools { display:flex; gap:12px; align-items:center; padding:2px 4px; border:1px solid var(--rule); border-top:0; color:var(--dim); }
 .tools input[type=text] { font:inherit; background:var(--bg); color:var(--fg); border:1px solid var(--rule); padding:0 4px; width:24ch; }
-button { font:inherit; background:var(--head); color:var(--fg); border:1px solid var(--rule); padding:0 6px; cursor:pointer; }
-pre { margin:0; padding:4px; height:420px; overflow:auto; border:1px solid var(--rule); border-top:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+button { font:inherit; background:var(--head); color:var(--fg); border:1px solid var(--rule); padding:1px 8px; cursor:pointer; }
+button:hover { border-color:var(--dim); }
+pre { margin:0; padding:4px; height:calc(100vh - 120px); overflow:auto; border:1px solid var(--rule); border-top:0; white-space:pre-wrap; overflow-wrap:anywhere; }
 .err { color:var(--bad); }
+.ctl { border:1px solid var(--rule); border-top:0; }
+.row { display:grid; grid-template-columns:1fr auto; gap:2px 8px; padding:4px; border-top:1px solid var(--rule); align-items:center; }
+.row:first-child { border-top:0; }
+.row .help, .row .state { grid-column:1 / 3; color:var(--dim); }
+.row .state { color:var(--fg); overflow-wrap:anywhere; }
+.row label { cursor:pointer; }
+.sw { appearance:none; width:30px; height:15px; border:1px solid var(--dim); border-radius:8px; position:relative; cursor:pointer; margin:0; }
+.sw::after { content:''; position:absolute; top:2px; left:2px; width:9px; height:9px; border-radius:50%; background:var(--dim); transition:left .1s; }
+.sw:checked { border-color:var(--on); }
+.sw:checked::after { left:17px; background:var(--on); }
+.sl { display:flex; gap:6px; align-items:center; }
+.sl input { width:180px; }
+.sl span { min-width:6ch; text-align:right; }
+.chips button { margin-left:2px; color:var(--dim); }
+.chips button.cur { color:var(--fg); border-color:var(--a); }
+.kv { grid-column:1 / 3; display:grid; grid-template-columns:24ch 1fr; gap:8px; }
+.kv span:first-child { color:var(--dim); }
 </style>
 </head>
 <body>
 <div id='bar'>
   <span id='conn'>[connecting]</span>
   <span><b>fps</b> <span id='fps'>-</span></span>
-  <span><b>gpu</b> <span id='gpu'>-</span></span>
+  <span><b>frame</b> <span id='frame'>-</span></span>
+  <span><b>engine gpu</b> <span id='egpu'>-</span></span>
+  <span><b>gpu busy</b> <span id='busy'>-</span></span>
+  <span><b>vram</b> <span id='gpu'>-</span></span>
   <span><b>nfx</b> <span id='ours'>-</span></span>
   <span><b>t</b> <span id='t'>-</span></span>
   <span><label><input type='checkbox' id='pause'> pause</label></span>
-  <span><a href='/stats.json' target='_blank' style='color:var(--dim)'>stats.json</a></span>
+  <span><a href='/stats.json' target='_blank'>stats.json</a></span>
 </div>
-<div id='nav'></div>
-<section id='s-chart'>
-  <h2>gpu memory, MB (<span style='color:var(--a)'>used</span> / <span style='color:var(--c)'>budget</span> / <span style='color:var(--b)'>nfx counted</span>)</h2>
-  <canvas id='chart'></canvas>
-  <div class='tools'><span id='range'>-</span><button id='clear'>clear</button></div>
-</section>
-<section id='s-load-chart'>
-  <h2>load (<span style='color:var(--a)'>frame ms</span> / <span style='color:var(--b)'>own engine GPU ms</span>, left; <span style='color:var(--c)'>GPU busy %</span>, right)</h2>
-  <canvas id='chart2'></canvas>
-</section>
-<section id='s-spikes'>
-  <h2>slow frames (longer than 25 ms or 1.6 x the average; NatureFX's main thread parts in that frame, ms)</h2>
-  <table id='spikes'></table>
-</section>
-<section id='s-events'>
-  <h2>events (memory at each step after a scene load; deltas against the step before, MB)</h2>
-  <table id='events'></table>
-</section>
-<div id='cols'></div>
-<section id='s-log'>
-  <h2>log (NatureFX lines of kino/output.log)</h2>
-  <div class='tools'><label>filter <input type='text' id='filter'></label><label><input type='checkbox' id='follow' checked> follow</label><button id='reload'>reload</button><span id='logInfo'></span></div>
-  <pre id='log'></pre>
-</section>
+<nav id='tabs'></nav>
+<main>
+  <div class='tab' id='tab-overview'>
+    <section class='wide' id='s-chart'>
+      <h2>gpu memory, MB (<span style='color:var(--a)'>used</span> / <span style='color:var(--c)'>budget</span> / <span style='color:var(--b)'>nfx counted</span>)</h2>
+      <canvas id='chart'></canvas>
+      <div class='tools'><span id='range'>-</span><button id='clear'>clear</button></div>
+    </section>
+    <section class='wide' id='s-load-chart'>
+      <h2>load (<span style='color:var(--a)'>frame ms</span> / <span style='color:var(--b)'>own engine GPU ms</span>, left; <span style='color:var(--c)'>GPU busy %</span>, right)</h2>
+      <canvas id='chart2'></canvas>
+    </section>
+  </div>
+  <div class='tab' id='tab-performance'>
+    <section class='wide' id='s-spikes'>
+      <h2>slow frames (longer than 25 ms or 1.6 x the average; NatureFX's main thread parts in that frame, ms)</h2>
+      <div class='scroll'><table id='spikes'></table></div>
+    </section>
+  </div>
+  <div class='tab' id='tab-memory'>
+    <section class='wide' id='s-events'>
+      <h2>events (memory at each step after a scene load; deltas against the step before, MB)</h2>
+      <div class='scroll'><table id='events'></table></div>
+    </section>
+  </div>
+  <div class='tab' id='tab-scene'></div>
+  <div class='tab' id='tab-developer'></div>
+  <div class='tab' id='tab-log'>
+    <section class='wide' id='s-log'>
+      <h2>log (NatureFX lines of kino/output.log)</h2>
+      <div class='tools'><label>filter <input type='text' id='filter'></label><label><input type='checkbox' id='follow' checked> follow</label><button id='reload'>reload</button><span id='logInfo'></span></div>
+      <pre id='log'></pre>
+    </section>
+  </div>
+</main>
 <script>
 const $ = id => document.getElementById(id);
-const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-let hist = [], logText = '', built = '', marks = [];
+const esc = s => String(s).replace(/[&<>']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', ""'"": '&#39;' }[c]));
+let hist = [], logText = '', built = '', marks = [], ctlBuilt = '';
+
+// the tabs, and which tab each of the game's sections goes to (anything new: scene)
+const TABS = [['overview', 'overview'], ['performance', 'performance'], ['memory', 'memory'], ['scene', 'scene'], ['developer', 'developer'], ['log', 'log']];
+const HOME = { perf: 'overview', load: 'overview', 'gpu-time': 'overview', cpu: 'performance', timings: 'performance',
+  split: 'memory', 'engine-memory': 'memory', buffers: 'memory', targets: 'memory', 'other-targets': 'memory', 'game-textures': 'memory',
+  meshes: 'memory', 'switched-textures': 'memory' };
+const LONG = { 'game-textures': 1, 'other-targets': 1, targets: 1, 'switched-textures': 1, hdrp: 1 };
+
+function pick(name) {
+  for (const [id] of TABS) {
+    $('tab-' + id).classList.toggle('cur', id === name);
+    const b = $('tb-' + id); if (b) b.classList.toggle('cur', id === name);
+  }
+  try { localStorage.setItem('nfxTab', name); } catch (e) {}
+  if (name === 'overview') { chart(); chart2(); }
+  if (name === 'log') showLog();
+}
+$('tabs').innerHTML = TABS.map(([id, label]) => `<button id='tb-${id}'>${label}</button>`).join('');
+for (const [id] of TABS) $('tb-' + id).onclick = () => pick(id);
+let first = 'overview';
+try { first = localStorage.getItem('nfxTab') || 'overview'; } catch (e) {}
+if (!TABS.some(t => t[0] === first)) first = 'overview';
+pick(first);
 
 function events() {
   const keys = [['gpu', 'gpu'], ['native', 'engine'], ['buffers', 'trace buf'], ['targets', 'nfx targets'], ['other', 'other RT'], ['textures', 'game tex'], ['meshes', 'meshes']];
@@ -122,28 +179,74 @@ function table(sec) {
       `<td class='v${numeric ? ' n' : ''} ${cls}'>${esc(v)}</td>` +
       (hasBar ? `<td class='g'>${numeric ? `<div style='width:${(100 * bar / max).toFixed(1)}%'></div>` : ''}</td>` : '') + '</tr>';
   }).join('');
-  return `<h2>${esc(sec.title)}</h2><table>${rows || `<tr><td class='k'>-</td></tr>`}</table>`;
+  const body = `<table>${rows || `<tr><td class='k'>-</td></tr>`}</table>`;
+  return `<h2>${esc(sec.title)}</h2>` + (LONG[sec.id] ? `<div class='scroll'>${body}</div>` : body);
+}
+
+// ---- the developer tab: the game's controls (DevControls), built once, their values kept up to date except the one
+// being handled
+function send(id, v) { fetch(`/set?id=${encodeURIComponent(id)}&v=${v}`, { cache: 'no-store' }).catch(() => {}); }
+
+function controls(list) {
+  const key = list.map(c => c.id).join(',');
+  const host = $('tab-developer');
+  if (key !== ctlBuilt) {
+    ctlBuilt = key;
+    const groups = [];
+    for (const c of list) { let g = groups.find(x => x.name === c.group); if (!g) groups.push(g = { name: c.group, items: [] }); g.items.push(c); }
+    host.innerHTML = groups.map(g => `<section><h2>${esc(g.name)}</h2><div class='ctl'>` + g.items.map(c => {
+      const help = c.help ? `<div class='help'>${esc(c.help)}</div>` : '';
+      const state = `<div class='state' id='st-${c.id}'></div>`;
+      if (c.kind === 'switch') return `<div class='row'><label for='c-${c.id}'>${esc(c.label)}</label><input type='checkbox' class='sw' id='c-${c.id}'>${help}</div>`;
+      if (c.kind === 'slider') return `<div class='row'><span>${esc(c.label)}</span><span class='sl'><input type='range' id='c-${c.id}' min='${c.min}' max='${c.max}' step='${c.step}'><span id='cv-${c.id}'></span></span>${help}</div>`;
+      if (c.kind === 'chips') return `<div class='row'><span>${esc(c.label)}</span><span class='chips' id='c-${c.id}'>` + c.options.map((o, i) => `<button data-i='${i}'>${esc(o)}</button>`).join('') + `</span>${help}</div>`;
+      if (c.kind === 'button') return `<div class='row'><span></span><button id='c-${c.id}'>${esc(c.label)}</button>${help}${state}</div>`;
+      return `<div class='row'><div class='kv'><span>${esc(c.label)}</span><span id='st-${c.id}'></span></div></div>`;
+    }).join('') + `</div></section>`).join('');
+    for (const c of list) {
+      const e = $('c-' + c.id); if (!e) continue;
+      if (c.kind === 'switch') e.onchange = () => send(c.id, e.checked ? 1 : 0);
+      if (c.kind === 'slider') { e.oninput = () => $('cv-' + c.id).textContent = (+e.value).toString(); e.onchange = () => send(c.id, e.value); }
+      if (c.kind === 'chips') e.querySelectorAll('button').forEach(b => b.onclick = () => { send(c.id, b.dataset.i); e.querySelectorAll('button').forEach(x => x.classList.toggle('cur', x === b)); });
+      if (c.kind === 'button') e.onclick = () => send(c.id, 1);
+    }
+  }
+  for (const c of list) {
+    const e = $('c-' + c.id), st = $('st-' + c.id);
+    if (st) st.textContent = c.text || '';
+    if (!e || e === document.activeElement && c.kind === 'slider') continue;
+    if (c.kind === 'switch') e.checked = c.value > 0.5;
+    if (c.kind === 'slider') { e.value = c.value; $('cv-' + c.id).textContent = (+c.value).toString(); }
+    if (c.kind === 'chips') e.querySelectorAll('button').forEach(b => b.classList.toggle('cur', +b.dataset.i === Math.round(c.value)));
+  }
 }
 
 function show(d) {
   if (d.error) { $('conn').innerHTML = `<span class='err'>[error] ${esc(d.error)}</span>`; return; }
   $('conn').textContent = '[live]';
   $('fps').textContent = d.fps.toFixed(1);
+  $('frame').textContent = `${(d.frameMs || 0).toFixed(1)} ms`;
+  $('egpu').textContent = `${(d.nfxGpuMs || 0).toFixed(2)} ms`;
+  $('busy').textContent = d.gpuBusy >= 0 ? `${d.gpuBusy} %` : '-';
   $('gpu').textContent = `${d.gpuUsedMB} / ${d.gpuBudgetMB} MB`;
   $('ours').textContent = `${d.oursMB} MB`;
   $('t').textContent = `${d.time}s`;
-  // the section boxes once (their order and ids stay), their contents every time
+  // the section boxes once (their tabs and ids stay), their contents every time
   const ids = d.sections.map(s => s.id).join(',');
   if (ids !== built) {
     built = ids;
-    $('cols').innerHTML = d.sections.map(s => `<section id='s-${s.id}'></section>`).join('');
-    $('nav').innerHTML = ['chart', 'load-chart', 'spikes', 'events'].concat(d.sections.map(s => s.id), ['log']).map(id => `<a href='#s-${id}'>${id}</a>`).join('');
+    document.querySelectorAll('section.gen').forEach(e => e.remove());
+    for (const s of d.sections) {
+      const e = document.createElement('section');
+      e.id = 's-' + s.id; e.className = 'gen' + (LONG[s.id] ? ' wide' : '');
+      $('tab-' + (HOME[s.id] || 'scene')).appendChild(e);
+    }
   }
   for (const s of d.sections) { const e = $('s-' + s.id); if (e) e.innerHTML = table(s); }
+  if (d.controls) controls(d.controls);
   hist.push({ t: d.time, u: d.gpuUsedMB, b: d.gpuBudgetMB, n: d.oursMB, f: d.frameMs || 0, e: d.nfxGpuMs || 0, g: d.gpuBusy });
   marks = d.marks || [];
   events();
-  chart2();
   const sp = d.spikes || [];
   $('spikes').innerHTML = sp.length
     ? `<tr class='head'><td>t (s)</td><td class='n'>frame ms</td><td class='n'>GC</td><td class='s'>NatureFX parts that frame</td></tr>` +
@@ -151,10 +254,12 @@ function show(d) {
     : `<tr><td class='k'>none since the page opened</td></tr>`;
   if (hist.length > 3600) hist.shift();
   chart();
+  chart2();
 }
 
 function chart() {
   const c = $('chart'), g = c.getContext('2d'), r = devicePixelRatio || 1;
+  if (!c.clientWidth) return;
   const w = c.width = c.clientWidth * r, h = c.height = c.clientHeight * r;
   const css = getComputedStyle(document.documentElement), col = n => css.getPropertyValue(n).trim();
   g.clearRect(0, 0, w, h);
@@ -188,6 +293,7 @@ function chart() {
 
 function chart2() {
   const c = $('chart2'), g = c.getContext('2d'), r = devicePixelRatio || 1;
+  if (!c.clientWidth) return;
   const w = c.width = c.clientWidth * r, h = c.height = c.clientHeight * r;
   const css = getComputedStyle(document.documentElement), col = n => css.getPropertyValue(n).trim();
   g.clearRect(0, 0, w, h);

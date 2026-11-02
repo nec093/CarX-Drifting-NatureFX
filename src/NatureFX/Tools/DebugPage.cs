@@ -60,6 +60,11 @@ namespace NatureFX.Tools {
 			if (!running_) {
 				return;
 			}
+			// the page's switches and tools (DevControls): what it asked for, applied here on the main thread; the page
+			// then sees the new state at once
+			if (DevControls.Apply(mod)) {
+				nextSnapshot_ = 0.0f;
+			}
 			float dt = Time.unscaledDeltaTime;
 			if (dt > 0.0f) {
 				fps_ += (1.0f / dt - fps_) * 0.05f;
@@ -211,6 +216,26 @@ namespace NatureFX.Tools {
 						} else if (path.StartsWith("/stats.json", StringComparison.Ordinal)) {
 							Interlocked.Exchange(ref lastRequestTicks_, DateTime.UtcNow.Ticks);
 							Send(stream, "200 OK", "application/json; charset=utf-8", snapshot_);
+						} else if (path.StartsWith("/set?", StringComparison.Ordinal)) {
+							// a control changed on the page: /set?id=<id>&v=<value>
+							string id = null;
+							float value = 0.0f;
+							foreach (string part in path.Substring(5).Split('&')) {
+								int eq = part.IndexOf('=');
+								if (eq <= 0) {
+									continue;
+								}
+								string key = part.Substring(0, eq), val = Uri.UnescapeDataString(part.Substring(eq + 1));
+								if (key == "id") {
+									id = val;
+								} else if (key == "v") {
+									float.TryParse(val, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
+								}
+							}
+							if (id != null) {
+								DevControls.Request(id, value);
+							}
+							Send(stream, "200 OK", "text/plain", "ok");
 						} else if (path.StartsWith("/log", StringComparison.Ordinal)) {
 							Send(stream, "200 OK", "text/plain; charset=utf-8", LogTail());
 						} else {
@@ -952,7 +977,9 @@ namespace NatureFX.Tools {
 				}
 				sb.Append("]}");
 			}
-			sb.Append("]}");
+			sb.Append(']');
+			DevControls.Write(sb, Json);
+			sb.Append('}');
 			return sb.ToString();
 		}
 

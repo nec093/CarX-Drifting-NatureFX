@@ -36,7 +36,6 @@ namespace NatureFX {
 		private bool visible_;
 		private bool prevCursorVisible_;
 		private CursorLockMode prevLockState_;
-		private string lastDump_;
 		private bool resizing_;
 		private float uiScaleDraft_;
 		private float fps_;
@@ -1001,33 +1000,6 @@ namespace NatureFX {
 		private string inventoryPath_;
 
 		// Developer: what the traced light looks like on its own, clearing what built up, finding a surface's material
-		private void DrawRayTracingDebug() {
-			Widgets.BeginCard("Ray tracing views", "Debug views and tools for the traced light. Not saved.");
-			if (Widgets.Button("Reset accumulated image", 200)) {
-				mod_.RT.ResetHistory();
-			}
-			Widgets.Info("Shadows, ambient light and reflections build up over several frames; camera cuts reset them on their own, this clears anything left burnt in.");
-			Widgets.Switch("Show traced shadows only", mod_.RT.ShadowDebugView, v => {
-				mod_.RT.ShadowDebugView = v;
-				mod_.MarkDirty();
-			}, "White is lit by the sun, black is the traced shadow, blue-grey faces away from the sun or is sky.");
-			Widgets.Switch("Show exact sun light", mod_.RT.ExactSunDebugView, v => {
-				mod_.RT.ExactSunDebugView = v;
-				mod_.MarkDirty();
-			}, "The sun light the shadows take away, before shadowing. Dark magenta where it is not known (an estimate is used there).");
-			Widgets.Switch("Show ambient light / GI only", mod_.RT.GIDebugView, v => {
-				mod_.RT.GIDebugView = v;
-				mod_.MarkDirty();
-			}, "Mid grey where the ambient light is unchanged, darker where the sky is blocked, brighter and tinted where light bounces in.");
-			if (Widgets.Button(mod_.Identify.Armed ? "Click the scene…" : "What is this? (click)", 200)) {
-				mod_.Identify.Arm();
-			}
-			if (mod_.Identify.Result.Length > 0) {
-				Widgets.Info(mod_.Identify.Result);
-			}
-			Widgets.EndCard();
-		}
-
 		// Ray tracing: each stage's cost
 		private void DrawRayTracingCost() {
 			Widgets.BeginCard("Ray tracing cost", "Switches each ray tracing stage off for a few seconds and compares the frame time. " +
@@ -1093,7 +1065,6 @@ namespace NatureFX {
 			DrawRayTracingCost();
 		}
 
-		private string reloadStatus_;
 
 		private void DrawSettings() {
 			Widgets.BeginCard("Interface");
@@ -1116,125 +1087,11 @@ namespace NatureFX {
 
 		// tools for working on NatureFX itself: reload, status, diagnostics, variant recording
 		private void DrawDeveloper() {
-			DrawRayTracingDebug();
-			Widgets.BeginCard("Debug page", "Video memory by kind (the own engine, the trace buffers, every render target), GPU times, the " +
-				"scene and the log on a page for a browser, beside the game instead of over it. Served on this PC only (127.0.0.1); " +
-				"open the address below in a browser (a second screen).");
+			Widgets.BeginCard("Debug page", "Everything for development is on the debug page now: video memory, GPU and CPU load, the scene " +
+				"and the log, and the developer's switches and tools (ray tracing views, NRD parts, DLSS tests, shader reload, " +
+				"texture budget, shader dumps). Served on this PC only (127.0.0.1): open the address below in a browser (a second screen).");
 			Other(Widgets.Switch("Debug page", S.DebugPage, v => S.DebugPage = v));
 			Widgets.Info($"Now: {NatureFX.Tools.DebugPage.Status}" + (S.DebugPagePort != 8765 ? $" (port {S.DebugPagePort} in the settings file)" : ""));
-			Widgets.EndCard();
-			Widgets.BeginCard("Reload shaders", "Without a restart: the newest shader bundle in kino/mods/NatureFX/reload/ (the bundle build " +
-				"puts one there while the game runs) and the engine's shaders in NativeShaders/ (tools/build_native.ps1 -ShadersOnly). " +
-				"C# and the engine's C++ still need a restart.");
-			if (Widgets.Button("Reload shaders", 160)) {
-				reloadStatus_ = $"Bundle: {mod_.Bundle.Reload()}. Engine: {NativeEngine.ReloadShaders()}";
-			}
-			if (!string.IsNullOrEmpty(reloadStatus_)) {
-				Widgets.Info(reloadStatus_);
-			}
-			Widgets.Info($"Engine shaders now: {NativeEngine.ShaderStatus}");
-			Widgets.EndCard();
-			Widgets.BeginCard("GI lamp reference", "The GI's clamp of single bright rays and its cache's steps also go by the brightest " +
-				"lamp (not only the sun and the sky), so a headlight's bounce shows at night. Off: the old reference, to compare. Not saved.");
-			Widgets.Switch("Lamps in the GI's reference", LocalLights.UseLampReference, v => LocalLights.UseLampReference = v);
-			Widgets.EndCard();
-			Widgets.BeginCard("Tyre smoke", "The largest a puff of tyre smoke may be drawn, as a share of the screen (was 4). Smaller is " +
-				"cheaper for the GPU close to the smoke; too small and the smoke around the camera looks cut. Not saved.");
-			Widgets.Slider("Largest puff on screen", TireSmoke.MaxScreenSize, 0.2f, 4.0f, v => TireSmoke.MaxScreenSize = v, "0.0", "x");
-			Widgets.EndCard();
-			Widgets.BeginCard("Video memory", "Unity's texture mip streaming budget: the game's (about 4 GB) keeps every texture's finest " +
-				"mips however small it is on screen. Lower, Unity drops the finest mips of the textures seen smallest (only textures " +
-				"streamed by the game). 0: the game's own value. The debug page shows the textures' memory.");
-			Other(Widgets.Slider("Texture streaming budget", S.TextureStreamingBudget, 0, 4096, v => S.TextureStreamingBudget = Mathf.Round(v / 64.0f) * 64.0f, "0", " MB"));
-			Widgets.Info($"Now: {TextureBudget.Status}");
-			Widgets.Switch("Load every texture mip (test: blurred textures)", Texture.streamingTextureForceLoadAll, v => Texture.streamingTextureForceLoadAll = v);
-			Widgets.Info($"Own sky: track sky textures out of video memory: {VolumeOverhaul.UnloadedSky}");
-			Widgets.EndCard();
-			Widgets.BeginCard("3D fog lamps", "The 3D fog's lamps and headlights from lists per tile of its grid (only the lights that " +
-				"reach into it) instead of every light at every cell. The same picture: off only to compare the time " +
-				"(Ray tracing timings: fog volume). Not saved.");
-			Widgets.Switch("Light lists per tile", NativeEngine.FogLightLists, v => NativeEngine.FogLightLists = v);
-			Widgets.EndCard();
-			Widgets.BeginCard("NRD parts", "With the NVIDIA NRD denoiser chosen: each signal off here goes back to NatureFX's own filter, " +
-				"to find which part a problem comes from. Not saved.");
-			Widgets.Switch("Sun shadows (SIGMA)", NativeEngine.DevNrdSun, v => NativeEngine.DevNrdSun = v);
-			Widgets.Switch("Ambient light / GI (REBLUR)", NativeEngine.DevNrdAmbient, v => NativeEngine.DevNrdAmbient = v);
-			Widgets.Switch("Lamp shadows (REBLUR)", NativeEngine.DevNrdLamps, v => NativeEngine.DevNrdLamps = v);
-			Widgets.Switch("Reflections (REBLUR)", NativeEngine.DevNrdReflections, v => NativeEngine.DevNrdReflections = v);
-			Widgets.Switch("Reflections: cheaper REBLUR", NativeEngine.NrdFastReflections, v => NativeEngine.NrdFastReflections = v,
-				"Without REBLUR's pre-pass blur, stabilization pass and anti-firefly filter: compare the paint's reflections (sparkles, " +
-				"flicker) and the debug page's 'nrd: REBLUR reflections' time.");
-			Widgets.Switch("Ambient / GI and lamps: cheaper REBLUR", NativeEngine.NrdFastDiffuse, v => NativeEngine.NrdFastDiffuse = v,
-				"The same for the ambient light, GI and the lamp shadows (their noise in dark corners and car shadows).");
-			Widgets.Switch("Cars' motion vector pass", NativeEngine.DevCarMotionVectors, v => NativeEngine.DevCarMotionVectors = v,
-				"NRD and DLSS follow a moving car's pixels by its motion vectors; the game draws cars without them.");
-			Widgets.EndCard();
-			Widgets.BeginCard("DLSS tests", "What DLSS is handed, to find what makes the picture worse than TAA. Not saved.");
-			int sign = Rendering.Dlaa.DevJitterSign;
-			if (Widgets.Chips(ref sign, Rendering.Dlaa.JitterSigns)) {
-				Rendering.Dlaa.DevJitterSign = sign;
-			}
-			int motion = Rendering.Dlaa.DevMotion;
-			if (Widgets.Chips(ref motion, Rendering.Dlaa.Motions)) {
-				Rendering.Dlaa.DevMotion = motion;
-			}
-			Widgets.Slider("Jitter", Rendering.Dlaa.DevJitterScale, 0, 1, v => Rendering.Dlaa.DevJitterScale = v, "0.00");
-			Widgets.Switch("Ray Reconstruction with upscaling (test)", Rendering.Dlaa.DevRayReconstructionUpscaling,
-				v => Rendering.Dlaa.DevRayReconstructionUpscaling = v,
-				"Off for now: it shook the picture and once hung the GPU. NVIDIA's own log goes to kino/mods/NatureFX/NFX_ngx.log.");
-			Widgets.Switch("Upscale with HDRP's TAAU instead (test)", Rendering.Dlaa.DevHdrpTaau, v => Rendering.Dlaa.DevHdrpTaau = v,
-				"The same lower resolution (Quality ... Ultra perf.), upscaled by HDRP's own TAAU: tells DLSS's doing from the resolution's.");
-			Widgets.Info($"Now: {Rendering.Dlaa.Status}");
-			Widgets.EndCard();
-			Widgets.BeginCard("System", null, true);
-			Widgets.Info(Capabilities.Describe());
-			Widgets.Info($"Shader bundle: {mod_.Bundle.Shaders.Count} shaders · replaced materials: {mod_.Replacer.ReplacedCount}");
-			Widgets.Info($"Native engine: {NativeEngine.Info} · self test: {NativeEngine.TestResult}");
-			Widgets.Info($"Native engine scene: {NativeEngine.SceneStatus}");
-			Widgets.Info($"Native engine check: {NativeEngine.CheckStatus} · queue: {NativeEngine.QueueStatus}");
-			Widgets.Info($"Native engine sun shadows: {NativeEngine.SunCounters}");
-			Widgets.EndCard();
-
-			Widgets.BeginCard("Diagnostics", null, true);
-			if (Widgets.Button("Dump scene shaders", 180)) {
-				lastDump_ = SceneShaderDumper.Dump(mod_.Replacer);
-			}
-			if (lastDump_ != null) {
-				Widgets.Info($"Written: {lastDump_}");
-			}
-			Widgets.EndCard();
-
-			Widgets.BeginCard("Replacement rules", null, true);
-			Widgets.Info(mod_.Replacer.RulesPath);
-			if (Widgets.Button("Reload rules", 140)) {
-				mod_.ReloadRules();
-			}
-			Widgets.EndCard();
-
-			DrawVariantRecording();
-			DrawMaterialInventory();
-		}
-
-		private void DrawMaterialInventory() {
-			Widgets.BeginCard("Material inventory", "For the shader rebuild: at each map load, every material with its shader, values and " +
-				"where it is used, and samples of its textures (kino/config/NatureFX/inventory). Costs a hitch and some hundred MB of " +
-				"video memory for a moment at each load: off unless collecting.", true);
-			Other(Widgets.Switch("Write at each map load", S.WriteMaterialInventory, v => S.WriteMaterialInventory = v));
-			Widgets.EndCard();
-		}
-
-		private void DrawVariantRecording() {
-			Widgets.BeginCard("Shader variant recording", "For faster bundle builds: records which NatureFX shader variants the game uses. " +
-			                                              "Play maps in DX11 and DX12, day and night, rain and snow, then save.", true);
-			if (Widgets.Switch("Record", S.RecordShaderVariants, v => S.RecordShaderVariants = v)) {
-				ShaderVariantRecorder.Recording = S.RecordShaderVariants;
-			}
-			GUILayout.BeginHorizontal();
-			if (Widgets.Button("Save recorded variants", 210)) {
-				ShaderVariantRecorder.Save();
-			}
-			GUILayout.EndHorizontal();
-			Widgets.Info(ShaderVariantRecorder.LastMessage ?? ShaderVariantRecorder.FilePath);
 			Widgets.EndCard();
 		}
 
