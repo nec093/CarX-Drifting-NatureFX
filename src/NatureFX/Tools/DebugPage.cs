@@ -624,6 +624,7 @@ namespace NatureFX.Tools {
 			lastCpu_ = cpu;
 			lastCpuWall_ = now;
 			GpuStats.Read();
+			CpuStats.Read();
 			var load = new Section("load", "Load");
 			load.Add("frame time (average)", $"{frameMs_:0.00} ms", frameMs_, false, frameMs_ > 33.4 ? 2 : frameMs_ > 17.5 ? 1 : 0);
 			load.Add("frame time (worst in the second)", $"{frameMsPeak_:0.0} ms", frameMsPeak_, false, frameMsPeak_ > 50.0 ? 1 : 0);
@@ -635,6 +636,16 @@ namespace NatureFX.Tools {
 				load.Add("Unity frame timings", "not reported (the game is built without frame timing stats)");
 			}
 			load.Add("process CPU", $"{cpuPercent_:0} % of {Environment.ProcessorCount} logical CPUs");
+			load.Add("CPU", CpuStats.CpuName);
+			if (CpuStats.Problem.Length > 0) {
+				load.Add("CPU counters", CpuStats.Problem);
+			} else {
+				load.Add("CPU, the whole machine", CpuStats.SystemPercent >= 0.0f ? $"{CpuStats.SystemPercent:0} %" : "not read yet");
+				load.Add("the game's threads", $"{CpuStats.ThreadCount} (the busiest below, in % of one core: near 100 one thread holds the frame back)");
+				foreach (var (name, percent, main) in CpuStats.Busiest) {
+					load.Add(name, $"{percent:0} %", percent, true, percent >= 90.0f ? 2 : percent >= 70.0f ? 1 : 0);
+				}
+			}
 			if (GpuStats.Available) {
 				load.Add("GPU", GpuStats.Name);
 				load.Add("GPU busy", $"{GpuStats.GpuPercent} %", -1.0, false, GpuStats.GpuPercent >= 97 ? 1 : 0);
