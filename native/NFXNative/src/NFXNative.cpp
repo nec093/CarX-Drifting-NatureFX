@@ -564,6 +564,168 @@ bool CreateTracePipelines() {
 	return true;
 }
 
+// ------------------------------------------------------------------ BLAS pool
+// The geometries' BLAS live in a few large buffers (64 MB chunks) at 256 byte aligned offsets instead of one committed
+// buffer each: a committed buffer takes at least 64 KB, and a small mesh's BLAS is a few KB (thousands of them on a
+// map: hundreds of MB lost to the rounding). A BLAS stays in the acceleration structure state for good, so chunks
+// need no transitions. Spans are freed only after WaitRenderIdle (with the retired geometries), so no frame in
+// flight still traces what is reused; a chunk with nothing left in it is released.
+struct PoolSpan {
+	int chunk = -1;
+	UINT64 offset = 0;
+	UINT64 bytes = 0;
+	ID3D12Resource* resource = nullptr;  // the chunk's buffer (held by the pool)
+	D3D12_GPU_VIRTUAL_ADDRESS address = 0;
+	explicit operator bool() const { return chunk >= 0; }
+	D3D12_GPU_VIRTUAL_ADDRESS Address() const { return address; }
+	ID3D12Resource* Resource() const { return resource; }
+};
+
+struct BlasPool {
+	static constexpr UINT64 kChunkBytes = 64ull << 20;
+	static constexpr UINT64 kAlign = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT;  // 256
+	struct Chunk {
+		ComPtr<ID3D12Resource> buffer;
+		UINT64 size = 0, top = 0, used = 0;
+		std::vector<std::pair<UINT64, UINT64>> free;  // (offset, bytes) below top, sorted, merged
+	};
+	std::vector<Chunk> chunks;
+
+	static UINT64 Align(UINT64 v) { return (v + kAlign - 1) & ~(kAlign - 1); }
+
+	PoolSpan Make(int c, UINT64 offset, UINT64 bytes) {
+		auto& ch = chunks[c];
+		ch.used += bytes;
+		PoolSpan span;
+		span.chunk = c;
+		span.offset = offset;
+		span.bytes = bytes;
+		span.resource = ch.buffer.Get();
+		span.address = ch.buffer->GetGPUVirtualAddress() + offset;
+		return span;
+	}
+
+	PoolSpan Allocate(UINT64 bytes) {
+		bytes = Align(bytes == 0 ? kAlign : bytes);
+		// a freed hole (first fit), then the end of a chunk
+		for (size_t c = 0; c < chunks.size(); ++c) {
+			auto& ch = chunks[c];
+			if (!ch.buffer) {
+				continue;
+			}
+			for (size_t k = 0; k < ch.free.size(); ++k) {
+				if (ch.free[k].second >= bytes) {
+					UINT64 offset = ch.free[k].first;
+					ch.free[k].first += bytes;
+					ch.free[k].second -= bytes;
+					if (ch.free[k].second == 0) {
+						ch.free.erase(ch.free.begin() + static_cast<std::ptrdiff_t>(k));
+					}
+					return Make(static_cast<int>(c), offset, bytes);
+				}
+			}
+			if (ch.size - ch.top >= bytes) {
+				UINT64 offset = ch.top;
+				ch.top += bytes;
+				return Make(static_cast<int>(c), offset, bytes);
+			}
+		}
+		// a new chunk (one of its own for a BLAS larger than a chunk; a smaller chunk when the budget is tight)
+		UINT64 size = bytes > kChunkBytes ? bytes : kChunkBytes;
+		ComPtr<ID3D12Resource> buffer = CreateBuffer(size, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+		                                             D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+		if (!buffer && size > bytes) {
+			size = bytes > (16ull << 20) ? bytes : (16ull << 20);
+			buffer = CreateBuffer(size, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+			                      D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+		}
+		if (!buffer) {
+			return PoolSpan();
+		}
+		int slot = -1;
+		for (size_t c = 0; c < chunks.size(); ++c) {
+			if (!chunks[c].buffer) {
+				slot = static_cast<int>(c);
+				break;
+			}
+		}
+		if (slot < 0) {
+			chunks.emplace_back();
+			slot = static_cast<int>(chunks.size() - 1);
+		}
+		auto& ch = chunks[slot];
+		ch = Chunk();
+		ch.buffer = buffer;
+		ch.size = size;
+		ch.top = bytes;
+		return Make(slot, 0, bytes);
+	}
+
+	// only once nothing in flight can read it (after WaitRenderIdle)
+	void Free(PoolSpan& span) {
+		if (span.chunk < 0 || span.chunk >= static_cast<int>(chunks.size()) || !chunks[span.chunk].buffer) {
+			span = PoolSpan();
+			return;
+		}
+		auto& ch = chunks[span.chunk];
+		ch.used = ch.used > span.bytes ? ch.used - span.bytes : 0;
+		if (ch.used == 0) {
+			ch = Chunk();  // empty: the whole chunk goes
+			span = PoolSpan();
+			return;
+		}
+		auto it = ch.free.begin();
+		while (it != ch.free.end() && it->first < span.offset) {
+			++it;
+		}
+		it = ch.free.insert(it, { span.offset, span.bytes });
+		// merge with the next and the previous hole
+		auto next = it + 1;
+		if (next != ch.free.end() && it->first + it->second == next->first) {
+			it->second += next->second;
+			ch.free.erase(next);
+		}
+		if (it != ch.free.begin()) {
+			auto prev = it - 1;
+			if (prev->first + prev->second == it->first) {
+				prev->second += it->second;
+				it = ch.free.erase(it) - 1;
+			}
+		}
+		// a hole at the end gives the space back to the top
+		if (!ch.free.empty() && ch.free.back().first + ch.free.back().second == ch.top) {
+			ch.top = ch.free.back().first;
+			ch.free.pop_back();
+		}
+		span = PoolSpan();
+	}
+
+	void Reset() { chunks.clear(); }
+
+	UINT64 Used() const {
+		UINT64 n = 0;
+		for (const auto& ch : chunks) {
+			n += ch.used;
+		}
+		return n;
+	}
+	UINT64 Reserved() const {
+		UINT64 n = 0;
+		for (const auto& ch : chunks) {
+			n += ch.buffer ? ch.size : 0;
+		}
+		return n;
+	}
+	int Chunks() const {
+		int n = 0;
+		for (const auto& ch : chunks) {
+			n += ch.buffer ? 1 : 0;
+		}
+		return n;
+	}
+};
+BlasPool g_blasPool;
+
 // ------------------------------------------------------------------ scene
 
 // One Unity mesh / sub mesh: its triangles in the mesh's space, built once into a BLAS
@@ -571,7 +733,7 @@ struct Geometry {
 	D3D12_RAYTRACING_GEOMETRY_DESC desc = {};
 	ComPtr<ID3D12Resource> vertexSource;  // Unity's buffers, held until the BLAS is built
 	ComPtr<ID3D12Resource> indexSource;
-	ComPtr<ID3D12Resource> blas;
+	PoolSpan blas;  // in g_blasPool
 	UINT64 triangles = 0;
 	// read from Unity's index buffer: its indices are copied into ownIndices first, bad triangles made degenerate
 	bool sanitize = false;
@@ -656,6 +818,9 @@ UINT64 g_recordCapacity = 0;
 // The engine's shader visible descriptor heap, indexed directly by the shadow shader
 ComPtr<ID3D12DescriptorHeap> g_heap;
 UINT g_heapNext = 0;
+// slots given back (the retired geometries' and materials' views, after WaitRenderIdle: no record points at them any
+// more), handed out before new ones. Without it the heap only grew and filled after some map changes.
+std::vector<UINT> g_heapFree;
 UINT g_heapStep = 0;
 UINT g_descriptorsRefused = 0;  // allocations past the end of the heap (reported in the scene stats)
 constexpr UINT kHeapSize = 1 << 16;
@@ -671,15 +836,28 @@ UINT AllocateDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE* handle) {
 		}
 		g_heapStep = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 	}
-	if (g_heapNext >= kHeapSize) {
-		// never reclaimed but by ClearScene: full, materials go without textures (opaque alpha tests, grey hits)
+	UINT index;
+	if (!g_heapFree.empty()) {
+		index = g_heapFree.back();
+		g_heapFree.pop_back();
+	} else if (g_heapNext >= kHeapSize) {
+		// full even with what was given back: materials go without textures (opaque alpha tests, grey hits)
 		++g_descriptorsRefused;
 		return ~0u;
+	} else {
+		index = g_heapNext++;
 	}
-	UINT index = g_heapNext++;
 	*handle = g_heap->GetCPUDescriptorHandleForHeapStart();
 	handle->ptr += static_cast<SIZE_T>(index) * g_heapStep;
 	return index;
+}
+
+// Gives a slot back (only once nothing in flight or in the records points at it)
+void FreeDescriptor(UINT& index) {
+	if (index != ~0u && index < g_heapNext) {
+		g_heapFree.push_back(index);
+	}
+	index = ~0u;
 }
 
 // A raw (byte address) buffer view of a whole buffer
@@ -981,6 +1159,7 @@ NFX_EXPORT void NFX_Native_ClearScene() {
 	g_retiredGeometries.clear();
 	g_retiredMaterials.clear();
 	g_geometries.clear();
+	g_blasPool.Reset();
 	g_instances.clear();
 	g_resolved.clear();
 	g_instanceGeometry.clear();
@@ -990,6 +1169,7 @@ NFX_EXPORT void NFX_Native_ClearScene() {
 	g_instanceWind.clear();
 	g_instanceSways.clear();
 	g_heapNext = 0;
+	g_heapFree.clear();
 	g_sceneStats = "no scene";
 	ClearRtScene();
 }
@@ -1369,8 +1549,7 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 			continue;
 		}
 		if (g.blas) {
-			D3D12_RESOURCE_DESC desc = g.blas->GetDesc();
-			blasBytes += desc.Width;
+			blasBytes += g.blas.bytes;
 			continue;
 		}
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
@@ -1383,16 +1562,17 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 		if (info.ResultDataMaxSizeInBytes == 0) {
 			continue;
 		}
-		g.blas = CreateBuffer(info.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+		g.blas = g_blasPool.Allocate(info.ResultDataMaxSizeInBytes);
 		if (!g.blas) {
 			return -4;
 		}
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build = {};
 		build.Inputs = inputs;
-		build.DestAccelerationStructureData = g.blas->GetGPUVirtualAddress();
+		build.DestAccelerationStructureData = g.blas.Address();
 		build.ScratchAccelerationStructureData = g_scratch->GetGPUVirtualAddress();
 		list->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
-		D3D12_RESOURCE_BARRIER b[2] = { UavBarrier(g.blas.Get()), UavBarrier(g_scratch.Get()) };
+		// (the whole chunk: the next build reuses the scratch, and a later one may sit next to this BLAS)
+		D3D12_RESOURCE_BARRIER b[2] = { UavBarrier(g.blas.Resource()), UavBarrier(g_scratch.Get()) };
 		list->ResourceBarrier(2, b);
 		blasBytes += info.ResultDataMaxSizeInBytes;
 		++built;
@@ -1403,7 +1583,7 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 	std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instances = g_instances;
 	for (auto& d : instances) {
 		const auto& g = g_geometries[static_cast<size_t>(d.AccelerationStructure)];
-		d.AccelerationStructure = g.blas ? g.blas->GetGPUVirtualAddress() : 0;
+		d.AccelerationStructure = g.blas ? g.blas.Address() : 0;
 		triangles += g.triangles;
 	}
 	UINT64 instanceBytes = instances.size() * sizeof(D3D12_RAYTRACING_INSTANCE_DESC);
@@ -1506,7 +1686,20 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 	}
 	WaitRenderIdle();
 	// nothing traces the old scene now (the render thread waits for g_sceneMutex): what was released since the
-	// last build goes
+	// last build goes, its BLAS space back to the pool
+	// (the records written below were made from the live geometries and materials only)
+	for (auto& g : g_retiredGeometries) {
+		g_blasPool.Free(g.blas);
+		FreeDescriptor(g.indexDescriptor);
+		FreeDescriptor(g.positionDescriptor);
+		FreeDescriptor(g.uvDescriptor);
+		FreeDescriptor(g.normalDescriptor);
+	}
+	for (auto& m : g_retiredMaterials) {
+		FreeDescriptor(m.descriptor);
+		FreeDescriptor(m.maskDescriptor);
+		FreeDescriptor(m.emissionDescriptor);
+	}
 	g_retiredGeometries.clear();
 	g_retiredMaterials.clear();
 	if (!EnsureBuffer(g_records, g_recordCapacity, data.size() * 4, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ)) {
@@ -1536,8 +1729,11 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 	         g_geometries.size(), built, instances.size(), alphaInstances, triangles / 1e6, blasBytes / (1024.0 * 1024.0),
 	         tlasInfo.ResultDataMaxSizeInBytes / (1024.0 * 1024.0), NowMs() - start);
 	g_sceneStats = stats;
+	snprintf(stats, sizeof(stats), ", BLAS pool %.1f of %.1f MB in %d chunks", g_blasPool.Used() / (1024.0 * 1024.0),
+	         g_blasPool.Reserved() / (1024.0 * 1024.0), g_blasPool.Chunks());
+	g_sceneStats += stats;
 	if (g_descriptorsRefused > 0) {
-		snprintf(stats, sizeof(stats), ", DESCRIPTOR HEAP FULL (%u refused, %u of %u used)", g_descriptorsRefused, g_heapNext, kHeapSize);
+		snprintf(stats, sizeof(stats), ", DESCRIPTOR HEAP FULL (%u refused, %u of %u used)", g_descriptorsRefused, g_heapNext - static_cast<UINT>(g_heapFree.size()), kHeapSize);
 		g_sceneStats += stats;
 	}
 	// the render thread's work uses these pipelines: create them here, on the main thread
