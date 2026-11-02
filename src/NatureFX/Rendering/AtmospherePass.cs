@@ -142,6 +142,8 @@ namespace NatureFX.Rendering {
 		private static readonly int PrevViewYId = Shader.PropertyToID("_NFX_PrevViewY");
 		private static readonly int PrevViewZId = Shader.PropertyToID("_NFX_PrevViewZ");
 		private static readonly int PrevTanId = Shader.PropertyToID("_NFX_PrevTan");
+		// the frame the 3D fog was last made (TransparentFog: the see-through objects get it only then)
+		public static int FogFrame { get; private set; } = -1;
 		private static readonly int FogVolumeId = Shader.PropertyToID("_NFX_FogVolume");
 		private static readonly int FogVolumeParamsId = Shader.PropertyToID("_NFX_FogVolumeParams");
 		private static readonly int FogHeightId = Shader.PropertyToID("_NFX_FogHeight");
@@ -338,6 +340,7 @@ namespace NatureFX.Rendering {
 			var fog = NatureFX.Map.MapFog.NativeParams;
 			fogUsed_ = NativeFog && fog.w > 0.0f && probe;
 			if (fogUsed_) {
+				FogFrame = Time.frameCount;
 				if (fogVolume_ == null) {
 					fogHistoryA_ = Target3D("NFX_FogHistoryA");
 					fogHistoryB_ = Target3D("NFX_FogHistoryB");

@@ -846,6 +846,7 @@ namespace NatureFX.Tools {
 			sky.Try("sky light", () => AtmospherePass.ProbeStatus);
 			sky.Try("track reflection probes", () => mod.TrackProbes.Count > 0 ? $"{mod.TrackProbes.Count} off" : "none off");
 			sky.Try("fog", () => rt.FogStatus);
+			sky.Try("transparent fog", () => NatureFX.Rendering.TransparentFog.Status);
 			sky.Try("clouds", () => mod.Clouds.State);
 			sky.Try("night", () => mod.Night.State);
 			sky.Try("game day / night", () => mod.GameNight.Status);

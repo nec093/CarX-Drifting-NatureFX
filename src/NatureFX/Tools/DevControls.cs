@@ -199,6 +199,9 @@ namespace NatureFX.Tools {
 				"The GI's clamp of single bright rays also goes by the brightest lamp, so a headlight's bounce shows at night. Off: the old reference. Not saved.");
 			Switch(tests, "fog-lists", "3D fog: light lists per tile", () => NativeEngine.FogLightLists, v => NativeEngine.FogLightLists = v,
 				"The same picture: off only to compare the 3D fog's time. Not saved.");
+			Switch(tests, "transparent-fog", "3D fog on see-through objects", () => TransparentFog.Enabled, v => TransparentFog.Enabled = v,
+				"HDRP's transparent materials (fences on cards, signs, blended foliage) get the own engine's fog in front of them. Off: as before, unfogged. Not saved.");
+			Info(tests, "transparent fog", () => TransparentFog.Status);
 			Switch(tests, "rain-collision", "Rain: drops stopped by the world's colliders", () => Precipitation.WorldCollision, v => Precipitation.WorldCollision = v,
 				"Off: the drops fall through roofs and the car. Turned off by itself when no drop lives with it (see Weather's precipitation state).");
 			Slider(tests, "smoke-size", "Tyre smoke: largest puff on screen (x)", () => TireSmoke.MaxScreenSize, v => TireSmoke.MaxScreenSize = v, 0.2f, 4.0f, 0.1f,

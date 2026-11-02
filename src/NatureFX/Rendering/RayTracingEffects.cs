@@ -25,6 +25,7 @@ namespace NatureFX.Rendering {
 		private readonly RTSurfaceTrace surfaces_ = new();  // camera rays shared by reflections and shadows
 		private readonly LocalLights lights_ = new();       // headlights and lamps near the camera
 		private AtmospherePass atmosphereTrace_, atmosphereComposite_;
+		private Material transparentFogMaterial_;
 		private Light shadowlessSun_;                        // sun whose HDRP shadows the ray traced ones replace
 		private LightShadows sunShadowsBefore_;
 		private LightBakingOutput sunBakingBefore_;          // its baked shadow mask is switched off as well
@@ -136,6 +137,19 @@ namespace NatureFX.Rendering {
 					Material = new Material(atmosphereShader) { hideFlags = HideFlags.DontSave }, enabled = false
 				};
 				volume.customPasses.Add(atmosphereComposite_);
+			}
+
+			// the 3D fog on HDRP's see-through objects: the picture kept before them, the fog put on after them (ahead of
+			// the glass reflections, which fog their own mirrored light)
+			if (atmosphereComposite_ != null && bundle.Get(TransparentFog.ShaderName) is Shader transparentFog) {
+				transparentFogMaterial_ = new Material(transparentFog) { hideFlags = HideFlags.DontSave };
+				var captureVolume = root_.AddComponent<CustomPassVolume>();
+				captureVolume.isGlobal = true;
+				captureVolume.injectionPoint = CustomPassInjectionPoint.BeforeTransparent;
+				captureVolume.customPasses.Add(new TransparentFogCapture { name = "NatureFX transparent fog (keep)" });
+				glassVolume.customPasses.Insert(0, new TransparentFogPass { name = "NatureFX transparent fog", Material = transparentFogMaterial_ });
+			} else if (atmosphereComposite_ != null) {
+				TransparentFog.Status = "needs the new shader bundle (NFX_TransparentFog)";
 			}
 
 			// shadows go first, so the reflections see the shadowed image
@@ -416,6 +430,10 @@ namespace NatureFX.Rendering {
 			UpdateLampShadows(false);
 			if (shadows_?.Material != null) {
 				Object.Destroy(shadows_.Material);
+			}
+			if (transparentFogMaterial_ != null) {
+				Object.Destroy(transparentFogMaterial_);
+				transparentFogMaterial_ = null;
 			}
 			shadows_ = null;
 			reflection_ = null;
