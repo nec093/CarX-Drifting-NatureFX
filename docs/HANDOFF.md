@@ -156,6 +156,9 @@
 - **デバッグページ（11-02、未ビルド・未確認、.ksm と DLL）**: F8 > Developer の「Debug page」をオンにすると `http://127.0.0.1:8765/`（設定 `DebugPagePort`）でブラウザ用のページ。VRAM の内訳（`NFX_Native_MemoryStats` の独自エンジン 12 種、トレースバッファ、`NFX_` / `NatureFX` 名の描画ターゲット・テクスチャ、それ以外の描画ターゲット）、GPU memory の推移グラフ、GPU 時間、状態行、`kino/output.log` の NatureFX 行。`Tools/DebugPage.cs`（TcpListener、ループバックのみ、スナップショットはページが開いている間だけメインスレッドで 1 秒ごと）、`Tools/DebugPageHtml.cs`。DLSS（NGX）の確保は数えられない。
 - **計測オーバーレイを廃止してデバッグページへ移した（11-02）**: `RayTracingEffects.ReadStats()`（旧 ReadOverlay、`DebugStats`）の性能・シーン・RT 機能・デノイザー・パスに加え、F8 の各カードの「Now:」の状態行（エンジン、空・霧・雲、影・反射・ポスト・DLSS、天気・車・マップ）をセクションとして出す。F8 の状態行はそのまま残した。`Settings.RTOverlay` は設定ファイル互換のため残すが使わない。ページは等幅・表中心・色は警告だけ（ログの絞り込み、一時停止あり）。
 
+- **デバッグページでの実測（11-02、1916x997、DXR 1.1）**: GPU 6422 / 11228 MB、NatureFX 計 3286 MB。独自エンジン 2366 MB のうち geometry data pool 1408 MB（使用 1383）、BLAS 162.6 MB（圧縮後）、揺れる葉 302.5 MB、NRD 288.3 MB。トレースバッファ 417.6 MB、NatureFX の描画ターゲット 501.9 MB、ゲーム・HDRP の描画ターゲット 377.6 MB。
+- **データプールが大きすぎた原因**: C# がサブメッシュごとに頂点数 `mesh.vertexCount - sm.baseVertex` で登録し、ネイティブはサブメッシュごとにメッシュ全体の位置・法線・UV をコピーしていた（サブメッシュの数だけ重複）。→ `g_sharedData`（元のアドレス・間隔・形式・頂点数が同じなら 1 つを共有）と `g_spanRefs`（区間の参照カウント、ReleaseGeometry で減らし 0 で共有表から外す、退役時に 0 なら Free）。未ビルド・未確認。
+
 ## 1. インストール済みのもの（ゲームに入っている）
 
 | 物 | 状態 |

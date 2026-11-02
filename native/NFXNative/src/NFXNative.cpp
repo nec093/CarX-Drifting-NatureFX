@@ -737,6 +737,61 @@ struct BufferPool {
 BufferPool g_blasPool(D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
 BufferPool g_dataPool(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
+// Vertex data shared between geometries: Unity's sub meshes of one mesh read the same vertex buffer from the same
+// place (base vertex 0 for most), and each registered the whole mesh's vertices again, one copy per sub mesh (the
+// data pool held several times the meshes' size). One copy per (source address, stride, format, vertex count) now,
+// counted by the geometries using it (g_spanRefs, every data span: a span goes back to the pool when its count is 0
+// and its last geometry retires). An entry leaves g_sharedData as soon as its count is 0 (NFX_Native_ReleaseGeometry),
+// so a new buffer Unity makes at the same address is never matched with old data.
+struct SharedKey {
+	D3D12_GPU_VIRTUAL_ADDRESS source;
+	UINT stride;
+	int format;
+	UINT count;
+	bool operator<(const SharedKey& o) const {
+		if (source != o.source) return source < o.source;
+		if (stride != o.stride) return stride < o.stride;
+		if (format != o.format) return format < o.format;
+		return count < o.count;
+	}
+};
+std::map<SharedKey, PoolSpan> g_sharedData;
+std::map<std::pair<int, UINT64>, int> g_spanRefs;  // (chunk, offset) of a data span: the geometries using it
+
+void RefSpan(const PoolSpan& span) {
+	if (span) {
+		++g_spanRefs[{ span.chunk, span.offset }];
+	}
+}
+
+// One geometry less uses it; at 0 nobody can be given it any more (its share entry goes; the space is freed with the
+// geometry's retirement, FreeRetiredSpan)
+void UnrefSpan(const PoolSpan& span) {
+	if (!span) {
+		return;
+	}
+	auto it = g_spanRefs.find({ span.chunk, span.offset });
+	if (it == g_spanRefs.end() || --it->second > 0) {
+		return;
+	}
+	for (auto s = g_sharedData.begin(); s != g_sharedData.end();) {
+		s = s->second.chunk == span.chunk && s->second.offset == span.offset ? g_sharedData.erase(s) : std::next(s);
+	}
+}
+
+// A retired geometry's span: back to the pool if no geometry uses it any more (once: the count's entry goes with it)
+void FreeRetiredSpan(PoolSpan& span) {
+	if (!span) {
+		return;
+	}
+	auto it = g_spanRefs.find({ span.chunk, span.offset });
+	if (it != g_spanRefs.end() && it->second <= 0) {
+		g_spanRefs.erase(it);
+		g_dataPool.Free(span);
+	}
+	span = PoolSpan();
+}
+
 // A geometry's own data: a span of g_dataPool, or a buffer of its own (NFX_Native_AddGeometryData's upload buffers)
 struct DataSpan {
 	ComPtr<ID3D12Resource> owned;
@@ -1223,6 +1278,8 @@ NFX_EXPORT void NFX_Native_ClearScene() {
 	g_geometries.clear();
 	g_blasPool.Reset();
 	g_dataPool.Reset();
+	g_sharedData.clear();
+	g_spanRefs.clear();
 	// the build time TLAS points at BLAS just freed: rebuilt with the next scene (the render thread's own TLAS is made
 	// from g_resolved every frame, empty now: nothing is traced until then)
 	g_tlas.Reset();
@@ -1475,6 +1532,9 @@ NFX_EXPORT void NFX_Native_ReleaseGeometry(int id) {
 	if (id < 0 || id >= static_cast<int>(g_geometries.size())) {
 		return;
 	}
+	for (const DataSpan* d : { &g_geometries[id].ownIndices, &g_geometries[id].ownPositions, &g_geometries[id].ownNormals, &g_geometries[id].ownUvs }) {
+		UnrefSpan(d->pooled);
+	}
 	g_retiredGeometries.push_back(std::move(g_geometries[id]));
 	Geometry released;
 	released.released = true;
@@ -1562,6 +1622,7 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 		if (!d.pooled) {
 			return d;
 		}
+		RefSpan(d.pooled);
 		int c = d.pooled.chunk;
 		if (std::find(written.begin(), written.end(), c) == written.end()) {
 			written.push_back(c);
@@ -1613,18 +1674,34 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 		list->Dispatch((vertices + 63) / 64, 1, 1);
 		return true;
 	};
+	// the same vertex stream another geometry already has (a sub mesh of the same mesh): shared, not copied again
+	auto extractShared = [&](D3D12_GPU_VIRTUAL_ADDRESS source, UINT vertices, UINT stride, int format, DataSpan& target) -> bool {
+		SharedKey key{ source, stride, format, vertices };
+		auto found = g_sharedData.find(key);
+		if (found != g_sharedData.end()) {
+			target = DataSpan();
+			target.pooled = found->second;
+			RefSpan(target.pooled);
+			return true;
+		}
+		if (!extract(source, vertices, stride, format, target)) {
+			return false;
+		}
+		g_sharedData[key] = target.pooled;
+		return true;
+	};
 	for (auto& g : g_geometries) {
 		if (g.blas || g.released) {
 			continue;
 		}
 		UINT vertices = g.desc.Triangles.VertexCount;
-		if (!g.ownPositions && g.sourcePositions != 0 && !extract(g.sourcePositions, vertices, g.positionStride, g.positionFormat, g.ownPositions)) {
+		if (!g.ownPositions && g.sourcePositions != 0 && !extractShared(g.sourcePositions, vertices, g.positionStride, g.positionFormat, g.ownPositions)) {
 			return -10;
 		}
-		if (!g.ownNormals && g.sourceNormals != 0 && !extract(g.sourceNormals, vertices, g.normalStride, g.normalFormat, g.ownNormals)) {
+		if (!g.ownNormals && g.sourceNormals != 0 && !extractShared(g.sourceNormals, vertices, g.normalStride, g.normalFormat, g.ownNormals)) {
 			return -10;
 		}
-		if (!g.ownUvs && g.sourceUvs != 0 && !extract(g.sourceUvs, vertices, g.uvStride, g.uvFormat, g.ownUvs)) {
+		if (!g.ownUvs && g.sourceUvs != 0 && !extractShared(g.sourceUvs, vertices, g.uvStride, g.uvFormat, g.ownUvs)) {
 			return -10;
 		}
 	}
@@ -1908,10 +1985,10 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 	// (the records written below were made from the live geometries and materials only)
 	for (auto& g : g_retiredGeometries) {
 		g_blasPool.Free(g.blas);
-		g_dataPool.Free(g.ownIndices.pooled);
-		g_dataPool.Free(g.ownPositions.pooled);
-		g_dataPool.Free(g.ownNormals.pooled);
-		g_dataPool.Free(g.ownUvs.pooled);
+		FreeRetiredSpan(g.ownIndices.pooled);
+		FreeRetiredSpan(g.ownPositions.pooled);
+		FreeRetiredSpan(g.ownNormals.pooled);
+		FreeRetiredSpan(g.ownUvs.pooled);
 		FreeDescriptor(g.indexDescriptor);
 		FreeDescriptor(g.positionDescriptor);
 		FreeDescriptor(g.uvDescriptor);
