@@ -30,6 +30,21 @@ namespace NatureFX {
 			.OrderBy(p => p.Name, StringComparer.Ordinal)
 			.ToArray();
 
+		// Every setting a preset holds back to its default (Settings.Defaults: a fresh install's values); the window's
+		// layout, the on / off switch and the config version stay. Returns how many values changed.
+		public static int ResetAll(ISettings s) {
+			int changed = 0;
+			foreach (var p in Properties) {
+				object now = p.GetValue(s);
+				object value = p.GetValue(Settings.Defaults);
+				if (!Equals(now, value)) {
+					p.SetValue(s, value);
+					++changed;
+				}
+			}
+			return changed;
+		}
+
 		public static string Folder => Path.Combine(Kino.Paths.Config, "NatureFX", "presets");
 
 		public static string[] List() {

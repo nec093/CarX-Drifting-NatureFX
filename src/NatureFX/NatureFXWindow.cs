@@ -44,6 +44,7 @@ namespace NatureFX {
 		private string presetName_ = "";
 		private string presetStatus_;
 		private string pendingDelete_;
+		private bool confirmReset_;
 		private string[] presetList_;
 		private readonly InputLock lock_ = new();
 
@@ -411,6 +412,26 @@ namespace NatureFX {
 			if (!string.IsNullOrEmpty(presetStatus_)) {
 				Widgets.Info(presetStatus_);
 			}
+			Widgets.EndCard();
+
+			Widgets.BeginCard("Reset", "Every setting back to a fresh install's values (the window's size and the on / off switch stay). " +
+			                           "Save a preset first to come back to what you have now. One value: right-click it.");
+			GUILayout.BeginHorizontal();
+			if (Widgets.Button(confirmReset_ ? "Sure? Reset everything" : "Reset all to defaults", 220)) {
+				if (confirmReset_) {
+					int n = UserPresets.ResetAll(S);
+					presetStatus_ = $"Reset to defaults ({n} values changed).";
+					confirmReset_ = false;
+					AfterPresetApplied();
+				} else {
+					confirmReset_ = true;
+				}
+			}
+			if (confirmReset_ && Widgets.Button("Cancel", 90)) {
+				confirmReset_ = false;
+			}
+			GUILayout.FlexibleSpace();
+			GUILayout.EndHorizontal();
 			Widgets.EndCard();
 		}
 
