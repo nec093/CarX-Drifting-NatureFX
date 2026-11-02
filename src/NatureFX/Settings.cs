@@ -58,7 +58,7 @@ namespace NatureFX {
 		public float LightShafts { get; set; }        // sun volumetric dimmer, needs volumetric fog
 
 		// camera / filters
-		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral, 2 Filmic (GT-style custom curve), 3 None
+		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral (Khronos PBR Neutral), 2 AgX, 3 None
 		public float WhiteBalance { get; set; }       // 0..1 how much the eye takes the light around as white (PostProcess)
 		public float NightDarkness { get; set; }      // 0..1 a dark scene seen dark, not lifted to grey (PostProcess.NightKey)
 		public float FixedExposure { get; set; }      // EV100 with the exposure fixed (ExposureMode 0)
@@ -72,7 +72,7 @@ namespace NatureFX {
 		public float SunSize { get; set; }            // angular diameter in degrees (PCSS, needs High shadow filtering)
 
 		// --- added in config version 5: camera realism ---
-		public int ExposureMode { get; set; }         // 0 game, 1 eye adaptation, 2 physical camera
+		public int ExposureMode { get; set; }         // 0 fixed (FixedExposure), 1 eye adaptation
 		public float AutoExposureMin { get; set; }    // EV100
 		public float AutoExposureMax { get; set; }
 		public float AdaptationSpeed { get; set; }
@@ -284,7 +284,7 @@ namespace NatureFX {
 		public float LightShafts { get; set; }        // sun volumetric dimmer, needs volumetric fog
 
 		// camera / filters
-		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral, 2 Filmic (GT-style custom curve), 3 None
+		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral (Khronos PBR Neutral), 2 AgX, 3 None
 		public float WhiteBalance { get; set; }       // 0..1 how much the eye takes the light around as white (PostProcess)
 		public float NightDarkness { get; set; }      // 0..1 a dark scene seen dark, not lifted to grey (PostProcess.NightKey)
 		public float FixedExposure { get; set; }      // EV100 with the exposure fixed (ExposureMode 0)
@@ -298,7 +298,7 @@ namespace NatureFX {
 		public float SunSize { get; set; }            // angular diameter in degrees (PCSS, needs High shadow filtering)
 
 		// --- added in config version 5: camera realism ---
-		public int ExposureMode { get; set; }         // 0 game, 1 eye adaptation, 2 physical camera
+		public int ExposureMode { get; set; }         // 0 fixed (FixedExposure), 1 eye adaptation
 		public float AutoExposureMin { get; set; }    // EV100
 		public float AutoExposureMax { get; set; }
 		public float AdaptationSpeed { get; set; }

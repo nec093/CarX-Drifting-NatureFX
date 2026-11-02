@@ -846,7 +846,7 @@ namespace NatureFX {
 		// Camera > Exposure & tone: the own post-processing's exposure, bloom, tone curve and colour
 		private void DrawExposureAndTone() {
 			Widgets.BeginCard("Own post-processing", "NatureFX's own exposure (metering and eye adaptation), bloom, tone curve and colour, in place of HDRP's. " +
-			                                         "HDRP then only does depth of field and motion blur (anti-aliasing: DLSS).");
+			                                         "HDRP's own post-processing, TAA and colour grading are off meanwhile (anti-aliasing: DLSS, else the own TAA).");
 			Other(Widgets.Switch("Own post-processing", S.NativePost, v => S.NativePost = v));
 			Widgets.BeginDependent(S.NativePost);
 			Other(Widgets.Slider("Bloom", S.PostBloom, 0, 0.2f, v => S.PostBloom = v, "0.000"));
@@ -901,7 +901,7 @@ namespace NatureFX {
 
 		// Camera > DLSS: NVIDIA's anti-aliasing and upscaling in place of HDRP's TAA (Rendering.Dlaa)
 		private void DrawDlss() {
-			Widgets.BeginCard("NVIDIA DLSS", "Anti-aliasing and upscaling by NatureFX's own engine in place of HDRP's TAA (RTX GPUs; others keep TAA). " +
+			Widgets.BeginCard("NVIDIA DLSS", "Anti-aliasing and upscaling by NatureFX's own engine in place of HDRP's TAA (RTX GPUs; others get the own TAA). " +
 			                                 "Needs Own post-processing (Exposure & tone).");
 			Widgets.BeginDependent(S.NativePost);
 			Other(Widgets.Switch("NVIDIA DLSS", S.Dlaa, v => S.Dlaa = v));
