@@ -135,6 +135,7 @@ namespace NatureFX {
 				NatureFX.Tools.ShaderVariantRecorder.Save();
 			}
 			SceneManager.sceneLoaded -= OnSceneLoaded;
+			NatureFX.Tools.DebugPage.Stop();
 			window_?.Destroy();
 			Replacer.RestoreAll();
 			Markers.Restore();
@@ -184,6 +185,8 @@ namespace NatureFX {
 			if (s == null) {
 				return;
 			}
+			// the debug page (a browser on this PC): whether NatureFX is on or not
+			NatureFX.Tools.DebugPage.Update(s.DebugPage, s.DebugPagePort);
 
 			// the map's [defaults] and weather zones at the camera, before the weather and wind read them
 			var cam = Camera.main;

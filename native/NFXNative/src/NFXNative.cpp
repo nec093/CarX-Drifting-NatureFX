@@ -2803,3 +2803,95 @@ NFX_EXPORT int NFX_Native_GpuMemory(UINT64* usedMb, UINT64* budgetMb) {
 	*budgetMb = info.Budget >> 20;
 	return 1;
 }
+
+// ------------------------------------------------------------------ memory (the debug page, DebugPage.cs)
+namespace {
+// What one resource takes in video memory: a buffer its width rounded to 64 KB (a committed resource's granularity),
+// a texture as the device lays it out
+UINT64 ResourceBytes(ID3D12Resource* resource) {
+	if (resource == nullptr) {
+		return 0;
+	}
+	D3D12_RESOURCE_DESC desc = resource->GetDesc();
+	if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER) {
+		return (desc.Width + 0xFFFFull) & ~0xFFFFull;
+	}
+	ComPtr<ID3D12Device> device;
+	if (FAILED(resource->GetDevice(IID_PPV_ARGS(&device)))) {
+		return 0;
+	}
+	return device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+}
+}  // namespace
+
+// The engine's own video memory by kind, in bytes, into out (as many as capacity holds); returns how many there are.
+// Order (keep in step with DebugPage.cs NativeMemoryNames): BLAS pool reserved, BLAS pool used, data pool reserved,
+// data pool used, upload copies (meshes still in upload buffers), scratch and TLAS (scene builds), render TLAS
+// (per frame), records and tables, radiance cache, swaying foliage, NRD, DXR 1.2 device. DLSS's own memory (NGX) is
+// not visible from here.
+NFX_EXPORT int NFX_Native_MemoryStats(unsigned long long* out, int capacity) {
+	constexpr int kCount = 12;
+	if (out == nullptr || capacity <= 0) {
+		return kCount;
+	}
+	UINT64 v[kCount] = {};
+	{
+		std::lock_guard<std::mutex> lock(g_sceneMutex);
+		v[0] = g_blasPool.Reserved();
+		v[1] = g_blasPool.Used();
+		v[2] = g_dataPool.Reserved();
+		v[3] = g_dataPool.Used();
+		for (const auto& g : g_geometries) {
+			for (const DataSpan* d : { &g.ownIndices, &g.ownPositions, &g.ownNormals, &g.ownUvs }) {
+				v[4] += d->owned ? ResourceBytes(d->owned.Get()) : 0;
+			}
+		}
+		v[5] = ResourceBytes(g_scratch.Get()) + ResourceBytes(g_tlas.Get()) + ResourceBytes(g_instanceBuffer.Get()) +
+		       ResourceBytes(g_compactSizes.Get()) + ResourceBytes(g_compactReadback.Get());
+		v[6] = ResourceBytes(g_renderTlas.Get()) + ResourceBytes(g_renderScratch.Get());
+		for (const auto& r : g_renderInstances) {
+			v[6] += ResourceBytes(r.Get());
+		}
+		v[7] = ResourceBytes(g_records.Get()) + ResourceBytes(g_traceTables.Get()) + ResourceBytes(g_frameConstants.Get());
+		v[8] = ResourceBytes(g_cache.Get());
+		v[9] = ResourceBytes(g_windScratch.Get()) + ResourceBytes(g_windFrames.Get());
+		for (const auto& w : g_windBlas) {
+			v[9] += ResourceBytes(w.positions.Get()) + ResourceBytes(w.blas.Get());
+		}
+		for (const NrdContext* c : { &g_nrdSun, &g_nrdAmbient, &g_nrdLocal, &g_nrdReflection }) {
+			for (const auto& t : c->permanent) {
+				v[10] += ResourceBytes(t.resource.Get());
+			}
+			for (const auto& t : c->transient) {
+				v[10] += ResourceBytes(t.resource.Get());
+			}
+			for (const auto& t : c->in) {
+				v[10] += ResourceBytes(t.resource.Get());
+			}
+			for (const auto& t : c->out) {
+				v[10] += ResourceBytes(t.resource.Get());
+			}
+		}
+		v[10] += ResourceBytes(g_nrdConstants.Get());
+		for (const auto& c : g_rtChunks) {
+			v[11] += ResourceBytes(c.rt.Get());  // the shared chunks: counted once (the Unity side is the same memory)
+		}
+		for (const auto& r : g_rtGeometries) {
+			v[11] += ResourceBytes(r.blas.Get()) + ResourceBytes(r.ommData.Get()) + ResourceBytes(r.ommDescs.Get()) +
+			         ResourceBytes(r.ommIndices.Get()) + ResourceBytes(r.ommArray.Get());
+		}
+		for (const auto& w : g_rtWind) {
+			v[11] += ResourceBytes(w.positions.Get()) + ResourceBytes(w.blas.Get());
+		}
+		v[11] += ResourceBytes(g_rt.tlas.Get()) + ResourceBytes(g_rt.scratch.Get()) + ResourceBytes(g_rt.buildScratch.Get()) +
+		         ResourceBytes(g_rt.records.Get()) + ResourceBytes(g_rtWindScratch.Get());
+		for (int k = 0; k < 2; ++k) {
+			v[11] += ResourceBytes(g_rt.inRt[k].Get()) + ResourceBytes(g_rt.outRt[k].Get());
+		}
+	}
+	int n = capacity < kCount ? capacity : kCount;
+	for (int i = 0; i < n; ++i) {
+		out[i] = v[i];
+	}
+	return kCount;
+}

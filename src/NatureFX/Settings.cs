@@ -154,6 +154,9 @@ namespace NatureFX {
 		public float GrassDistance { get; set; }
 		public float ShrubDensity { get; set; }            // the map's thickets of scanned shrubs (ShrubRenderer): density, 0 off
 		public float ShrubDistance { get; set; }           // m: where the scans give way to their billboard clouds (impostors at 3x)
+		// --- added in config version 62: the debug page (Tools/DebugPage.cs) ---
+		public bool DebugPage { get; set; }                // a page with memory, timings and the log, for a browser on this PC
+		public int DebugPagePort { get; set; }             // its port on 127.0.0.1
 		public bool MapEffects { get; set; }
 		// sky: HDRP volumetric clouds following the weather (and the map's cloud sea), the strength of their shadows,
 		// the blue haze over distant mountains (0 off)
@@ -362,6 +365,9 @@ namespace NatureFX {
 		public float GrassDistance { get; set; }
 		public float ShrubDensity { get; set; }            // the map's thickets of scanned shrubs (ShrubRenderer): density, 0 off
 		public float ShrubDistance { get; set; }           // m: where the scans give way to their billboard clouds (impostors at 3x)
+		// --- added in config version 62: the debug page (Tools/DebugPage.cs) ---
+		public bool DebugPage { get; set; }                // a page with memory, timings and the log, for a browser on this PC
+		public int DebugPagePort { get; set; }             // its port on 127.0.0.1
 		public bool MapEffects { get; set; }
 		// sky: HDRP volumetric clouds following the weather (and the map's cloud sea), the strength of their shadows,
 		// the blue haze over distant mountains (0 off)
@@ -778,6 +784,11 @@ namespace NatureFX {
 				d.ShrubDensity = 1.0f;
 				d.ShrubDistance = 25.0f;
 				d.ConfigVersion = 61;
+			}
+			if (d.ConfigVersion < 62) {
+				// the debug page: off, its port
+				d.DebugPagePort = 8765;
+				d.ConfigVersion = 62;
 			}
 		}
 

@@ -1088,6 +1088,12 @@ namespace NatureFX {
 		// tools for working on NatureFX itself: reload, status, diagnostics, variant recording
 		private void DrawDeveloper() {
 			DrawRayTracingDebug();
+			Widgets.BeginCard("Debug page", "Video memory by kind (the own engine, the trace buffers, every render target), GPU times, the " +
+				"scene and the log on a page for a browser, beside the game instead of over it. Served on this PC only (127.0.0.1); " +
+				"open the address below in a browser (a second screen).");
+			Other(Widgets.Switch("Debug page", S.DebugPage, v => S.DebugPage = v));
+			Widgets.Info($"Now: {NatureFX.Tools.DebugPage.Status}" + (S.DebugPagePort != 8765 ? $" (port {S.DebugPagePort} in the settings file)" : ""));
+			Widgets.EndCard();
 			Widgets.BeginCard("Reload shaders", "Without a restart: the newest shader bundle in kino/mods/NatureFX/reload/ (the bundle build " +
 				"puts one there while the game runs) and the engine's shaders in NativeShaders/ (tools/build_native.ps1 -ShadersOnly). " +
 				"C# and the engine's C++ still need a restart.");

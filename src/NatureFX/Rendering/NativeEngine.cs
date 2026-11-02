@@ -34,6 +34,7 @@ namespace NatureFX.Rendering {
 		[DllImport(DllName)] private static extern int NFX_Native_Dxr12Probe([MarshalAs(UnmanagedType.LPStr)] string sdkPath, byte[] buffer, int size);
 		[DllImport(DllName)] private static extern int NFX_Native_StartRt([MarshalAs(UnmanagedType.LPStr)] string sdkPath);
 		[DllImport(DllName)] private static extern void NFX_Native_SetRtActive(int active);
+		[DllImport(DllName)] private static extern int NFX_Native_MemoryStats(ulong[] values, int capacity);
 		[DllImport(DllName)] private static extern void NFX_Native_SetRtOmm(int enabled);
 		[DllImport(DllName)] private static extern int NFX_Native_SetPipeline(int pipeline);
 		[DllImport(DllName)] private static extern int NFX_Native_GpuMemory(out ulong usedMb, out ulong budgetMb);
@@ -559,6 +560,51 @@ namespace NatureFX.Rendering {
 		// ------------------------------------------------------------------ traces
 		// Each trace: Prepare (Unity compute, NFX_NativeBridge) fills a buffer the engine reads, render event 3 runs the
 		// engine's shader on Unity's queue, Unpack (Unity compute) copies the result into the shadow pass's texture.
+
+		// The debug page (DebugPage.cs): the engine's own video memory by kind (NFX_Native_MemoryStats), null with a
+		// DLL that does not report it
+		public static readonly string[] NativeMemoryNames = {
+			"BLAS pool (reserved)", "BLAS pool (used)", "geometry data pool (reserved)", "geometry data pool (used)",
+			"meshes still in upload buffers", "scene build scratch and TLAS", "per frame TLAS", "records and tables",
+			"GI radiance cache", "swaying foliage", "NRD", "DXR 1.2 device"
+		};
+		private static bool memoryStatsMissing_;
+
+		public static ulong[] NativeMemory() {
+			if (!Ready || memoryStatsMissing_) {
+				return null;
+			}
+			try {
+				var values = new ulong[NativeMemoryNames.Length];
+				NFX_Native_MemoryStats(values, values.Length);
+				return values;
+			} catch (EntryPointNotFoundException) {
+				memoryStatsMissing_ = true;
+				return null;
+			} catch (Exception) {
+				return null;
+			}
+		}
+
+		// The trace buffers by kind, the screen buffer and the NRD guides (bytes)
+		public static List<(string Name, long Bytes)> TraceMemory() {
+			var list = new List<(string, long)>();
+			for (int k = 0; k < buffers_.Length; ++k) {
+				var b = buffers_[k];
+				if (b.Surface != null) {
+					list.Add(($"trace: {KindName(k)}", (long)b.Surface.count * b.Surface.stride + (long)b.Result.count * b.Result.stride));
+				}
+			}
+			if (screen_ != null) {
+				list.Add(("trace: screen", (long)screen_.count * screen_.stride));
+			}
+			long guides = 0;
+			foreach (var g in new[] { nrdSunGuide_, nrdAmbientGuide_, nrdReflectionGuide_ }) {
+				guides += g.Buffer != null ? (long)g.Buffer.count * g.Buffer.stride : 0;
+			}
+			list.Add(("NRD guides", guides));
+			return list;
+		}
 
 		private static string KindName(int kind) {
 			switch (kind) {
