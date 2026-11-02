@@ -2,6 +2,9 @@
 #include "NFXCommon.hlsli"
 
 #define NFX_SKY_COVERED 0.25
+// how far the sky test of a reflected hit looks: 4 m saw out of any room larger than that (a garage's walls in the
+// car's side were lit by the open sky); the GI's own far sky distance when it is longer
+#define NFX_REFLECT_SKY_TEST max(AmbientParams.z, 30.0)
 
 // Hybrid shading: where the hit is what the camera sees at its screen position, the camera colour there is HDRP's
 // full lighting. Returns how much to trust it (fades out near the screen edges, 0 off screen or hidden).
@@ -37,7 +40,7 @@ float3 ShadeReflectedHit(HitSurface s, float3 hitAWS, float3 rayDir, float2 xi, 
 {
     float3 hn = s.normal;
     float3 origin = hitAWS + hn * 0.03;
-    sky = Blocked(origin, CosineSampleHemisphere(hn, xi), 4.0, true) ? NFX_SKY_COVERED : 1.0;
+    sky = Blocked(origin, CosineSampleHemisphere(hn, xi), NFX_REFLECT_SKY_TEST, true) ? NFX_SKY_COVERED : 1.0;
     return ShadeReflectedHitWithSky(s, hitAWS, rayDir, sky);
 }
 
@@ -53,7 +56,7 @@ float3 ShadeReflectedHitSmooth(HitSurface s, float3 hitAWS, float3 rayDir, uint2
     for (int k = 0; k < 4; ++k)
     {
         float2 xi = frac((float2(k & 1, k >> 1) + jitter) * 0.5);
-        sky += Blocked(origin, CosineSampleHemisphere(hn, xi), 4.0, true) ? NFX_SKY_COVERED : 1.0;
+        sky += Blocked(origin, CosineSampleHemisphere(hn, xi), NFX_REFLECT_SKY_TEST, true) ? NFX_SKY_COVERED : 1.0;
     }
     sky *= 0.25;
     return ShadeReflectedHitWithSky(s, hitAWS, rayDir, sky);
@@ -63,13 +66,18 @@ float3 ShadeReflectedHitWithSky(HitSurface s, float3 hitAWS, float3 rayDir, floa
 {
     float3 hn = s.normal;
     float3 origin = hitAWS + hn * 0.03;
-    float3 irradiance = HitSkyLight(hn) * sky;
+    // what a still surface receives, from the GI's radiance cache where it has the cell: the sun, the lamps and every
+    // bounce with what blocks the sky (a room's walls lit only by what comes in); else the sky share of the test rays
+    float3 cached;
+    bool fromCache = !s.moving && CacheLookup(hitAWS, hn, cached);
+    float3 irradiance = fromCache ? cached : HitSkyLight(hn) * sky;
     float3 L = SunDir;
     float ndl = saturate(dot(hn, L));
     float3 sunSpecular = 0;
     if (SunUp != 0 && ndl > 0.0 && SunVisible(origin))
     {
-        irradiance += SunColor * ndl * INV_PI;
+        if (!fromCache)
+            irradiance += SunColor * ndl * INV_PI;
         float3 V = -rayDir;
         float roughness = 1.0 - s.smoothness;
         float alpha = max(roughness * roughness, 0.002);
@@ -84,7 +92,8 @@ float3 ShadeReflectedHitWithSky(HitSurface s, float3 hitAWS, float3 rayDir, floa
         float3 fresnel = f0 + (1.0 - f0) * pow(1.0 - saturate(dot(V, H)), 5.0);
         sunSpecular = fresnel * min(distribution * visibilityTerm, 100.0) * SunColor * ndl;
     }
-    irradiance += LocalLightsAtHit(hitAWS, hn, true);
+    if (!fromCache)
+        irradiance += LocalLightsAtHit(hitAWS, hn, true);
     float3 diffuse = s.albedo * irradiance * (1.0 - s.metallic);
     float3 specular = HitFresnel(s, rayDir) * SampleSH9(reflect(rayDir, hn)) * sky;
     return diffuse + specular + sunSpecular + s.emission;

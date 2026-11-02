@@ -9,6 +9,34 @@
 // (0 none, 1 ground, 2 road; + 0.4 where plants cover it). Compiled into GroundMap.h.
 #include "NFXCommon.hlsli"
 
+// How much a hit face looks up, by the mesh's own normals (not turned to the ray): 1 a floor, 0 a wall, -1 a ceiling
+float FaceUp(Hit hit)
+{
+    Record r = LoadRecord(hit.instance);
+    if (r.indices == NoDescriptor || r.positions == NoDescriptor)
+        return 1.0;
+    uint3 tri = LoadTriangle(r, hit.primitive);
+    float3 n;
+    if (r.normals != NoDescriptor)
+    {
+        ByteAddressBuffer normals = ResourceDescriptorHeap[r.normals];
+        float2 b = hit.barycentrics;
+        n = asfloat(normals.Load3(tri.x * 12)) * (1.0 - b.x - b.y) + asfloat(normals.Load3(tri.y * 12)) * b.x + asfloat(normals.Load3(tri.z * 12)) * b.y;
+    }
+    else
+    {
+        // no normals: the winding's face (Unity's front faces wind clockwise seen from the front)
+        ByteAddressBuffer positions = ResourceDescriptorHeap[r.positions];
+        float3 p0 = asfloat(positions.Load3(tri.x * 12));
+        float3 p1 = asfloat(positions.Load3(tri.y * 12));
+        float3 p2 = asfloat(positions.Load3(tri.z * 12));
+        n = cross(p1 - p0, p2 - p0);
+    }
+    n = mul((float3x3)hit.objectToWorld, n);
+    float len = length(n);
+    return len > 1e-12 ? n.y / len : 1.0;
+}
+
 NFX_ENTRY(id)
 {
     uint n = (uint)ReflParams.z;
@@ -21,13 +49,41 @@ NFX_ENTRY(id)
     float3 down = float3(0.0, -1.0, 0.0);
     float4 a = float4(0.0, 0.0, 0.0, -1e9);
     float4 b = float4(0.0, 1.0, 0.0, 0.0);
-    Hit hit;
-    if (ClosestMasked(origin, down, start * 2.0, NFX_GROUND_MASK, hit))
+    // down through the ground instances to the floor: only faces that look up count (a garage's ceiling and walls are
+    // one flat wide mesh each and passed as ground: the debris lay on the ceiling's height), and of those the first
+    // at or below the camera's height wins (indoors, under a bridge), else the first one up there
+    Hit hit = (Hit)0;
+    bool found = false;
+    float travelled = 0.0;
+    float camY = AmbientParams.y;
+    [loop]
+    for (int k = 0; k < 6; ++k)
+    {
+        Hit h;
+        float3 from = origin + down * travelled;
+        if (!ClosestMasked(from, down, start * 2.0 - travelled, NFX_GROUND_MASK, h))
+            break;
+        h.t += travelled;
+        travelled = h.t + 0.02;
+        if (FaceUp(h) < 0.35)
+            continue;
+        if (!found)
+        {
+            hit = h;
+            found = true;
+        }
+        if (origin.y - h.t <= camY + 1.5)
+        {
+            hit = h;
+            break;
+        }
+    }
+    if (found)
     {
         HitSurface s = SurfaceAt(hit, down, 2.0);
         a = float4(s.albedo, origin.y - hit.t);
         Hit road;
-        bool onRoad = ClosestMasked(origin, down, start * 2.0, NFX_ROAD_MASK, road) && abs(road.t - hit.t) < 0.05;
+        bool onRoad = ClosestMasked(origin + down * max(hit.t - 0.1, 0.0), down, 0.2, NFX_ROAD_MASK, road) && abs(road.t - 0.1) < 0.05;
         // plants over the ground (grass, bushes, low branches up to 3 m): the cover, packed into the kind's
         // fraction (kind + cover * 0.4, so the kind's tests keep working)
         Hit plant;
