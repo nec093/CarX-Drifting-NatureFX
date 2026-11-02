@@ -648,8 +648,7 @@ namespace NatureFX.Tools {
 			}
 			lastCpu_ = cpu;
 			lastCpuWall_ = now;
-			GpuStats.Read();
-			CpuStats.Read();
+			CpuStats.Read(); // also keeps the GPU counters read (the same sampling thread)
 			var load = new Section("load", "Load");
 			load.Add("frame time (average)", $"{frameMs_:0.00} ms", frameMs_, false, frameMs_ > 33.4 ? 2 : frameMs_ > 17.5 ? 1 : 0);
 			load.Add("frame time (worst in the second)", $"{frameMsPeak_:0.0} ms", frameMsPeak_, false, frameMsPeak_ > 50.0 ? 1 : 0);
@@ -675,10 +674,14 @@ namespace NatureFX.Tools {
 				load.Add("GPU", GpuStats.Name);
 				load.Add("GPU busy", $"{GpuStats.GpuPercent} %", -1.0, false, GpuStats.GpuPercent >= 97 ? 1 : 0);
 				load.Add("GPU memory controller busy", $"{GpuStats.MemoryPercent} %");
-				load.Add("clocks", $"{GpuStats.GraphicsMHz} MHz graphics (max {GpuStats.MaxGraphicsMHz}), {GpuStats.MemoryMHz} MHz memory, P{GpuStats.PState}");
+				if (!GpuStats.Details) {
+					load.Add("clocks, power, temperature", "not read (Developer: System, 'Read GPU clocks, power, temperature')");
+				} else {
+					load.Add("clocks", $"{GpuStats.GraphicsMHz} MHz graphics (max {GpuStats.MaxGraphicsMHz}), {GpuStats.MemoryMHz} MHz memory, P{GpuStats.PState}");
 				load.Add("power", $"{GpuStats.Watts:0} W of {GpuStats.WattLimit:0} W", -1.0, false, GpuStats.WattLimit > 0.0f && GpuStats.Watts > GpuStats.WattLimit * 0.95f ? 1 : 0);
 				load.Add("temperature", $"{GpuStats.Celsius} C, fan {GpuStats.FanPercent} %", -1.0, false, GpuStats.Celsius >= 83 ? 1 : 0);
 				load.Add("clocks held back by", GpuStats.ThrottleText, -1.0, false, (GpuStats.Throttle & 0xE4) != 0 ? 1 : 0);
+				}
 			} else {
 				load.Add("GPU counters", GpuStats.Problem.Length > 0 ? GpuStats.Problem : "not read yet");
 			}

@@ -213,6 +213,11 @@ namespace NatureFX.Tools {
 				"For the shader rebuild (kino/config/NatureFX/inventory). Costs a hitch and some hundred MB of video memory at each load.", true);
 
 			const string system = "System";
+			Switch(system, "read-cpu", "Read CPU counters (threads)", () => CpuStats.Threads, v => CpuStats.Threads = v,
+				"The debug page's counters are read on a thread of their own once a second. Switch them off one by one if the game hitches every second only while the page is open. Not saved.");
+			Switch(system, "read-gpu", "Read GPU counters (NVML: busy)", () => GpuStats.Counters, v => GpuStats.Counters = v);
+			Switch(system, "read-gpu-details", "Read GPU clocks, power, temperature (NVML)", () => GpuStats.Details, v => GpuStats.Details = v,
+				"Off by default: some drivers stall the GPU while these are read.");
 			SlowInfo(system, "capabilities", () => Capabilities.Describe());
 			SlowInfo(system, "shader bundle", () => $"{mod.Bundle.Shaders.Count} shaders, {mod.Replacer.ReplacedCount} materials replaced");
 			SlowInfo(system, "native engine", () => $"{NativeEngine.Info}; self test: {NativeEngine.TestResult}");

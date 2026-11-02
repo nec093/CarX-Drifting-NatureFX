@@ -53,6 +53,8 @@ namespace NatureFX.Tools {
 
 		// the main thread's id (taken on it), and the sampling thread: a snapshot of every thread of the machine to find
 		// the game's took the main thread a frame or more each second (a 117 ms hitch every second with the page open)
+		// the CPU counters on or off (the debug page's System group), to tell which reading makes a hitch
+		public static volatile bool Threads = true;
 		private static uint mainThread_;
 		private static System.Threading.Thread worker_;
 		private static long lastAsked_;
@@ -77,8 +79,11 @@ namespace NatureFX.Tools {
 		private static void Sample() {
 			while (DateTime.UtcNow.Ticks - System.Threading.Interlocked.Read(ref lastAsked_) < TimeSpan.TicksPerSecond * 5) {
 				try {
-					ReadSystem();
-					ReadThreads();
+					if (Threads) {
+						ReadSystem();
+						ReadThreads();
+					}
+					GpuStats.Read();
 				} catch (Exception e) {
 					failed_ = true;
 					Problem = $"{e.GetType().Name}: {e.Message}";

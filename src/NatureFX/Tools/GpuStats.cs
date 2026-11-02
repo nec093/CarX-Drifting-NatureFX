@@ -72,7 +72,16 @@ namespace NatureFX.Tools {
 			}
 		}
 
+		// Read from the debug page's sampling thread (CpuStats), never the main thread. Counters: off, nothing is asked of
+		// the driver. Details: clocks, power, temperature, fan and throttle reasons too; some of these make the driver
+		// stall the GPU's queue (a frame of 100 ms or more each time they are read), so they are off unless switched on.
+		public static volatile bool Counters = true;
+		public static volatile bool Details = false;
+
 		public static void Read() {
+			if (!Counters) {
+				return;
+			}
 			if (!tried_) {
 				Start();
 			}
@@ -83,6 +92,9 @@ namespace NatureFX.Tools {
 				if (GetUtilization(device_, out var u) == 0) {
 					GpuPercent = u.Gpu;
 					MemoryPercent = u.Memory;
+				}
+				if (!Details) {
+					return;
 				}
 				GetTemperature(device_, 0, out Celsius);
 				Watts = GetPower(device_, out uint mw) == 0 ? mw / 1000.0f : 0.0f;
