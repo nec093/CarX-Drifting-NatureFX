@@ -343,7 +343,9 @@ namespace NatureFX.Rendering {
 			if (cookies_.TryGetValue(key, out var tex) && tex != null) {
 				return tex;
 			}
-			const int size = 256;
+			// fine enough for a projector's cut-off and its colour fringe (a tenth of a degree: 256 texels over 80° drew it
+			// as a third of a degree, the fringe lost)
+			int size = type >= 2 ? 1024 : 512;
 			tex = new Texture2D(size, size, TextureFormat.RGBA32, true, true) {
 				name = $"NatureFX.LowBeam.{Types[type].Name}{(rightTraffic_ ? ".right" : "")}", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear, hideFlags = HideFlags.DontSave
 			};
@@ -360,7 +362,9 @@ namespace NatureFX.Rendering {
 					// the cut-off: flat on the right, rising on the left (kerb side) by 15° up to 1°
 					float cut = -0.6f + (h < 0.0f ? Mathf.Min(-h * Mathf.Tan(15.0f * Mathf.Deg2Rad), 1.6f) : 0.0f);
 					float below = cut - a; // degrees under the cut-off
-					float edge = Mathf.Clamp01(below / 0.5f + 0.5f); // its sharpness: a fraction of a degree
+					// its sharpness: a reflector's (halogen) about half a degree, a projector lens's (HID, LED) a quarter or less
+					float edgeWidth = type == 2 ? 0.25f : type == 3 ? 0.18f : 0.5f;
+					float edge = Mathf.Clamp01(below / edgeWidth + 0.5f);
 					// the peak as the regulations measure it (ECE R149 class B: the 75R / 50V points, 0.5 to 1.5° down, 25
 					// to 75 m ahead), falling off fast above it and slower below
 					float spread = a < -1.2f ? 2.2f : 1.2f;
@@ -375,23 +379,27 @@ namespace NatureFX.Rendering {
 					float value = Mathf.Lerp(0.015f, Mathf.Min(1.0f, hot + fill), edge);
 					var c = new Color(value, value, value, 1.0f);
 					if (type >= 2) {
-						// a projector lens (HID and LED) splits the cut-off's edge by colour: blue-violet just above it,
-						// a faint amber just under it (the blue bends more); xenon's stronger
-						float strength = type == 2 ? 0.3f : 0.18f;
-						float across = Mathf.Exp(-Mathf.Pow(h / 30.0f, 2.0f)) * strength;
-						float blue = Mathf.Exp(-Mathf.Pow((below + 0.12f) / 0.18f, 2.0f)) * across;
-						float amber = Mathf.Exp(-Mathf.Pow((below - 0.25f) / 0.2f, 2.0f)) * across;
-						float lit = Mathf.Max(value, 0.05f);
-						c = new Color(Mathf.Min(1.0f, value * (1.0f - blue * 0.6f) + amber * lit * 0.4f),
-						              Mathf.Min(1.0f, value * (1.0f - blue * 0.8f) + amber * lit * 0.15f),
-						              Mathf.Min(1.0f, value * (1.0f - amber * 0.5f) + blue * 0.35f), 1.0f);
+						// a projector lens (HID and LED) splits the cut-off's edge by colour (the blue bends more): a thin
+						// blue-violet line just above it, a faint amber one just under it, as bright as the beam is at the
+						// edge there (the hot spot's side bright, the far sides faint). Xenon's violet and strongest; an LED's
+						// a cooler cyan-blue, thinner and fainter
+						bool xenon = type == 2;
+						float level = Mathf.Min(1.0f, hot + fill);
+						float across = Mathf.Exp(-Mathf.Pow(h / 30.0f, 2.0f)) * level * (xenon ? 0.55f : 0.35f);
+						float blueWidth = xenon ? 0.13f : 0.09f;
+						float blue = Mathf.Exp(-Mathf.Pow((below + blueWidth * 0.8f) / blueWidth, 2.0f)) * across;
+						float amber = Mathf.Exp(-Mathf.Pow((below - 0.18f) / (xenon ? 0.14f : 0.1f), 2.0f)) * across * (xenon ? 0.5f : 0.3f);
+						var fringe = xenon ? new Color(0.55f, 0.35f, 1.0f) : new Color(0.3f, 0.6f, 1.0f);
+						c = new Color(Mathf.Min(1.0f, value * (1.0f - amber * 0.1f) + blue * fringe.r + amber * 0.9f),
+						              Mathf.Min(1.0f, value * (1.0f - amber * 0.35f) + blue * fringe.g + amber * 0.55f),
+						              Mathf.Min(1.0f, value * (1.0f - amber * 0.8f) + blue * fringe.b), 1.0f);
 					}
 					px[y * size + x] = c;
 				}
 			}
 			tex.SetPixels32(px);
 			tex.Apply(true, false);
-			cookies_[type] = tex;
+			cookies_[key] = tex;
 			return tex;
 		}
 
