@@ -831,7 +831,7 @@ namespace NatureFX {
 			Widgets.Info($"Now: {mod_.RT.ShadowStatus}");
 			Widgets.EndCard();
 
-			Widgets.BeginCard("Lamps and headlights", "The 32 point and spot lights nearest to the camera light what reflections and bounce light " +
+			Widgets.BeginCard("Lamps and headlights", "The 128 point and spot lights nearest to the camera light what reflections and bounce light " +
 			                                          "show, and cast soft ray traced shadows where the game gives them none. Mostly at night. DX12 only.");
 			Other(Widgets.Switch("Enable", S.RTLocalLights, v => S.RTLocalLights = v));
 			Widgets.BeginDependent(S.RTLocalLights);
