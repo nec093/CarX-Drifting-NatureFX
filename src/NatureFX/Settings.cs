@@ -60,6 +60,7 @@ namespace NatureFX {
 		// camera / filters
 		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral, 2 Filmic (GT-style custom curve), 3 None
 		public float WhiteBalance { get; set; }       // 0..1 how much the eye takes the light around as white (PostProcess)
+		public float NightDarkness { get; set; }      // 0..1 a dark scene seen dark, not lifted to grey (PostProcess.NightKey)
 
 		// --- added in config version 3: screen space path tracing ---
 
@@ -284,6 +285,7 @@ namespace NatureFX {
 		// camera / filters
 		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral, 2 Filmic (GT-style custom curve), 3 None
 		public float WhiteBalance { get; set; }       // 0..1 how much the eye takes the light around as white (PostProcess)
+		public float NightDarkness { get; set; }      // 0..1 a dark scene seen dark, not lifted to grey (PostProcess.NightKey)
 
 		// --- added in config version 3: screen space path tracing ---
 
@@ -865,6 +867,11 @@ namespace NatureFX {
 				// the shade as blue as under a real clear sky, not twice as blue
 				d.SkyLightSaturation = 0.5f;
 				d.ConfigVersion = 71;
+			}
+			if (d.ConfigVersion < 72) {
+				// the night seen dark, as the eye sees it
+				d.NightDarkness = 1.0f;
+				d.ConfigVersion = 72;
 			}
 		}
 

@@ -446,7 +446,8 @@ namespace NatureFX.Rendering {
 			if (s.ExposureMode == 1 && pass_.MeterFrame != lastMeter_ && pass_.MeterFrame >= 0) {
 				lastMeter_ = pass_.MeterFrame;
 				// real-world EVs (the sun is raised to real sunshine, Units): a moonlit night and a sunny day where they are
-				float target = Mathf.Clamp(MeteredEV(pass_.Meter), s.AutoExposureMin, Mathf.Max(s.AutoExposureMin + 0.5f, s.AutoExposureMax));
+				float metered = MeteredEV(pass_.Meter);
+				float target = Mathf.Clamp(metered + NightKey(metered, s.NightDarkness), s.AutoExposureMin, Mathf.Max(s.AutoExposureMin + 0.5f, s.AutoExposureMax));
 				// a flash (an afterfire, a spark, a lamp swinging past) is not adapted to: the eye closes only to light
 				// that stays, so going brighter takes the darkest reading of the last half second (the headlights' road
 				// went dark at every afterfire)
@@ -560,6 +561,21 @@ namespace NatureFX.Rendering {
 		}
 
 		public float WarmShift => warm_;
+
+		// The eye does not see a dark scene as a grey one: the darker the scene, the lower the brightness it settles on
+		// (Krawczyk et al. 2005, the key value a = 1.03 - 2 / (2 + log10(L + 1)) of the scene's mean luminance L, taken
+		// relative to daylight's). Stops darker than mid grey: about 0.3 at dusk light (EV 10), 2 under street lamps
+		// (EV 3), 3.6 at EV 0; times Settings.NightDarkness.
+		private static float NightKey(float ev, float strength) {
+			if (float.IsNaN(ev) || strength <= 0.0f) {
+				return 0.0f;
+			}
+			static float Key(float luminance) => 1.03f - 2.0f / (2.0f + Mathf.Log10(luminance + 1.0f));
+			float L = Mathf.Pow(2.0f, ev) * 12.5f / 100.0f;
+			float day = Key(2048.0f);
+			float key = Mathf.Max(Key(L), 0.02f);
+			return Mathf.Clamp(Mathf.Log(day / key, 2.0f), 0.0f, 5.0f) * Mathf.Clamp01(strength);
+		}
 
 		// the meter's cells as EV100 (K = 12.5): the brightness weighted to the centre, the darkest 30 % and the
 		// brightest 5 % left out (dark corners and the sun's disc would pull it)

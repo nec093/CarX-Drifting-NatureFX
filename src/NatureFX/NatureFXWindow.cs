@@ -867,6 +867,8 @@ namespace NatureFX {
 			Widgets.Info("Real-world EV: a sunny day is about 15, a lit street at night about 3, a moonlit night about -2. " +
 			             "Darkest scene is how far the eye opens up at night: lower lets a moonlit night show.");
 			Other(Widgets.Slider("Adaptation speed", S.AdaptationSpeed, 0.1f, 5, v => S.AdaptationSpeed = v));
+			Other(Widgets.Slider("Night seen dark", S.NightDarkness, 0, 1, v => S.NightDarkness = v, "0.00"));
+			Widgets.Info("The eye does not lift a dark scene to grey: about 2 stops darker under street lamps, 3.5 in a dark night. 0: every scene as bright as day.");
 			Widgets.EndDependent();
 			Other(Widgets.Slider("Exposure compensation", S.Exposure, -3, 3, v => S.Exposure = v, "0.00", " EV"));
 			var probe = mod_.Exposure;
