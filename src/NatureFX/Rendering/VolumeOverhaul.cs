@@ -163,6 +163,54 @@ namespace NatureFX.Rendering {
 		// sky itself is darkened to a night sky (it showed a white daytime photo at midnight).
 		private HDRISky engineSky_; // A3: the own engine's sky as HDRP's (AtmospherePass.SkyCube)
 
+		// While HDRP draws the own engine's sky (a cube map of it), the track's own sky textures are drawn by nothing:
+		// the physically based sky's star cube map (CarX's "starmap": 4096 a face, uncompressed, some 300 MB) and a
+		// photo sky. They go out of video memory (Resources.UnloadAsset: Unity loads such an asset back from disk when
+		// something uses it again, as HDRP does when the own sky is switched off).
+		private readonly System.Collections.Generic.HashSet<Texture> unloadedSky_ = new();
+		private float nextSkyUnload_;
+		public static string UnloadedSky { get; private set; } = "none";
+
+		private void UnloadTrackSkyTextures(Texture keep) {
+			if (Time.unscaledTime < nextSkyUnload_) {
+				return;
+			}
+			nextSkyUnload_ = Time.unscaledTime + 5.0f;
+			foreach (var v in Object.FindObjectsOfType<Volume>()) {
+				if (v == volume_ || v.sharedProfile == null) {
+					continue;
+				}
+				if (v.sharedProfile.TryGet<PhysicallyBasedSky>(out var pbs)) {
+					UnloadSky(pbs.spaceEmissionTexture.value, keep);
+				}
+				if (v.sharedProfile.TryGet<HDRISky>(out var hdri)) {
+					UnloadSky(hdri.hdriSky.value, keep);
+				}
+			}
+		}
+
+		private void UnloadSky(Texture t, Texture keep) {
+			if (t == null || t == keep || unloadedSky_.Contains(t)) {
+				return;
+			}
+			string name = t.name;
+			// only the track's assets (they can be loaded again); never one made at runtime
+			if (name.StartsWith("NFX_", System.StringComparison.Ordinal) || name.StartsWith("NatureFX", System.StringComparison.Ordinal) ||
+			    (t.hideFlags & HideFlags.DontSave) != 0) {
+				return;
+			}
+			try {
+				long mb = (long)t.width * t.height * (t is Cubemap ? 6 : 1) * 4 / 1048576;
+				Resources.UnloadAsset(t);
+				unloadedSky_.Add(t);
+				UnloadedSky = unloadedSky_.Count == 1 ? $"{name} ({t.GetType().Name} {t.width}x{t.height}, about {mb} MB)" : $"{UnloadedSky}, {name}";
+				Kino.Log.Info($"[NatureFX] Own sky: the track's sky texture {name} ({t.GetType().Name} {t.width}x{t.height}) taken out of video memory");
+			} catch (System.Exception e) {
+				unloadedSky_.Add(t); // not again
+				Kino.Log.Warning($"[NatureFX] Own sky: {name} could not be unloaded ({e.Message})");
+			}
+		}
+
 		public void UpdateSky(Light sun, bool timeOfDay, bool engineSky = false) {
 			if (sun == null || indirect_ == null) {
 				return;
@@ -197,6 +245,13 @@ namespace NatureFX.Rendering {
 				engineSky_.active = cube != null;
 				environment_.skyType.Override(want);
 				lastSkyElevation_ = float.NaN; // redraw the sky's lighting now
+			}
+			if (cube != null) {
+				UnloadTrackSkyTextures(cube);
+			} else if (unloadedSky_.Count > 0) {
+				// HDRP draws the track's sky again: Unity loads them back from disk as they are used
+				unloadedSky_.Clear();
+				UnloadedSky = "none (HDRP draws the track's sky)";
 			}
 			if (cube != null) {
 				engineSky_.hdriSky.Override(cube);

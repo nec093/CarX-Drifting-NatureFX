@@ -157,6 +157,7 @@ namespace NatureFX {
 		// --- added in config version 62: the debug page (Tools/DebugPage.cs) ---
 		public bool DebugPage { get; set; }                // a page with memory, timings and the log, for a browser on this PC
 		public int DebugPagePort { get; set; }             // its port on 127.0.0.1
+		public float TextureStreamingBudget { get; set; }  // MB for Unity's texture mip streaming; 0 the game's own
 		public bool MapEffects { get; set; }
 		// sky: HDRP volumetric clouds following the weather (and the map's cloud sea), the strength of their shadows,
 		// the blue haze over distant mountains (0 off)
@@ -368,6 +369,7 @@ namespace NatureFX {
 		// --- added in config version 62: the debug page (Tools/DebugPage.cs) ---
 		public bool DebugPage { get; set; }                // a page with memory, timings and the log, for a browser on this PC
 		public int DebugPagePort { get; set; }             // its port on 127.0.0.1
+		public float TextureStreamingBudget { get; set; }  // MB for Unity's texture mip streaming; 0 the game's own
 		public bool MapEffects { get; set; }
 		// sky: HDRP volumetric clouds following the weather (and the map's cloud sea), the strength of their shadows,
 		// the blue haze over distant mountains (0 off)

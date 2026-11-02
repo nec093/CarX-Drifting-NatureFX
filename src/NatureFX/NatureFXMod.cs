@@ -187,6 +187,7 @@ namespace NatureFX {
 			}
 			// the debug page (a browser on this PC): whether NatureFX is on or not
 			NatureFX.Tools.DebugPage.Update(this, s.DebugPage, s.DebugPagePort);
+			TextureBudget.Apply(s.TextureStreamingBudget);
 
 			// the map's [defaults] and weather zones at the camera, before the weather and wind read them
 			var cam = Camera.main;

@@ -1112,6 +1112,13 @@ namespace NatureFX {
 				"cheaper for the GPU close to the smoke; too small and the smoke around the camera looks cut. Not saved.");
 			Widgets.Slider("Largest puff on screen", TireSmoke.MaxScreenSize, 0.2f, 4.0f, v => TireSmoke.MaxScreenSize = v, "0.0", "x");
 			Widgets.EndCard();
+			Widgets.BeginCard("Video memory", "Unity's texture mip streaming budget: the game's (about 4 GB) keeps every texture's finest " +
+				"mips however small it is on screen. Lower, Unity drops the finest mips of the textures seen smallest (only textures " +
+				"streamed by the game). 0: the game's own value. The debug page shows the textures' memory.");
+			Other(Widgets.Slider("Texture streaming budget", S.TextureStreamingBudget, 0, 4096, v => S.TextureStreamingBudget = Mathf.Round(v / 64.0f) * 64.0f, "0", " MB"));
+			Widgets.Info($"Now: {TextureBudget.Status}");
+			Widgets.Info($"Own sky: track sky textures out of video memory: {VolumeOverhaul.UnloadedSky}");
+			Widgets.EndCard();
 			Widgets.BeginCard("3D fog lamps", "The 3D fog's lamps and headlights from lists per tile of its grid (only the lights that " +
 				"reach into it) instead of every light at every cell. The same picture: off only to compare the time " +
 				"(Ray tracing timings: fog volume). Not saved.");

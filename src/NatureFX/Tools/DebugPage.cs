@@ -231,8 +231,8 @@ namespace NatureFX.Tools {
 		}
 
 		// the game's own textures (materials, lightmaps) and every mesh: what makes up the "rest"
-		private static long gameTextures_, gameTexturesReadable_;
-		private static int gameTextureCount_;
+		private static long gameTextures_, gameTexturesReadable_, gameTexturesStreamed_;
+		private static int gameTextureCount_, gameTextureStreamedCount_;
 		private static List<(string Name, long Bytes)> bigGameTextures_ = new();
 		private static List<(string Format, long Bytes, int Count)> gameTextureFormats_ = new();
 		private static long meshes_, rtMeshes_, natureMeshes_;
@@ -257,8 +257,8 @@ namespace NatureFX.Tools {
 			var big = new List<(string, long)>();
 			var bigGame = new List<(string, long)>();
 			var formats = new Dictionary<string, (long Bytes, int Count)>();
-			long other = 0, game = 0, readable = 0;
-			int otherCount = 0, gameCount = 0;
+			long other = 0, game = 0, readable = 0, streamed = 0;
+			int otherCount = 0, gameCount = 0, streamedCount = 0;
 			foreach (var t in Resources.FindObjectsOfTypeAll<Texture>()) {
 				if (t == null) {
 					continue;
@@ -286,6 +286,10 @@ namespace NatureFX.Tools {
 					}
 					game += bytes;
 					++gameCount;
+					if (t is Texture2D ts && ts.streamingMipmaps) {
+						streamed += bytes;
+						++streamedCount;
+					}
 					if (t.isReadable) {
 						readable += bytes;
 					}
@@ -316,6 +320,8 @@ namespace NatureFX.Tools {
 			gameTextures_ = game;
 			gameTexturesReadable_ = readable;
 			gameTextureCount_ = gameCount;
+			gameTexturesStreamed_ = streamed;
+			gameTextureStreamedCount_ = streamedCount;
 			bigGameTextures_ = bigGame.Count > 30 ? bigGame.GetRange(0, 30) : bigGame;
 			gameTextureFormats_ = formatList.Count > 12 ? formatList.GetRange(0, 12) : formatList;
 
@@ -424,6 +430,18 @@ namespace NatureFX.Tools {
 				var sh = stack.GetComponent<UnityEngine.Rendering.HighDefinition.HDShadowSettings>();
 				return sh == null ? "-" : $"{sh.maxShadowDistance.value:0} m, {sh.cascadeShadowSplitCount.value} cascades";
 			});
+			// lights that still have HDRP shadow maps (the cascade atlas is there while a directional one casts)
+			try {
+				var shadowed = new List<string>();
+				foreach (var l in UnityEngine.Object.FindObjectsByType<Light>(FindObjectsInactive.Exclude, FindObjectsSortMode.None)) {
+					if (l.isActiveAndEnabled && l.type == LightType.Directional && l.shadows != LightShadows.None) {
+						shadowed.Add($"{l.name} ({l.intensity:0.##})");
+					}
+				}
+				sec.Add("directional lights with shadow maps", shadowed.Count > 0 ? string.Join(", ", shadowed) : "none", -1.0, false, shadowed.Count > 0 ? 1 : 0);
+			} catch (Exception e) {
+				sec.Add("directional lights with shadow maps", $"({e.GetType().Name})");
+			}
 			sec.Try("quality: texture mip limit", () => $"{QualitySettings.globalTextureMipmapLimit} (0 full size)");
 			sec.Try("quality: mip streaming", () => QualitySettings.streamingMipmapsActive ? $"on, budget {QualitySettings.streamingMipmapsMemoryBudget:0} MB" : "off");
 		}
@@ -617,6 +635,9 @@ namespace NatureFX.Tools {
 			var gameTex = new Section("game-textures", "Game textures (GPU copies; mip streamed ones as loaded)");
 			gameTex.Add($"all ({gameTextureCount_})", Mb(gameTextures_), gameTextures_);
 			gameTex.Add("of them readable (a CPU copy too)", Mb(gameTexturesReadable_), gameTexturesReadable_, true);
+			gameTex.Add($"of them mip streamed ({gameTextureStreamedCount_})", Mb(gameTexturesStreamed_), gameTexturesStreamed_, true);
+			gameTex.Try("Unity's streaming", () => TextureBudget.Status);
+			gameTex.Try("own sky: out of video memory", () => VolumeOverhaul.UnloadedSky);
 			foreach (var (format, bytes, count) in gameTextureFormats_) {
 				gameTex.Add($"format {format} ({count})", Mb(bytes), bytes, true);
 			}

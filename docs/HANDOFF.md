@@ -162,6 +162,9 @@
 - **頂点データの共有の結果（ユーザー実測）**: geometry data pool 1383 → 205 MB、GPU 6422 → 5248 MB（同じマップ・1916x997）。
 - **VRAM 削減の続き（11-02、未ビルド・未確認、.ksm と DLL）**: NRD のとき自前フィルターのデノイズ・履歴を確保しない（RTShadowPass `Accumulation.EnsureFilter/DropFilter`、RTReflectionPass `EnsureFilterTargets`。見込み −90 MB）、3D 霧の Surface を必要量だけ（−14 MB）、ランプの影・ランプマスクは自分の Surface を持たない（−15 MB）、揺れる葉の揺らした頂点を `g_windPool`、BLAS を `g_blasPool` に置き圧縮（更新はそのまま）。見送り: 星のキューブマップ（点の大きさが変わる）、DBufferNone 系（HDRP が Load で読むので 1x1 にできない）、TrackMap（タイヤ痕の細かさと相談）。
 
+- **ゲーム側の VRAM（11-02 実測、test_map、1916x997）**: ゲームのテクスチャ 1880 MB（うち CarX の `starmap` キューブマップ 4096、無圧縮 RGB8 で 288 MB 以上: 独自の空の間は誰も描かない）、メッシュ 214 MB（`NFX_RT_*` は 0.5 MB: 重複なし）、HDRP の描画ターゲット 430 MB（クッキーのアトラス 4096 で 85 MB、カスケード影 3072 で 36 MB、物理ベースの空のテーブル 48 MB）。HDRP の SSR/SSAO/SSGI/体積雲/ブルームは Volume でオフ（無駄なし）。mip ストリーミングはオン、予算 4198 MB。
+- **対応（未ビルド・未確認、.ksm のみ）**: 独自の空の間、トラックの Volume の物理ベースの空の space emission と HDRI のテクスチャを `Resources.UnloadAsset`（`VolumeOverhaul.UnloadTrackSkyTextures`、独自の空をやめれば Unity がディスクから読み直す）。設定 `TextureStreamingBudget`（F8 > Developer > Video memory、0 はゲームの値、`TextureBudget.cs`）。デバッグページに mip ストリーミングの量・Unity の統計・降ろした空のテクスチャ・影を持つ平行光源。
+
 ## 1. インストール済みのもの（ゲームに入っている）
 
 | 物 | 状態 |
