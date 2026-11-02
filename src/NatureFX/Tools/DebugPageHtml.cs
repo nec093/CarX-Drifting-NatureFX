@@ -20,6 +20,9 @@ body { font:12px/1.4 Consolas, 'Cascadia Mono', ui-monospace, Menlo, monospace; 
 #bar { grid-column:1 / 3; position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--rule); padding:6px 12px; display:flex; flex-wrap:wrap; gap:4px 16px; z-index:2; }
 #bar b { font-weight:normal; color:var(--dim); }
 #bar a { color:var(--dim); }
+#bar { align-items:center; }
+#bar button { padding:0 8px; line-height:16px; }
+#pause.on { color:var(--bg); background:var(--warn); border-color:var(--warn); }
 #tabs { border-right:1px solid var(--rule); padding:8px 0; position:sticky; top:31px; align-self:start; }
 #tabs button { display:block; width:100%; text-align:left; border:0; background:none; color:var(--dim); padding:4px 12px; font:inherit; cursor:pointer; }
 #tabs button:hover { color:var(--fg); }
@@ -84,7 +87,7 @@ pre { margin:0; padding:4px; height:calc(100vh - 120px); overflow:auto; border:1
   <span><b>vram</b> <span id='gpu'>-</span></span>
   <span><b>nfx</b> <span id='ours'>-</span></span>
   <span><b>t</b> <span id='t'>-</span></span>
-  <span><label><input type='checkbox' id='pause'> pause</label></span>
+  <button id='pause' title='stop reading the game (the page keeps what it has)'>pause</button>
   <span><a href='/stats.json' target='_blank'>stats.json</a></span>
 </div>
 <nav id='tabs'></nav>
@@ -125,7 +128,9 @@ pre { margin:0; padding:4px; height:calc(100vh - 120px); overflow:auto; border:1
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', ""'"": '&#39;' }[c]));
-let hist = [], logText = '', built = '', marks = [], ctlBuilt = '';
+let hist = [], logText = '', built = '', marks = [], ctlBuilt = '', paused = false;
+// the samples: one a second; { off: true } where the game did not answer (drawn as a red band, the lines broken there)
+const live = () => hist.filter(p => !p.off);
 
 // the tabs, and which tab each of the game's sections goes to (anything new: scene)
 const TABS = [['overview', 'overview'], ['performance', 'performance'], ['memory', 'memory'], ['scene', 'scene'], ['developer', 'developer'], ['log', 'log']];
@@ -265,7 +270,7 @@ function chart() {
   g.clearRect(0, 0, w, h);
   $('range').textContent = hist.length ? `${hist.length} s` : '-';
   if (hist.length < 2) return;
-  const top = Math.max(...hist.map(p => Math.max(p.u, p.b))) * 1.05;
+  const top = Math.max(1, ...live().map(p => Math.max(p.u, p.b))) * 1.05;
   const step = Math.pow(10, Math.floor(Math.log10(top / 4)));
   const grid = [1, 2, 5].map(m => m * step).find(s => top / s <= 6) || step * 10;
   g.font = `${10 * r}px Consolas, monospace`; g.lineWidth = 1;
@@ -277,18 +282,31 @@ function chart() {
   const x = i => i / (hist.length - 1) * w, y = v => h - v / top * h;
   // the events' times, as numbered lines
   g.fillStyle = col('--dim'); g.strokeStyle = col('--dim'); g.lineWidth = 1;
-  const t0 = hist[0].t, t1 = hist[hist.length - 1].t;
+  const lv = live(); if (lv.length < 2) return;
+  const t0 = lv[0].t, t1 = lv[lv.length - 1].t;
   marks.forEach((m, i) => {
     if (m.t < t0 || m.t > t1 || t1 <= t0) return;
     const mx = (m.t - t0) / (t1 - t0) * w;
     g.setLineDash([3 * r, 3 * r]); g.beginPath(); g.moveTo(mx, 0); g.lineTo(mx, h); g.stroke(); g.setLineDash([]);
     g.fillText(String(i + 1), mx + 2 * r, 24 * r + (i % 3) * 11 * r);
   });
+  gaps(g, w, h, x, col);
   for (const [k, n] of [['b', '--c'], ['u', '--a'], ['n', '--b']]) {
     g.strokeStyle = col(n); g.lineWidth = 1.5 * r; g.beginPath();
-    hist.forEach((p, i) => i ? g.lineTo(x(i), y(p[k])) : g.moveTo(x(i), y(p[k])));
+    let pen = false;
+    hist.forEach((p, i) => { if (p.off) { pen = false; return; } pen ? g.lineTo(x(i), y(p[k])) : g.moveTo(x(i), y(p[k])); pen = true; });
     g.stroke();
   }
+}
+
+// the seconds the game did not answer: a red band each, 'no connection' over the first of a run
+function gaps(g, w, h, x, col) {
+  const r = devicePixelRatio || 1, bw = Math.max(2 * r, w / Math.max(1, hist.length - 1));
+  g.save(); g.fillStyle = col('--bad'); g.globalAlpha = 0.25;
+  hist.forEach((p, i) => { if (p.off) g.fillRect(x(i) - bw / 2, 0, bw, h); });
+  g.globalAlpha = 1; g.font = `${10 * r}px Consolas, monospace`;
+  hist.forEach((p, i) => { if (p.off && (i === 0 || !hist[i - 1].off)) g.fillText('no connection', x(i) + 3 * r, h - 4 * r); });
+  g.restore();
 }
 
 function chart2() {
@@ -298,7 +316,7 @@ function chart2() {
   const css = getComputedStyle(document.documentElement), col = n => css.getPropertyValue(n).trim();
   g.clearRect(0, 0, w, h);
   if (hist.length < 2) return;
-  const top = Math.max(16.7, ...hist.map(p => Math.max(p.f, p.e))) * 1.1;
+  const top = Math.max(16.7, ...live().map(p => Math.max(p.f, p.e))) * 1.1;
   g.font = `${10 * r}px Consolas, monospace`; g.lineWidth = 1;
   for (const v of [8.3, 16.7, 33.3, 50, 100].filter(v => v <= top)) {
     const y = h - v / top * h;
@@ -306,10 +324,12 @@ function chart2() {
     g.fillStyle = col('--dim'); g.fillText(`${v} ms`, 3 * r, y - 2 * r);
   }
   const x = i => i / (hist.length - 1) * w;
+  gaps(g, w, h, x, col);
   const line = (key, color, scale) => {
     g.strokeStyle = col(color); g.lineWidth = 1.5 * r; g.beginPath();
     let started = false;
     hist.forEach((p, i) => {
+      if (p.off) { started = false; return; }
       const v = p[key];
       if (v === undefined || v < 0) return;
       const y = h - scale(v) * h;
@@ -334,9 +354,14 @@ function showLog() {
 }
 
 async function poll() {
-  if (!$('pause').checked) {
+  if (!paused) {
     try { const r = await fetch('/stats.json', { cache: 'no-store' }); show(await r.json()); }
-    catch (e) { $('conn').innerHTML = `<span class='err'>[no connection]</span>`; }
+    catch (e) {
+      $('conn').innerHTML = `<span class='err'>[no connection]</span>`;
+      hist.push({ off: true });
+      if (hist.length > 3600) hist.shift();
+      chart(); chart2();
+    }
   }
   setTimeout(poll, 1000);
 }
@@ -353,7 +378,8 @@ $('filter').oninput = showLog;
 addEventListener('resize', () => { chart(); chart2(); });
 poll();
 loadLog();
-setInterval(() => { if (!$('pause').checked) loadLog(); }, 5000);
+setInterval(() => { if (!paused) loadLog(); }, 5000);
+$('pause').onclick = () => { paused = !paused; $('pause').classList.toggle('on', paused); $('pause').textContent = paused ? 'paused' : 'pause'; };
 </script>
 </body>
 </html>
