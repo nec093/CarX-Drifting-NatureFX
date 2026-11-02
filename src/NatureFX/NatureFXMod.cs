@@ -158,6 +158,7 @@ namespace NatureFX {
 			Finish.RestoreAll();
 			PaintedShadows.ShowAll();
 			Headlights.Restore();
+			Headlights.Unhook();
 			Headlights.DestroyCookies();
 			Tracks.Destroy();
 			CarRainFx.Destroy();

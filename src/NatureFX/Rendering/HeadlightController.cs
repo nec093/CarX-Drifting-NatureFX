@@ -69,6 +69,56 @@ namespace NatureFX.Rendering {
 
 		public string Status { get; private set; } = "the game's own";
 
+		// ---- the game sets its headlights again every frame while the car is driven, after NatureFX's Update (its own
+		// LateUpdate): the frame was drawn with the game's beam. Just before HDRP renders (every script done), ours is put
+		// back on each lamp the game changed.
+		private bool hooked_;
+		private int lateType_;
+		private float lateAim_;
+		private int lateFrame_ = -1;
+		private int lateFixes_;
+
+		private void Hook() {
+			if (!hooked_) {
+				hooked_ = true;
+				UnityEngine.Rendering.RenderPipelineManager.beginContextRendering += BeforeRendering;
+			}
+		}
+
+		public void Unhook() {
+			if (hooked_) {
+				hooked_ = false;
+				UnityEngine.Rendering.RenderPipelineManager.beginContextRendering -= BeforeRendering;
+			}
+		}
+
+		private void BeforeRendering(UnityEngine.Rendering.ScriptableRenderContext context, List<Camera> cameras) {
+			if (lateType_ == 0 || lateFrame_ == Time.frameCount) {
+				return;
+			}
+			lateFrame_ = Time.frameCount;
+			var player = PlayerCar();
+			foreach (var kv in originals_) {
+				var hd = kv.Key;
+				if (hd == null) {
+					continue;
+				}
+				var light = hd.GetComponent<Light>();
+				if (light == null || !front_.Contains(light)) {
+					continue;
+				}
+				cars_.TryGetValue(light, out var car);
+				bool beamHigh = highBeam_ && car != null && car == player;
+				if (!Holds(light, beamHigh ? HighCookie(lateType_) : Cookie(lateType_), lateType_)) {
+					ApplyBeam(light, hd, car, lateType_, beamHigh, lateAim_);
+					if (lateFixes_ < 5) {
+						++lateFixes_;
+						KSL.API.Kino.Log.Info($"[NatureFX] Headlights: '{Path(light.transform)}' changed by the game after NatureFX's update; ours put back before rendering");
+					}
+				}
+			}
+		}
+
 		// retro: pass the headlights to the shaders for the map's retroreflective materials
 		public void Update(ISettings s, bool retro) {
 			float shafts = s.Enabled ? s.HeadlightShafts : 0.0f;
@@ -96,6 +146,11 @@ namespace NatureFX.Rendering {
 			appliedPlayer_ = player;
 			appliedHigh_ = high;
 
+			lateType_ = type;
+			lateAim_ = s.HeadlightAim;
+			if (type != 0) {
+				Hook();
+			}
 			int front = 0;
 			foreach (var kv in originals_) {
 				var hd = kv.Key;
@@ -372,6 +427,7 @@ namespace NatureFX.Rendering {
 		}
 
 		public void Restore() {
+			lateType_ = 0;
 			foreach (var kv in originals_) {
 				if (kv.Key == null) {
 					continue;
