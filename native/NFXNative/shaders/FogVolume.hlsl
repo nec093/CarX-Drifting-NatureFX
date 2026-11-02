@@ -182,7 +182,10 @@ NFX_ENTRY(id)
                 {
                     float a = saturate(dot(-L, LightDir[i].xyz) * LightDir[i].w + LightSpot[i].x);
                     // a headlight's cut-off in the mist too (its beam does not light the air above the road)
-                    spot = a * a * NFX_BeamPattern(LightSpot[i].z, LightDir[i].xyz, -L, LightSpot[i].w);
+                    // the cut-off as soft as this cell is wide seen from the lamp (a staircase along the beam's edge)
+                    // (a cell across: 160 x 90 over the view, about z / 60, twice that for the trilinear lookup)
+                    float soft = degrees(z * 0.033 * rsqrt(max(raw, 1e-4)));
+                    spot = a * a * NFX_BeamPatternSoft(LightSpot[i].z, LightDir[i].xyz, -L, LightSpot[i].w, soft);
                 }
                 // the tyre smoke between the mist and the lamp: the headlights' beams cut by a cloud of smoke
                 spot *= SmokeTransmittance(p, LightPos[i].xyz);

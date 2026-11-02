@@ -58,7 +58,9 @@ float NFX_SmokeTransmittance(float3 positionAWS)
 // to 1° up, the hot spot under it a little to the left, a wide fill, 1.5 % above), 3 the same mirrored (driving on the
 // right), 2 the high beam (gathered on the axis). forward: the lamp's axis; dir: from the lamp
 // to the point; roll: the lamp's turn about its axis from level (radians: a car leaning in a drift or on a bank).
-float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
+// soft: degrees the cut-off is softened by (the 3D fog: its cells are wider than the cut-off's half degree, and a
+// sharp one stepped from cell to cell, a staircase along the beam's edge)
+float NFX_BeamPatternSoft(float kind, float3 forward, float3 dir, float roll, float soft)
 {
     if (kind < 0.5)
         return 1.0;
@@ -83,11 +85,16 @@ float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
     }
     float cut = -0.6 + (h < 0.0 ? min(-h * 0.267949, 1.6) : 0.0);
     float below = cut - a;
-    float edge = saturate(below / 0.5 + 0.5);
+    float edge = saturate(below / (0.5 + soft) + 0.5);
     float spread = a < -1.2 ? 2.2 : 1.2; // the peak 1.2° down: slower below it than above
     float hotSpot = exp(-((h + 1.5) / 9.0) * ((h + 1.5) / 9.0) - ((a + 1.2) / spread) * ((a + 1.2) / spread));
     float fill = exp(-(h / 22.0) * (h / 22.0)) * exp(-max(0.0, below - 1.0) / 2.0) * 0.25 * saturate((38.0 - sqrt(h * h + a * a)) / 8.0);
     return lerp(0.015, min(1.0, hotSpot + fill), edge);
+}
+
+float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
+{
+    return NFX_BeamPatternSoft(kind, forward, dir, roll, 0.0);
 }
 
 // The tyre smoke's density in 3D (TireSmoke.UpdateSmokeVolume): extinction (1/m) on a 48 x 24 x 48 grid of 1 m cells
