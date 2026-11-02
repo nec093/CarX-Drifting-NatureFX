@@ -278,10 +278,9 @@ namespace NatureFX.Rendering {
 		}
 		private readonly HashSet<Light> loggedLights_ = new();
 
-		// The measurement overlay (Settings.RTOverlay): a panel in the window's style at the top left with the frame
-		// rate, GPU time per stage, rays, memory, the scene, which RT features are on, the denoisers and the passes'
-		// state. Read twice a second (steady enough to read), drawn every repaint.
-		private class OverlayData {
+		// The measurements for the debug page (Tools/DebugPage.cs; once the on-screen overlay): the frame rate, GPU time
+		// per stage, rays, memory, the scene, which RT features are on, the denoisers and the passes' state.
+		public class DebugStats {
 			public float Fps, FrameMs;
 			public string Mode = "";
 			public readonly List<(string Label, string Value, bool Part)> Timings = new();
@@ -292,15 +291,8 @@ namespace NatureFX.Rendering {
 			public readonly List<(string Name, string State, bool Ok)> Denoisers = new();
 			public readonly List<(string Name, string State)> Passes = new();
 		}
-		private OverlayData overlay_;
-		private float nextOverlay_;
-		private GUIStyle overlayTitle_, overlayFps_, overlayLabel_, overlayValue_, overlaySection_, overlayChip_, overlayNote_;
-
-		private const float OverlayWidth = 400.0f;
-		private const float OverlayPad = 12.0f;
-
-		private OverlayData ReadOverlay() {
-			var d = new OverlayData();
+		public DebugStats ReadStats() {
+			var d = new DebugStats();
 			d.Fps = 1.0f / Mathf.Max(Time.smoothDeltaTime, 1e-4f);
 			d.FrameMs = Time.smoothDeltaTime * 1000.0f;
 			d.Mode = NativeEngine.ModeName + (NativeEngine.Dxr12SunActive ? " + DXR 1.2 sun" : "");
@@ -358,156 +350,6 @@ namespace NatureFX.Rendering {
 			d.Passes.Add(("reflections", ReflectionStatus));
 			d.Passes.Add(("glass", GlassStatus));
 			return d;
-		}
-
-		private void EnsureOverlayStyles() {
-			if (overlayLabel_ != null) {
-				return;
-			}
-			var font = Theme.Value != null ? Theme.Value.font : null;
-			GUIStyle Make(int size, FontStyle style, Color color, TextAnchor anchor = TextAnchor.MiddleLeft, bool wrap = false) {
-				var s = new GUIStyle(GUI.skin.label) { font = font, fontSize = size, fontStyle = style, alignment = anchor, wordWrap = wrap, richText = false,
-				                                       padding = new RectOffset(0, 0, 0, 0), margin = new RectOffset(0, 0, 0, 0) };
-				s.normal.textColor = color;
-				return s;
-			}
-			overlayTitle_ = Make(15, FontStyle.Bold, Theme.Foreground);
-			overlayFps_ = Make(20, FontStyle.Bold, Theme.Accent, TextAnchor.MiddleRight);
-			overlayLabel_ = Make(11, FontStyle.Normal, Theme.Muted);
-			overlayValue_ = Make(11, FontStyle.Normal, Theme.Foreground, TextAnchor.MiddleRight);
-			overlaySection_ = Make(10, FontStyle.Bold, new Color(Theme.Accent.r, Theme.Accent.g, Theme.Accent.b, 0.8f));
-			overlayChip_ = Make(10, FontStyle.Normal, Theme.Foreground, TextAnchor.MiddleCenter);
-			overlayNote_ = Make(10, FontStyle.Normal, Theme.Muted, TextAnchor.UpperLeft, true);
-		}
-
-		public void DrawOverlay() {
-			if (Event.current.type != EventType.Repaint) {
-				return;
-			}
-			if (overlay_ == null || Time.unscaledTime >= nextOverlay_) {
-				nextOverlay_ = Time.unscaledTime + 0.5f;
-				overlay_ = ReadOverlay();
-			}
-			Theme.Ensure();
-			EnsureOverlayStyles();
-			// measured first (no drawing), then the panel behind, then the contents
-			float height = LayoutOverlay(overlay_, 10.0f, 10.0f, false);
-			var panel = new Rect(10.0f, 10.0f, OverlayWidth, height);
-			Theme.Fill(new Rect(panel.x + 2.0f, panel.y + 3.0f, panel.width, panel.height), new Color(0.0f, 0.0f, 0.0f, 0.25f), 10.0f); // shadow
-			Theme.Fill(panel, new Color(0.075f, 0.085f, 0.105f, 0.86f), 10.0f);
-			Theme.Fill(new Rect(panel.x, panel.y + 10.0f, 3.0f, panel.height - 20.0f), Theme.Accent, 1.5f);
-			LayoutOverlay(overlay_, 10.0f, 10.0f, true);
-		}
-
-		// Lays the overlay out from (x, y); draws it when draw is set. Returns its height.
-		private float LayoutOverlay(OverlayData d, float x, float y, bool draw) {
-			float left = x + OverlayPad + 4.0f;
-			float width = OverlayWidth - 2.0f * OverlayPad - 4.0f;
-			float top = y;
-			y += OverlayPad;
-
-			// header: title and mode, the frame rate on the right, coloured by how smooth it is
-			if (draw) {
-				GUI.Label(new Rect(left, y, width, 20.0f), "NatureFX RT", overlayTitle_);
-				var fpsColor = d.Fps >= 55.0f ? Theme.Accent : d.Fps >= 30.0f ? Theme.Warning : new Color(1.0f, 0.42f, 0.42f);
-				overlayFps_.normal.textColor = fpsColor;
-				GUI.Label(new Rect(left, y - 2.0f, width, 24.0f), $"{d.Fps:0}", overlayFps_);
-			}
-			y += 20.0f;
-			if (draw) {
-				GUI.Label(new Rect(left, y, width, 14.0f), d.Mode, overlayLabel_);
-				GUI.Label(new Rect(left, y, width, 14.0f), $"fps · {d.FrameMs:0.0} ms", overlayValue_);
-			}
-			y += 18.0f;
-
-			y = Section(draw, "PERFORMANCE", left, width, y);
-			if (d.TimingNote != null) {
-				y = Note(draw, d.TimingNote, left, width, y);
-			}
-			foreach (var (label, value, part) in d.Timings) {
-				y = Row(draw, (part ? "   " : "") + label, value, left, width, y);
-			}
-			if (d.MemoryBudget > 0) {
-				y = Row(draw, "GPU memory", $"{d.MemoryUsed:N0} / {d.MemoryBudget:N0} MB", left, width, y);
-				float share = Mathf.Clamp01((float)d.MemoryUsed / d.MemoryBudget);
-				if (draw) {
-					Theme.Fill(new Rect(left, y + 1.0f, width, 4.0f), new Color(1.0f, 1.0f, 1.0f, 0.08f), 2.0f);
-					Theme.Fill(new Rect(left, y + 1.0f, width * share, 4.0f), share > 0.85f ? Theme.Warning : Theme.Accent, 2.0f);
-				}
-				y += 9.0f;
-			}
-
-			y = Section(draw, "SCENE", left, width, y);
-			foreach (var (label, value) in d.Scene) {
-				y = label.Length > 0 ? Row(draw, label, value, left, width, y) : Note(draw, value, left, width, y, Theme.Foreground);
-			}
-
-			y = Section(draw, "FEATURES", left, width, y);
-			y = Chips(draw, d.Features, left, width, y);
-
-			y = Section(draw, "DENOISER", left, width, y);
-			foreach (var (name, state, ok) in d.Denoisers) {
-				if (draw) {
-					Theme.Fill(new Rect(left, y + 5.0f, 6.0f, 6.0f), ok ? Theme.Accent : Theme.Warning, 3.0f);
-				}
-				y = Row(draw, "    " + name, state, left, width, y);
-			}
-
-			y = Section(draw, "PASSES", left, width, y);
-			foreach (var (name, state) in d.Passes) {
-				y = Note(draw, $"{name}: {state}", left, width, y);
-			}
-			return y + OverlayPad - 4.0f - top;
-		}
-
-		private float Section(bool draw, string title, float x, float width, float y) {
-			y += 6.0f;
-			if (draw) {
-				GUI.Label(new Rect(x, y, width, 14.0f), title, overlaySection_);
-				float textWidth = overlaySection_.CalcSize(new GUIContent(title)).x;
-				Theme.Fill(new Rect(x + textWidth + 8.0f, y + 7.0f, width - textWidth - 8.0f, 1.0f), new Color(1.0f, 1.0f, 1.0f, 0.08f), 0.0f);
-			}
-			return y + 16.0f;
-		}
-
-		private float Row(bool draw, string label, string value, float x, float width, float y) {
-			if (draw) {
-				GUI.Label(new Rect(x, y, width * 0.5f, 16.0f), label, overlayLabel_);
-				GUI.Label(new Rect(x + width * 0.3f, y, width * 0.7f, 16.0f), value, overlayValue_);
-			}
-			return y + 16.0f;
-		}
-
-		private float Note(bool draw, string text, float x, float width, float y, Color? color = null) {
-			float h = overlayNote_.CalcHeight(new GUIContent(text), width);
-			if (draw) {
-				var previous = overlayNote_.normal.textColor;
-				overlayNote_.normal.textColor = color ?? Theme.Muted;
-				GUI.Label(new Rect(x, y, width, h), text, overlayNote_);
-				overlayNote_.normal.textColor = previous;
-			}
-			return y + h + 2.0f;
-		}
-
-		// rounded chips, wrapping onto new lines: on ones tinted with the accent, off ones faint
-		private float Chips(bool draw, List<(string Name, bool On)> chips, float x, float width, float y) {
-			float cx = x;
-			const float h = 18.0f;
-			foreach (var (name, on) in chips) {
-				float w = overlayChip_.CalcSize(new GUIContent(name)).x + 16.0f;
-				if (cx + w > x + width && cx > x) {
-					cx = x;
-					y += h + 4.0f;
-				}
-				if (draw) {
-					var r = new Rect(cx, y, w, h);
-					Theme.Fill(r, on ? new Color(Theme.Accent.r, Theme.Accent.g, Theme.Accent.b, 0.22f) : new Color(1.0f, 1.0f, 1.0f, 0.08f), h * 0.5f);
-					overlayChip_.normal.textColor = on ? Theme.Accent : Theme.Muted;
-					GUI.Label(r, name, overlayChip_);
-				}
-				cx += w + 5.0f;
-			}
-			return y + h + 4.0f;
 		}
 
 		// Point and spot lights lose their shadow maps while the traced lamp shadows run (LocalLights then traces them),

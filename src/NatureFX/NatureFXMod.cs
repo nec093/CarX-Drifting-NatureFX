@@ -186,7 +186,7 @@ namespace NatureFX {
 				return;
 			}
 			// the debug page (a browser on this PC): whether NatureFX is on or not
-			NatureFX.Tools.DebugPage.Update(s.DebugPage, s.DebugPagePort);
+			NatureFX.Tools.DebugPage.Update(this, s.DebugPage, s.DebugPagePort);
 
 			// the map's [defaults] and weather zones at the camera, before the weather and wind read them
 			var cam = Camera.main;
@@ -312,9 +312,6 @@ namespace NatureFX {
 					"light" => Lights.StatusOf(m),
 					_ => null
 				});
-			}
-			if (Settings.Data.Enabled && Settings.Data.RTOverlay && Event.current.type == EventType.Repaint) {
-				RT.DrawOverlay();
 			}
 			window_?.OnGUI();
 		}

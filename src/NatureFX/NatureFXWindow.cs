@@ -1049,8 +1049,7 @@ namespace NatureFX {
 				: denoiser == 1 ? "Blurs where the rays disagree and keeps detail where they agree (sharper contact shadows, less smear)."
 				: "NVIDIA Real-Time Denoisers: SIGMA for the sun shadows, REBLUR for the ambient light and GI (at quarter resolution " +
 				  $"without the frame to frame offset), the lamp shadows and the reflections. Now: {NativeEngine.NrdStatus}");
-			Other(Widgets.Switch("Measurement overlay", S.RTOverlay, v => S.RTOverlay = v,
-				"GPU time of each ray traced stage, rays per frame, lamps, scene size and GPU memory, at the top left of the screen."));
+			Widgets.Info("Timings, rays, lamps, the scene and GPU memory: the debug page (Developer > Debug page, in a browser).");
 			if (backend == 1) {
 				Other(Widgets.Switch("Sun shadows on DXR 1.2 (test)", S.RTDxr12Sun, v => S.RTDxr12Sun = v,
 					"Stage 1 of the move to DXR 1.2: the sun shadows are traced on a Shader Model 6.9 device next to the game's. Same look; compare the frame rate."));

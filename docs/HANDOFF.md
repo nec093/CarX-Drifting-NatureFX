@@ -154,6 +154,7 @@
 - **5 の続き 2（11-02、未ビルド・未確認、.ksm と DLL）**: AddGeometryData のメッシュ（車体など CPU で読めるメッシュ）もデータプールへ。新しいマップの読み込み（Single）ではエンジンのシーンを丸ごと作り直す（ClearScene）。確認: マップ切替の直後に F8 の geometries の数が前のマップの分だけ増えない、マップを何往復しても GPU memory と BLAS / data pool が増え続けない、マップ読み込みの時間（共有メッシュの作り直しで数百 ms 増える見込み）、昼夜切替でひっかからない、車体の反射・影が前と同じ。
 
 - **デバッグページ（11-02、未ビルド・未確認、.ksm と DLL）**: F8 > Developer の「Debug page」をオンにすると `http://127.0.0.1:8765/`（設定 `DebugPagePort`）でブラウザ用のページ。VRAM の内訳（`NFX_Native_MemoryStats` の独自エンジン 12 種、トレースバッファ、`NFX_` / `NatureFX` 名の描画ターゲット・テクスチャ、それ以外の描画ターゲット）、GPU memory の推移グラフ、GPU 時間、状態行、`kino/output.log` の NatureFX 行。`Tools/DebugPage.cs`（TcpListener、ループバックのみ、スナップショットはページが開いている間だけメインスレッドで 1 秒ごと）、`Tools/DebugPageHtml.cs`。DLSS（NGX）の確保は数えられない。
+- **計測オーバーレイを廃止してデバッグページへ移した（11-02）**: `RayTracingEffects.ReadStats()`（旧 ReadOverlay、`DebugStats`）の性能・シーン・RT 機能・デノイザー・パスに加え、F8 の各カードの「Now:」の状態行（エンジン、空・霧・雲、影・反射・ポスト・DLSS、天気・車・マップ）をセクションとして出す。F8 の状態行はそのまま残した。`Settings.RTOverlay` は設定ファイル互換のため残すが使わない。ページは等幅・表中心・色は警告だけ（ログの絞り込み、一時停止あり）。
 
 ## 1. インストール済みのもの（ゲームに入っている）
 

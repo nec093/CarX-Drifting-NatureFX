@@ -35,7 +35,10 @@ namespace NatureFX.Tools {
 		public static string Url => $"http://127.0.0.1:{port_}/";
 
 		// Per frame (main thread): start or stop as the setting says, and make a snapshot when a page is watching
-		public static void Update(bool on, int port) {
+		private static NatureFXMod mod_;
+
+		public static void Update(NatureFXMod mod, bool on, int port) {
+			mod_ = mod;
 			if (port < 1024 || port > 65535) {
 				port = 8765;
 			}
@@ -269,79 +272,224 @@ namespace NatureFX.Tools {
 			otherTargetCount_ = otherCount;
 		}
 
+		// ------------------------------------------------------------------ the snapshot: sections of rows
+		// A row: label, value, a bar's value (bytes or ms; < 0 none), indented, level (0 plain, 1 warning, 2 bad)
+		private sealed class Section {
+			public string Id, Title;
+			public readonly List<(string Label, string Value, double Bar, bool Indent, int Level)> Rows = new();
+			public Section(string id, string title) { Id = id; Title = title; }
+			public void Add(string label, string value, double bar = -1.0, bool indent = false, int level = 0) => Rows.Add((label, value ?? "", bar, indent, level));
+			public void Bytes(string label, long bytes, bool indent = false) => Add(label, Mb(bytes), bytes, indent);
+			// a status from somewhere that may not be set up (null members early on): never stops the page
+			public void Try(string label, Func<string> value) {
+				string v;
+				try {
+					v = value();
+				} catch (Exception e) {
+					v = $"({e.GetType().Name})";
+				}
+				Add(label, v);
+			}
+		}
+
+		private static string Mb(long bytes) => (bytes / 1048576.0).ToString("0.0", CultureInfo.InvariantCulture) + " MB";
+
 		private static string Snapshot() {
-			var sb = new StringBuilder(8192);
 			var inv = CultureInfo.InvariantCulture;
+			var mod = mod_;
+			var rt = mod?.RT;
+			RayTracingEffects.DebugStats stats = null;
+			try {
+				stats = rt?.ReadStats();
+			} catch (Exception) {
+				// the passes not made yet
+			}
+			var sections = new List<Section>();
+			NativeEngine.GpuMemoryMB(out ulong used, out ulong budget);
+
+			// memory
+			var native = NativeEngine.NativeMemory();
+			long nativeTotal = 0;
+			var engine = new Section("engine-memory", "Own engine memory (NFXNative)");
+			if (native != null) {
+				for (int i = 0; i < native.Length; ++i) {
+					bool part = NativeEngine.NativeMemoryNames[i].Contains("(used)");
+					engine.Bytes(NativeEngine.NativeMemoryNames[i], (long)native[i], part);
+					nativeTotal += part ? 0 : (long)native[i];
+				}
+				engine.Add("not counted", "DLSS (NGX allocates on its own)");
+			} else {
+				engine.Add("not reported", "this NFXNative.dll is older than the page", -1.0, false, 1);
+			}
+			var buffers = new Section("buffers", "Trace buffers");
+			long bufferTotal = 0;
+			var traces = NativeEngine.TraceMemory();
+			traces.Sort((a, b) => b.Bytes.CompareTo(a.Bytes));
+			foreach (var (name, bytes) in traces) {
+				buffers.Bytes(name, bytes);
+				bufferTotal += bytes;
+			}
+			var targets = new Section("targets", "NatureFX render targets and textures");
+			long targetTotal = 0;
+			foreach (var (group, bytes, count) in nfxTargets_) {
+				targets.Add($"{group} ({count})", Mb(bytes), bytes);
+				targetTotal += bytes;
+			}
+			var others = new Section("other-targets", "Other render targets (game, HDRP)");
+			others.Add($"all ({otherTargetCount_})", Mb(otherTargets_), otherTargets_);
+			foreach (var (name, bytes) in bigTargets_) {
+				others.Bytes(name, bytes, true);
+			}
+			long ours = nativeTotal + bufferTotal + targetTotal;
+			long usedBytes = (long)used << 20;
+			var split = new Section("split", "GPU memory split");
+			split.Bytes("own engine", nativeTotal);
+			split.Bytes("trace buffers", bufferTotal);
+			split.Bytes("NatureFX render targets / textures", targetTotal);
+			split.Bytes("other render targets (game, HDRP)", otherTargets_);
+			split.Bytes("rest (game textures and meshes, DLSS, ...)", Math.Max(0, usedBytes - ours - otherTargets_));
+
+			// performance
+			var perf = new Section("perf", "Performance");
+			perf.Add("frame rate", $"{fps_:0} fps, {1000.0f / Mathf.Max(fps_, 1.0f):0.0} ms", -1.0, false, fps_ < 30.0f ? 2 : fps_ < 55.0f ? 1 : 0);
+			perf.Add("GPU memory", budget > 0 ? $"{used:N0} / {budget:N0} MB" : "unknown", -1.0, false, budget > 0 && used > budget * 0.9 ? 2 : budget > 0 && used > budget * 0.8 ? 1 : 0);
+			perf.Add("NatureFX counted", Mb(ours));
+			var cam = Camera.main;
+			perf.Add("camera", cam != null ? $"{cam.pixelWidth}x{cam.pixelHeight}" : "-");
+			if (stats != null) {
+				perf.Add("mode", stats.Mode);
+			}
+			var timings = new Section("timings", "GPU time");
+			if (stats != null) {
+				if (stats.TimingNote != null) {
+					timings.Add("note", stats.TimingNote, -1.0, false, 1);
+				}
+				foreach (var (label, value, part) in stats.Timings) {
+					double ms = -1.0;
+					int space = value.IndexOf(" ms", StringComparison.Ordinal);
+					if (space > 0) {
+						double.TryParse(value.Substring(0, space), NumberStyles.Float, inv, out ms);
+					}
+					timings.Add(label.Trim(), value, label == "total GPU" ? -1.0 : ms, part);
+				}
+			}
+
+			// the scene and the ray traced effects (what the overlay showed)
+			var scene = new Section("scene", "Scene");
+			var features = new Section("features", "RT features");
+			var denoisers = new Section("denoisers", "Denoisers");
+			var passes = new Section("passes", "RT passes");
+			if (stats != null) {
+				foreach (var (label, value) in stats.Scene) {
+					scene.Add(label.Length > 0 ? label : "", value);
+				}
+				foreach (var (name, on) in stats.Features) {
+					features.Add(name, on ? "on" : "off", -1.0, false, 0);
+				}
+				foreach (var (name, state, ok) in stats.Denoisers) {
+					denoisers.Add(name, state, -1.0, false, ok ? 0 : 1);
+				}
+				foreach (var (name, state) in stats.Passes) {
+					passes.Add(name, state);
+				}
+			}
+
+			// what the F8 cards say under their settings
+			var eng = new Section("engine", "Engine");
+			eng.Try("graphics API", () => GraphicsApiSwitcher.Current);
+			eng.Try("engine", () => NativeEngine.Info);
+			eng.Try("self test", () => NativeEngine.TestResult);
+			eng.Try("scene", () => NativeEngine.SceneStatus);
+			eng.Try("check", () => NativeEngine.CheckStatus);
+			eng.Try("queue", () => NativeEngine.QueueStatus);
+			eng.Try("sun counters", () => NativeEngine.SunCounters);
+			eng.Try("engine shaders", () => NativeEngine.ShaderStatus);
+			eng.Try("NRD", () => NativeEngine.NrdStatus);
+			eng.Try("DXR 1.2 sun", () => NativeEngine.Dxr12SunStatus);
+			eng.Try("DXR 1.2 probe", () => NativeEngine.Dxr12Result);
+			eng.Try("shader bundle", () => $"{mod.Bundle.Shaders.Count} shaders, {mod.Replacer.ReplacedCount} materials replaced");
+			eng.Try("debug page", () => Status);
+
+			var sky = new Section("sky", "Sky, fog, clouds");
+			sky.Try("sky", () => rt.SkyStatus);
+			sky.Try("HDRP sky", () => mod.Volume.SkyState);
+			sky.Try("cube for HDRP", () => AtmospherePass.CubeStatus);
+			sky.Try("sky light", () => AtmospherePass.ProbeStatus);
+			sky.Try("track reflection probes", () => mod.TrackProbes.Count > 0 ? $"{mod.TrackProbes.Count} off" : "none off");
+			sky.Try("fog", () => rt.FogStatus);
+			sky.Try("clouds", () => mod.Clouds.State);
+			sky.Try("night", () => mod.Night.State);
+			sky.Try("game day / night", () => mod.GameNight.Status);
+			sky.Try("volumetric fog (HDRP)", () => mod.CameraFog.State);
+			sky.Try("volumetric clouds (HDRP)", () => mod.CameraClouds.State);
+
+			var light = new Section("lighting", "Shadows, reflections, post");
+			light.Try("shadows", () => rt.ShadowStatus);
+			light.Try("reflections", () => rt.ReflectionStatus);
+			light.Try("glass", () => rt.GlassStatus);
+			light.Try("transparent surfaces", () => SunShadowMap.Status);
+			light.Try("painted shadows", () => mod.PaintedShadows.Status);
+			light.Try("post-processing", () => mod.Post.Status);
+			light.Try("DLSS", () => Dlaa.Status);
+			light.Try("headlights", () => mod.Headlights.Status);
+			light.Try("car finish", () => mod.Finish.Status);
+
+			var world = new Section("world", "Weather, cars, map");
+			world.Try("weather", () => {
+				var w = NatureFX.Nature.Weather.Current;
+				return $"rain {w.Rain:P0}, wet {w.Wetness:P0}, snow {w.Snow:P0}, leaves {w.Leaves:P0}, clouds {w.Cloud:P0}";
+			});
+			world.Try("season", () => NatureFX.Map.Seasons.Describe());
+			world.Try("rain and snow", () => mod.Rain.State);
+			world.Try("build up", () => {
+				var c = mod.Accumulation.Current;
+				return $"snow {c.x:P0}, leaves {c.y:P0}, dust {c.z:P0}, wet {c.w:P0}";
+			});
+			world.Try("tyre smoke", () => $"{mod.Smoke.Particles} particles ({mod.Smoke.ShadowedParticles} in shadow), hottest tread {mod.Smoke.HottestTyre:0} C");
+			world.Try("car dirt", () => $"mud {mod.CarRainFx.Mud:P0}, dust {mod.CarRainFx.Dust:P0}, snow {mod.CarRainFx.Snow:P0}");
+			world.Try("game particles", () => $"{mod.GameFx.Count} drawn by NatureFX, {mod.GameFx.Skipped} kept");
+			world.Try("map", () => mod.Map.Loaded ? $"{mod.Map.Name} ({mod.Map.Source})" : "no profile");
+			world.Try("map values", () => mod.MapWeather.Describe());
+			world.Try("ground map", () => GroundMap.Status);
+			world.Try("painted dirt", () => mod.Paint.Status);
+			world.Try("debris", () => mod.Debris.Status);
+			world.Try("decals, water", () => $"decals {mod.Decals.Count}, puddles {mod.Water.PuddleCount} (water {mod.Water.Level:P0}), water surfaces {mod.Water.SurfaceCount}");
+
+			sections.Add(perf);
+			sections.Add(split);
+			sections.Add(timings);
+			sections.Add(engine);
+			sections.Add(buffers);
+			sections.Add(targets);
+			sections.Add(others);
+			sections.Add(scene);
+			sections.Add(features);
+			sections.Add(denoisers);
+			sections.Add(passes);
+			sections.Add(eng);
+			sections.Add(sky);
+			sections.Add(light);
+			sections.Add(world);
+
+			var sb = new StringBuilder(16384);
 			sb.Append('{');
 			sb.Append("\"time\":").Append(Time.unscaledTime.ToString("0.0", inv));
 			sb.Append(",\"fps\":").Append(fps_.ToString("0.0", inv));
-			var cam = Camera.main;
-			sb.Append(",\"resolution\":").Append(Json(cam != null ? $"{cam.pixelWidth}x{cam.pixelHeight}" : "-"));
-			NativeEngine.GpuMemoryMB(out ulong used, out ulong budget);
 			sb.Append(",\"gpuUsedMB\":").Append(used).Append(",\"gpuBudgetMB\":").Append(budget);
-
-			// the engine's own memory
-			sb.Append(",\"native\":[");
-			var native = NativeEngine.NativeMemory();
-			if (native != null) {
-				for (int i = 0; i < native.Length; ++i) {
-					sb.Append(i > 0 ? "," : "").Append("{\"name\":").Append(Json(NativeEngine.NativeMemoryNames[i])).Append(",\"bytes\":").Append(native[i]).Append('}');
+			sb.Append(",\"oursMB\":").Append((ours / 1048576.0).ToString("0.0", inv));
+			sb.Append(",\"sections\":[");
+			for (int i = 0; i < sections.Count; ++i) {
+				var sec = sections[i];
+				sb.Append(i > 0 ? "," : "").Append("{\"id\":").Append(Json(sec.Id)).Append(",\"title\":").Append(Json(sec.Title)).Append(",\"rows\":[");
+				for (int k = 0; k < sec.Rows.Count; ++k) {
+					var row = sec.Rows[k];
+					sb.Append(k > 0 ? "," : "").Append('[').Append(Json(row.Label)).Append(',').Append(Json(row.Value)).Append(',')
+					  .Append(row.Bar.ToString("0.###", inv)).Append(',').Append(row.Indent ? 1 : 0).Append(',').Append(row.Level).Append(']');
 				}
+				sb.Append("]}");
 			}
-			sb.Append(']');
-			sb.Append(",\"nativeNote\":").Append(Json(native == null ? "this NFXNative.dll does not report its memory (an older build)" : "DLSS's own memory (NGX) is not counted"));
-
-			// the trace buffers
-			sb.Append(",\"buffers\":[");
-			bool first = true;
-			foreach (var (name, bytes) in NativeEngine.TraceMemory()) {
-				sb.Append(first ? "" : ",").Append("{\"name\":").Append(Json(name)).Append(",\"bytes\":").Append(bytes).Append('}');
-				first = false;
-			}
-			sb.Append(']');
-
-			// render targets and textures
-			sb.Append(",\"targets\":[");
-			first = true;
-			foreach (var (group, bytes, count) in nfxTargets_) {
-				sb.Append(first ? "" : ",").Append("{\"name\":").Append(Json(group)).Append(",\"bytes\":").Append(bytes).Append(",\"count\":").Append(count).Append('}');
-				first = false;
-			}
-			sb.Append(']');
-			sb.Append(",\"otherTargets\":{\"bytes\":").Append(otherTargets_).Append(",\"count\":").Append(otherTargetCount_).Append('}');
-			sb.Append(",\"bigOtherTargets\":[");
-			first = true;
-			foreach (var (name, bytes) in bigTargets_) {
-				sb.Append(first ? "" : ",").Append("{\"name\":").Append(Json(name)).Append(",\"bytes\":").Append(bytes).Append('}');
-				first = false;
-			}
-			sb.Append(']');
-
-			// timings
-			sb.Append(",\"timings\":[");
-			var readings = RTTimings.Readings(out float total);
-			for (int i = 0; i < readings.Count; ++i) {
-				sb.Append(i > 0 ? "," : "").Append("{\"name\":").Append(Json(readings[i].Label.Trim())).Append(",\"ms\":")
-				  .Append(readings[i].Ms.ToString("0.000", inv)).Append(",\"part\":").Append(readings[i].Part ? "true" : "false").Append('}');
-			}
-			sb.Append(']');
-			sb.Append(",\"timingTotal\":").Append(total.ToString("0.000", inv));
-
-			// status lines
-			sb.Append(",\"status\":[");
-			AppendStatus(sb, "engine", NativeEngine.Info, true);
-			AppendStatus(sb, "scene", NativeEngine.SceneStatus, false);
-			AppendStatus(sb, "NRD", NativeEngine.NrdStatus, false);
-			AppendStatus(sb, "DXR 1.2 sun", NativeEngine.Dxr12SunStatus, false);
-			AppendStatus(sb, "fog", AtmospherePass.FogStatus, false);
-			AppendStatus(sb, "sky", AtmospherePass.SkyStatus, false);
-			sb.Append(']');
-			sb.Append('}');
+			sb.Append("]}");
 			return sb.ToString();
-		}
-
-		private static void AppendStatus(StringBuilder sb, string name, string value, bool first) {
-			sb.Append(first ? "" : ",").Append("{\"name\":").Append(Json(name)).Append(",\"value\":").Append(Json(value ?? "")).Append('}');
 		}
 
 		private static string Json(string s) {
