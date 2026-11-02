@@ -427,8 +427,8 @@ void PrepareFogVolume(uint3 id : SV_DispatchThreadID, uint3 group : SV_GroupID, 
         // the engine's camera position (NativeEngine) may differ from HDRP's by a rounding: some room
         float r = lamp.w + 0.5;
         bool inside = true;
-        [unroll] for (uint k = 0; k < 4; ++k)
-            inside = inside && dot(planes[k], rel) >= -r;
+        [unroll] for (uint q = 0; q < 4; ++q)
+            inside = inside && dot(planes[q], rel) >= -r;
         if (!inside)
             continue;
         float depth = -mul(UNITY_MATRIX_V, float4(rel, 1.0)).z;
