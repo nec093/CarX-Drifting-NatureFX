@@ -81,8 +81,8 @@ NFX_ENTRY(id)
         float3 dir = CosineSampleHemisphere(n, Hash22(pixel, FrameIndex, 5));
         if (dot(dir, geomN) < 0.05)
             dir = normalize(dir + geomN * (0.05 - dot(dir, geomN)));
-        // a bright dot (one ray onto a lamp or a sunlit patch) is capped at about a sunlit white surface
-        float limit = 2.0 * (Luminance(SunColor) * INV_PI + Luminance(SampleSH9(float3(0.0, 1.0, 0.0))));
+        // a bright dot (one ray onto a lamp or a sunlit patch) is capped at about a sunlit (or lamp lit) white surface
+        float limit = 2.0 * CacheReference();
 
         Hit hit;
         bool hitSomething = Closest(origin, dir, giDistance, coarse, hit);

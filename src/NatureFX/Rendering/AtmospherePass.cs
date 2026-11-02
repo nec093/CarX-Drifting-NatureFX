@@ -147,14 +147,14 @@ namespace NatureFX.Rendering {
 
 		protected override void Setup(ScriptableRenderContext renderContext, CommandBuffer cmd) {
 			if (IsComposite) {
-				color_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension,
-					colorFormat: GraphicsFormat.R16G16B16A16_SFloat, useDynamicScale: true, name: "NFX_Atmosphere_Color");
+				color_ = SharedColor.Acquire();
 				props_ = new MaterialPropertyBlock();
 			}
 		}
 
 		protected override void Cleanup() {
-			color_?.Release();
+			SharedColor.Release(color_);
+			color_ = null;
 			if (!IsComposite) {
 				foreach (var t in new[] { skyView_, skyTransmittance_, clouds_, cloudShadow_, cloudHistoryA_, cloudHistoryB_, fogHistoryA_, fogHistoryB_, fogVolume_ }) {
 					t?.Release();
@@ -325,15 +325,18 @@ namespace NatureFX.Rendering {
 				}
 				var fogParams = new Vector4(fog.x, fog.y, fog.z, Mathf.Clamp(Anisotropy, 0.0f, 0.9f));
 				int boxes = GatherBoxes(camPos);
+				RTTimings.FogVolume.Begin(cmd);
 				NativeEngine.TraceFogVolume(cmd, bridge, fogParams, fogHistoryA_, fogHistoryB_, fogVolume_, camPos - lastCamera_,
 					fogHistoryValid_ && !reset ? (boxes > 0 ? 0.3f : 0.1f) : 1.0f, boxes_, boxes, TireSmoke.FogSmoke);
+				RTTimings.FogVolume.End(cmd);
 				(fogHistoryA_, fogHistoryB_) = (fogHistoryB_, fogHistoryA_);
 				fogHistoryValid_ = true;
 				cmd.SetGlobalTexture(FogVolumeId, fogVolume_);
 				cmd.SetGlobalVector(FogHeightId, fogParams);
 				cmd.SetGlobalVector(FogSunId, new Vector4(ground.x, ground.y, ground.z, lightDir.w));
 				cmd.SetGlobalVector(FogSunDirId, lightDir);
-				FogStatus = (fog.x > 0.0f ? $"own engine, visibility {3.0f / fog.x / 1000.0f:0.0} km at the base" : "own engine, clear air") + $", {BoxCount} local fog / smoke boxes";
+				FogStatus = (fog.x > 0.0f ? $"own engine, visibility {3.0f / fog.x / 1000.0f:0.0} km at the base" : "own engine, clear air") + $", {BoxCount} local fog / smoke boxes"
+				            + (NativeEngine.FogLightLists ? $", {NativeEngine.FogLampCount} lamps in tile lists" : ", lamps unlisted (all per cell)");
 			} else {
 				FogStatus = NativeFog ? "waiting for the fog values" : "off (HDRP's fog)";
 			}

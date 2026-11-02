@@ -327,24 +327,91 @@ float FogSliceDepth(float s)
     return FOG_NEAR * pow(FOG_FAR / FOG_NEAR, s / FOG_D);
 }
 
-// each column's view ray, scaled to view depth 1 (camera relative world space)
-[numthreads(8, 8, 1)]
-void PrepareFogVolume(uint3 id : SV_DispatchThreadID)
+// The lamps' light lists (FogVolume.hlsl): per tile of 8 x 8 columns (one thread group here, one in FogVolume) and
+// per band of 16 slices, a 128 bit mask of the local lights whose range reaches into that part of the grid. The rest
+// cannot light any of its cells (FogVolume skips them by the same `raw > range * range` test), so the result is the
+// same as looping over all of them. NativeEngine.TraceFogVolume hands the frame's lights (the same as the engine's
+// LightPos, LocalLights.Positions) and sets NFX_FLAG_FOG_LISTS when the lists are written.
+float4 _NFX_FogLampPos[128];   // xyz absolute position, w range (m)
+float4 _NFX_FogLampParams;     // x lights in use (0: no lists)
+#define FOG_TILES_X 20         // FOG_W / 8
+#define FOG_TILES_Y 12         // ceil(FOG_H / 8): the last row of tiles holds 2 rows of columns
+#define FOG_BANDS 4            // FOG_D / 16
+#define FOG_LIST_BASE (FOG_W * FOG_H * 4) // in float4: after the columns, the boxes and the smoke (FogVolume.hlsl)
+groupshared uint fogMask_[FOG_BANDS * 4];
+
+// the view ray through uv at view depth 1 (camera relative world space)
+float3 FogRay(float2 uv)
 {
-    if (id.x >= FOG_W || id.y >= FOG_H)
-        return;
-    float2 uv = (id.xy + 0.5) / float2(FOG_W, FOG_H);
     float3 p = ComputeWorldSpacePosition(uv, 0.5, UNITY_MATRIX_I_VP);
-    float3 px = ComputeWorldSpacePosition(uv + float2(1.0 / FOG_W, 0.0), 0.5, UNITY_MATRIX_I_VP);
-    float3 py = ComputeWorldSpacePosition(uv + float2(0.0, 1.0 / FOG_H), 0.5, UNITY_MATRIX_I_VP);
-    p /= max(-mul(UNITY_MATRIX_V, float4(p, 1.0)).z, 1e-6);
-    px /= max(-mul(UNITY_MATRIX_V, float4(px, 1.0)).z, 1e-6);
-    py /= max(-mul(UNITY_MATRIX_V, float4(py, 1.0)).z, 1e-6);
-    // the centre ray and the steps to the next column and row (FogVolume.hlsl samples anywhere in the cell)
-    uint i = (id.y * FOG_W + id.x) * 3;
-    _NFX_NativeSurface[i] = float4(p, 0.0);
-    _NFX_NativeSurface[i + 1] = float4(px - p, 0.0);
-    _NFX_NativeSurface[i + 2] = float4(py - p, 0.0);
+    return p / max(-mul(UNITY_MATRIX_V, float4(p, 1.0)).z, 1e-6);
+}
+
+// each column's view ray, scaled to view depth 1 (camera relative world space), and the tile's light lists
+[numthreads(8, 8, 1)]
+void PrepareFogVolume(uint3 id : SV_DispatchThreadID, uint3 group : SV_GroupID, uint gi : SV_GroupIndex)
+{
+    // no early return before the barriers: the last row of tiles has only 2 rows of columns
+    if (gi < FOG_BANDS * 4)
+        fogMask_[gi] = 0u;
+    if (id.x < FOG_W && id.y < FOG_H)
+    {
+        float2 uv = (id.xy + 0.5) / float2(FOG_W, FOG_H);
+        float3 p = FogRay(uv);
+        float3 px = FogRay(uv + float2(1.0 / FOG_W, 0.0));
+        float3 py = FogRay(uv + float2(0.0, 1.0 / FOG_H));
+        // the centre ray and the steps to the next column and row (FogVolume.hlsl samples anywhere in the cell)
+        uint i = (id.y * FOG_W + id.x) * 3;
+        _NFX_NativeSurface[i] = float4(p, 0.0);
+        _NFX_NativeSurface[i + 1] = float4(px - p, 0.0);
+        _NFX_NativeSurface[i + 2] = float4(py - p, 0.0);
+    }
+    uint count = min((uint)_NFX_FogLampParams.x, 128u);
+    if (count == 0u)
+        return; // uniform over the group: FogVolume loops over all the lights
+    GroupMemoryBarrierWithGroupSync();
+
+    // the tile's wedge: the four planes through the camera and the tile's outer edges (FogVolume's points stay
+    // within half a column of the column's centre ray, so within these edges), inward normals
+    float2 lo = float2(group.x * 8, group.y * 8) / float2(FOG_W, FOG_H);
+    float2 hi = float2(min(group.x * 8 + 8, FOG_W), min(group.y * 8 + 8, FOG_H)) / float2(FOG_W, FOG_H);
+    float3 c00 = FogRay(lo), c10 = FogRay(float2(hi.x, lo.y)), c01 = FogRay(float2(lo.x, hi.y)), c11 = FogRay(hi);
+    float3 centre = c00 + c10 + c01 + c11;
+    float3 planes[4] = { cross(c00, c01), cross(c10, c11), cross(c00, c10), cross(c01, c11) };
+    [unroll] for (uint k = 0; k < 4; ++k)
+    {
+        float3 n = normalize(planes[k]);
+        planes[k] = dot(n, centre) < 0.0 ? -n : n;
+    }
+    float3 camera = GetAbsolutePositionWS(float3(0.0, 0.0, 0.0));
+    for (uint l = gi; l < count; l += 64u)
+    {
+        float4 lamp = _NFX_FogLampPos[l];
+        float3 rel = lamp.xyz - camera;
+        // the engine's camera position (NativeEngine) may differ from HDRP's by a rounding: some room
+        float r = lamp.w + 0.5;
+        bool inside = true;
+        [unroll] for (uint k = 0; k < 4; ++k)
+            inside = inside && dot(planes[k], rel) >= -r;
+        if (!inside)
+            continue;
+        float depth = -mul(UNITY_MATRIX_V, float4(rel, 1.0)).z;
+        [unroll] for (uint b = 0; b < FOG_BANDS; ++b)
+        {
+            // a cell of slice s spans the depths of s to s + 1 (its point is jittered across it)
+            float zMin = b == 0 ? 0.0 : FogSliceDepth(b * 16.0);
+            float zMax = b == FOG_BANDS - 1 ? 1e9 : FogSliceDepth(b * 16.0 + 16.0);
+            if (depth + r >= zMin && depth - r <= zMax)
+                InterlockedOr(fogMask_[b * 4 + (l >> 5)], 1u << (l & 31u));
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (gi < FOG_BANDS)
+    {
+        uint tile = group.y * FOG_TILES_X + group.x;
+        uint4 mask = uint4(fogMask_[gi * 4], fogMask_[gi * 4 + 1], fogMask_[gi * 4 + 2], fogMask_[gi * 4 + 3]);
+        _NFX_NativeSurface[FOG_LIST_BASE + tile * FOG_BANDS + gi] = asfloat(mask);
+    }
 }
 
 // the engine's cells into a 3D texture, blended with last frame's at the same place in the world (each frame

@@ -153,6 +153,10 @@ namespace NatureFX.Rendering {
 		public static bool LampMask;
 		// NFX_FLAG_OWN_GLASS: Glass.hlsl draws the glass whole (OwnGlass hides HDRP's)
 		public static bool OwnGlass;
+		// NFX_FLAG_FOG_LISTS: the 3D fog loops over the lamps listed per tile of its grid (the bridge's PrepareFogVolume)
+		// instead of all of them; off for comparing (the same picture, only slower)
+		public static bool FogLightLists = true;
+		private static bool fogListsIssued_; // set while TraceFogVolume issues its trace
 		// what the loaded DLL can do (NFX_Native_Info's "features:"): a mod newer than its DLL must not hide HDRP's glass
 		public static bool Supports(string feature) => Info != null && Info.Contains(feature);
 
@@ -700,7 +704,7 @@ namespace NatureFX.Rendering {
 			c[4] = sunColor_.x; c[5] = sunColor_.y; c[6] = sunColor_.z; c[7] = CoarseShadowDistance;
 			c[8] = camera_.x; c[9] = camera_.y; c[10] = camera_.z; c[11] = Bits((uint)frame_);
 			c[12] = Bits((uint)width); c[13] = Bits((uint)height); c[14] = Bits(sunDirection_.w > 0.0f ? 1u : 0u);
-			c[15] = Bits((GlassShadows ? 1u : 0u) | (LampMask ? 2u : 0u) | (OwnGlass ? 4u : 0u) | ((uint)(Mathf.Clamp(SunSamples, 1, 8) - 1) << 8));
+			c[15] = Bits((GlassShadows ? 1u : 0u) | (LampMask ? 2u : 0u) | (OwnGlass ? 4u : 0u) | (fogListsIssued_ ? 16u : 0u) | ((uint)(Mathf.Clamp(SunSamples, 1, 8) - 1) << 8));
 			c[16] = ambientParams_.x; c[17] = ambientParams_.y; c[18] = ambientParams_.z; c[19] = ambientParams_.w;
 			Put(c, 20, skyParams_);
 			c[25] = aerosols_; c[26] = 1.0f; // LightCount.y aerosols, .z ozone (Sky.hlsli)
@@ -727,6 +731,7 @@ namespace NatureFX.Rendering {
 					Put(c, 52 + 3 * m + i * 4, lights_.Spots[i]);
 				}
 				c[24] = lights_.Count;
+				c[27] = lights_.LampReference; // LightCount.w: the GI's clamp and cache scale (CacheReference)
 			}
 			if (eventData_ == IntPtr.Zero) {
 				eventData_ = Marshal.AllocHGlobal(EventSlotSize * EventSlots);
@@ -1424,6 +1429,10 @@ namespace NatureFX.Rendering {
 		private static readonly int FogTargetId = Shader.PropertyToID("_NFX_FogTarget");
 		private static readonly int FogSourceId = Shader.PropertyToID("_NFX_FogSource");
 		private static readonly int FogCamDeltaId = Shader.PropertyToID("_NFX_FogCamDelta");
+		private static readonly int FogLampPosId = Shader.PropertyToID("_NFX_FogLampPos");
+		private static readonly int FogLampParamsId = Shader.PropertyToID("_NFX_FogLampParams");
+		// the lights the fog's light lists were last built with (F8)
+		public static int FogLampCount { get; private set; }
 		// boxes: the local fog boxes (5 float4 each, FogVolume.hlsl BoxesSigma), boxCount of them
 		public static void TraceFogVolume(CommandBuffer cmd, ComputeShader bridge, Vector4 fog, RTHandle historyIn, RTHandle historyOut, RTHandle integrated,
 		                                  Vector3 cameraDelta, float share, Vector4[] boxes = null, int boxCount = 0, Vector4[] smoke = null) {
@@ -1440,13 +1449,23 @@ namespace NatureFX.Rendering {
 			}
 			int prepare = bridge.FindKernel("PrepareFogVolume");
 			cmd.SetComputeBufferParam(bridge, prepare, NativeSurfaceId, b.Surface);
+			// the light lists, from the same lights Issue hands the engine (lights_, BeginFrame): one thread group per
+			// tile of 8 x 8 columns (FogVolume.hlsl reads them by the same tiles)
+			int lampCount = FogLightLists && lights_ != null ? Mathf.Min(lights_.Count, LocalLights.Max) : 0;
+			if (lampCount > 0) {
+				cmd.SetComputeVectorArrayParam(bridge, FogLampPosId, lights_.Positions);
+			}
+			cmd.SetComputeVectorParam(bridge, FogLampParamsId, new Vector4(lampCount, 0.0f, 0.0f, 0.0f));
+			FogLampCount = lampCount;
 			cmd.DispatchCompute(bridge, prepare, (FogW + 7) / 8, (FogH + 7) / 8, 1);
 			kindParams_ = true;
+			fogListsIssued_ = lampCount > 0;
 			kindA_ = fog;
 			kindB_ = new Vector4(boxCount, Time.time, smoke != null ? 1.0f : 0.0f, NatureFX.Map.MapFog.LampAirSigma);
 			// Screen: the sky data (the boxes' noise)
 			Issue(cmd, TraceFogVolume_, b.SurfacePtr, b.ResultPtr, FogW, FogH * FogD, skyTransmittance_ != null ? skyTransmittance_.ResultPtr : IntPtr.Zero);
 			kindParams_ = false;
+			fogListsIssued_ = false;
 			int reproject = bridge.FindKernel("FogReproject");
 			cmd.SetComputeBufferParam(bridge, reproject, NativeResultId, b.Result);
 			cmd.SetComputeTextureParam(bridge, reproject, FogSourceId, historyIn);

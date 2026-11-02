@@ -37,6 +37,11 @@ namespace NatureFX.Rendering {
 			public Texture Cookie;
 			public float Volumetric;
 			public Quaternion LocalRotation;
+			// HDRP's own copy of the intensity (in its unit): SetIntensity changes both, and HDRP writes it back over
+			// Light.intensity whenever it runs UpdateLightIntensity (Awake / OnEnable, a shape setter: a car switched
+			// back on), so with the legacy value alone restored the game's lights came back at NatureFX's brightness
+			public LightUnit Unit;
+			public float HdIntensity;
 		}
 
 		private readonly Dictionary<HDAdditionalLightData, Original> originals_ = new();
@@ -251,6 +256,12 @@ namespace NatureFX.Rendering {
 		}
 
 		private static void Apply(Light light, HDAdditionalLightData hd, Original o) {
+			// the unit first (its setter converts the value), then the value in it; Light.intensity (candela, what the
+			// light loop reads) is set again below in any case
+			if (hd != null) {
+				hd.lightUnit = o.Unit;
+				hd.intensity = o.HdIntensity;
+			}
 			light.transform.localRotation = o.LocalRotation;
 			light.useColorTemperature = o.UseTemperature;
 			light.colorTemperature = o.Temperature;
@@ -443,7 +454,7 @@ namespace NatureFX.Rendering {
 					originals_[hd] = new Original {
 						Intensity = light.intensity, Temperature = light.colorTemperature, UseTemperature = light.useColorTemperature, Color = light.color,
 						SpotAngle = light.spotAngle, Inner = light.innerSpotAngle, Range = light.range, Cookie = light.cookie, Volumetric = hd.volumetricDimmer,
-						LocalRotation = light.transform.localRotation,
+						LocalRotation = light.transform.localRotation, Unit = hd.lightUnit, HdIntensity = hd.intensity,
 					};
 					cars_[light] = rb;
 					lights_.Add(light);

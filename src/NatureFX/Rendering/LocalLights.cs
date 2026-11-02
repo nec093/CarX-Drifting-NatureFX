@@ -37,11 +37,22 @@ namespace NatureFX.Rendering {
 		public Vector4[] Spots => spot_;
 		public int Count { get; private set; }
 		public int ShadowCount { get; private set; }
+		// About the illuminance the brightest light in use casts (lux): its intensity (cd) at half its range. The GI's
+		// clamp and its cache's fixed point scale take it as their reference besides the sun and the sky
+		// (LightCount.w, GI.hlsl / NFXCommon.hlsli CacheReference): at night with the sun's alone, a headlight's bounce
+		// was cut to a few hundredth.
+		public float LampReference { get; private set; }
+
+		private static float Reference(float r, float g, float b, float range) {
+			float half = 0.5f * range;
+			return Mathf.Max(r, Mathf.Max(g, b)) / Mathf.Max(1.0f, half * half);
+		}
 
 		// Once per frame: the nearest lights to the camera
 		public void Update(Camera camera) {
 			Count = 0;
 			ShadowCount = 0;
+			LampReference = 0.0f;
 			if (!Enabled || camera == null) {
 				return;
 			}
@@ -89,6 +100,7 @@ namespace NatureFX.Rendering {
 					color_[Count] = new Vector4(e.Intensity.r, e.Intensity.g, e.Intensity.b, 2.0f);
 					dir_[Count] = Vector4.zero;
 					spot_[Count] = new Vector4(0.0f, e.Radius, 0.0f, 0.0f);
+					LampReference = Mathf.Max(LampReference, Reference(e.Intensity.r, e.Intensity.g, e.Intensity.b, e.Range));
 					++ShadowCount;
 					++Count;
 					continue;
@@ -102,6 +114,7 @@ namespace NatureFX.Rendering {
 				bool traceShadows = light.shadows == LightShadows.None && light.range >= 3.0f;
 				pos_[Count] = new Vector4(t.position.x, t.position.y, t.position.z, Mathf.Max(0.1f, light.range));
 				color_[Count] = new Vector4(color.r, color.g, color.b, traceShadows ? 1.0f : 0.0f);
+				LampReference = Mathf.Max(LampReference, Reference(color.r, color.g, color.b, pos_[Count].w));
 				if (light.type == LightType.Spot) {
 					// HDRP's spot attenuation: saturate(cos * scale + offset), squared
 					float cosOuter = Mathf.Cos(light.spotAngle * 0.5f * Mathf.Deg2Rad);

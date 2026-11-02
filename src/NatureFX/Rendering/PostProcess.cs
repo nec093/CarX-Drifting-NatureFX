@@ -64,8 +64,8 @@ namespace NatureFX.Rendering {
 		protected override void Setup(ScriptableRenderContext renderContext, CommandBuffer cmd) {
 			// written by DLAA's UnpackDlss (a compute shader): without random write Unity refused the write and the
 			// jittered picture went on unresolved
-			source_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension,
-				colorFormat: GraphicsFormat.R16G16B16A16_SFloat, enableRandomWrite: true, useDynamicScale: true, name: "NFX_Post_Source");
+			// (the camera colour copy shared with the other composites: SharedColor has random write on)
+			source_ = SharedColor.Acquire();
 			for (int i = 0; i < BloomLevels; ++i) {
 				var scale = Vector2.one / (2 << i);
 				down_[i] = RTHandles.Alloc(scale, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.B10G11R11_UFloatPack32,
@@ -120,7 +120,8 @@ namespace NatureFX.Rendering {
 			ReleaseFull();
 			motion_?.Release();
 			work_?.Release();
-			source_?.Release();
+			SharedColor.Release(source_);
+			source_ = null;
 			for (int i = 0; i < BloomLevels; ++i) {
 				down_[i]?.Release();
 				up_[i]?.Release();

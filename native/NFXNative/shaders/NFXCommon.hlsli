@@ -29,7 +29,7 @@ cbuffer Frame : register(b0)
     uint Flags;             // NFX_FLAG_*
     float4 AmbientParams;   // x ambient ray length, y 1 = bounce light, z sky occlusion length (0 off), w contact strength
     float4 SkyParams;       // xyz the sun above the air (lux), w the camera above the ground (m): Sky.hlsli
-    float4 LightCount;      // x lights in use; y aerosols, z ozone (Sky.hlsli)
+    float4 LightCount;      // x lights in use; y aerosols, z ozone (Sky.hlsli), w the brightest lamp's level (lux, CacheReference)
     float4x4 ViewProj;      // camera relative world to clip (reflections: what of a hit is on screen)
     float4 ScreenSize;      // full resolution: xy size, zw 1 / size
     float4 ReflParams;      // x max distance (m), y roughness cutoff, z 1 = second bounce (glass: refraction strength),
@@ -49,6 +49,8 @@ static const uint NoDescriptor = 0xFFFFFFFFu;
 // Flags bits
 #define NFX_FLAG_GLASS_SHADOWS 1u  // sun shadow rays pass glass dimmed (tinted windows darker) instead of untouched
 #define NFX_FLAG_OWN_GLASS 4u      // Glass.hlsl draws the glass itself (HDRP's glass hidden, roadmap E): see there
+#define NFX_FLAG_FOG_LISTS 16u     // FogVolume.hlsl: the lamps' light lists per tile (the bridge's PrepareFogVolume) are
+                                   // written (bits 8..10 hold the sun's samples)
 #define NFX_FLAG_LAMP_MASK 2u      // HDRP's lamps are shadowed one by one (LampMask.hlsl, roadmap A4): LocalShadows
                                    // then only traces the lights NatureFX adds
 // instance masks (NFX_Native_SetInstances): the scene every trace sees, and glass, which only Glass.hlsl looks for
@@ -762,11 +764,21 @@ uint CacheKey(float3 pointAWS, float3 normal, out uint slot)
     return HashMix(h ^ 0x9e3779b9u) | 1u;
 }
 
-// The scale the accumulated sums are stored with: about 1000 steps for the sunlit level of the scene
+// The brightest light level of the scene the GI expects: the sun and the sky on a white surface, or the strongest
+// local light at half its range (LightCount.w, LocalLights.LampReference, lux) with a bounce of up to half of it (a
+// white wall: albedo 0.8 / pi = 0.25). With the sun's alone, at night (the moon, 0.1 lux) a headlight's bounce off the
+// road was cut to a few hundredth.
+float CacheReference()
+{
+    float sky = Luminance(SunColor) * INV_PI + Luminance(SampleSH9(float3(0.0, 1.0, 0.0)));
+    return max(sky, max(LightCount.w, 0.0) * 0.5);
+}
+
+// The scale the accumulated sums are stored with: about 1000 steps for the brightest level of the scene. The sums
+// live one frame (GICacheResolve clears them every frame), so a reference changing between frames is fine.
 float CacheScale()
 {
-    float reference = Luminance(SunColor) * INV_PI + Luminance(SampleSH9(float3(0.0, 1.0, 0.0)));
-    return 1024.0 / max(reference, 1e-3);
+    return 1024.0 / max(CacheReference(), 1e-3);
 }
 
 // The cached light a point receives; false when the cell has none yet

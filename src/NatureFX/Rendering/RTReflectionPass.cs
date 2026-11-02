@@ -52,7 +52,7 @@ namespace NatureFX.Rendering {
 		private int frame_;
 
 		protected override void Setup(ScriptableRenderContext renderContext, CommandBuffer cmd) {
-			color_ = Alloc(Vector2.one, "NFX_RTRefl_Color");
+			color_ = SharedColor.Acquire();
 			AllocTraceTargets();
 		}
 
@@ -175,7 +175,8 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Cleanup() {
-			color_?.Release();
+			SharedColor.Release(color_);
+			color_ = null;
 			ReleaseTraceTargets();
 		}
 	}

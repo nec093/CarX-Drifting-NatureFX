@@ -28,7 +28,7 @@ namespace NatureFX.Rendering {
 		private RTHandle color_, glass_;
 
 		protected override void Setup(ScriptableRenderContext renderContext, CommandBuffer cmd) {
-			color_ = Alloc("NFX_RTGlass_Color");
+			color_ = SharedColor.Acquire();
 			glass_ = Alloc("NFX_RTGlass_Trace", GraphicsFormat.R32G32B32A32_SFloat); // w packs the glass's distance (Glass.hlsl)
 		}
 
@@ -79,7 +79,8 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Cleanup() {
-			color_?.Release();
+			SharedColor.Release(color_);
+			color_ = null;
 			glass_?.Release();
 		}
 	}

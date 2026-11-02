@@ -82,6 +82,7 @@ namespace NatureFX.Rendering {
 				if (d2 > l.range * l.range * 4.0f) {
 					continue;
 				}
+				// Light.intensity of a point or spot light is in candela whatever unit it was set in (HDRP converts)
 				ranked_.Add((l.intensity / d2, l));
 			}
 			ranked_.Sort((a, b) => b.Score.CompareTo(a.Score));

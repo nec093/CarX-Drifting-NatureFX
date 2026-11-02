@@ -251,7 +251,7 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Setup(ScriptableRenderContext renderContext, CommandBuffer cmd) {
-			color_ = Alloc(Vector2.one, "NFX_RTShadow_Color", GraphicsFormat.R16G16B16A16_SFloat);
+			color_ = SharedColor.Acquire(); // the camera colour copy, shared with the other composites
 		}
 
 		private static RTHandle Alloc(Vector2 scale, string name, GraphicsFormat format, bool randomWrite = true) {
@@ -683,7 +683,8 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Cleanup() {
-			color_?.Release();
+			SharedColor.Release(color_);
+			color_ = null;
 			sun_.Release();
 			ambient_.Release();
 			shafts_.Release();

@@ -1099,6 +1099,11 @@ namespace NatureFX {
 			}
 			Widgets.Info($"Engine shaders now: {NativeEngine.ShaderStatus}");
 			Widgets.EndCard();
+			Widgets.BeginCard("3D fog lamps", "The 3D fog's lamps and headlights from lists per tile of its grid (only the lights that " +
+				"reach into it) instead of every light at every cell. The same picture: off only to compare the time " +
+				"(Ray tracing timings: fog volume). Not saved.");
+			Widgets.Switch("Light lists per tile", NativeEngine.FogLightLists, v => NativeEngine.FogLightLists = v);
+			Widgets.EndCard();
 			Widgets.BeginCard("NRD parts", "With the NVIDIA NRD denoiser chosen: each signal off here goes back to NatureFX's own filter, " +
 				"to find which part a problem comes from. Not saved.");
 			Widgets.Switch("Sun shadows (SIGMA)", NativeEngine.DevNrdSun, v => NativeEngine.DevNrdSun = v);
