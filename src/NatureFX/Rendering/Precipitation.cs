@@ -107,7 +107,7 @@ namespace NatureFX.Rendering {
 				if (emptyFor_ > 2.0f) {
 					collisionGaveUp_ = true;
 					want = false;
-					Kino.Log.Warning("[NatureFX] Precipitation: no drop lived for 2 s with the world's collision on; the drops fall without it now");
+					KSL.API.Kino.Log.Warning("[NatureFX] Precipitation: no drop lived for 2 s with the world's collision on; the drops fall without it now");
 				}
 			} else {
 				emptyFor_ = 0.0f;

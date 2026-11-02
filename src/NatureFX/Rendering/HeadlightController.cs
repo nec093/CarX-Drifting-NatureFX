@@ -231,7 +231,7 @@ namespace NatureFX.Rendering {
 				: light.color != Color.white ? "colour"
 				: !Mathf.Approximately(light.range, 120.0f) ? $"range -> {light.range:0}"
 				: !Mathf.Approximately(light.innerSpotAngle, BeamAngle * 0.95f) ? $"inner angle -> {light.innerSpotAngle:0}"
-				: hd != null && hd.spotLightShape != SpotLightShape.Cone ? $"shape -> {hd.spotLightShape}"
+				: light.type != LightType.Spot ? $"shape -> {light.type}"
 				: hd != null && !Mathf.Approximately(hd.shapeRadius, 0.04f) ? $"radius -> {hd.shapeRadius:0.000}"
 				: hd != null && hd.lightUnit != LightUnit.Candela ? $"unit -> {hd.lightUnit}"
 				: null;
@@ -265,8 +265,9 @@ namespace NatureFX.Rendering {
 			hd.SetIntensity(t.Candela * (beamHigh ? HighBeamGain : 1.0f), LightUnit.Candela);
 			hd.SetCookie(beamHigh ? HighCookie(type) : Cookie(type));
 			hd.shapeRadius = 0.04f;
-			if (hd.spotLightShape != SpotLightShape.Cone) {
-				hd.spotLightShape = SpotLightShape.Cone;
+			// a cone (HDRP's box and pyramid spots are light types of their own now)
+			if (light.type != LightType.Spot) {
+				light.type = LightType.Spot;
 			}
 			held_[light] = (light.intensity, light.transform.localRotation);
 			// 1 the low beam (driving on the left), 3 the same mirrored (on the right), 2 the high beam (NFX_BeamPattern)
