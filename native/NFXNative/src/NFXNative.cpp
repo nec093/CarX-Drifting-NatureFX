@@ -913,6 +913,7 @@ ComPtr<ID3D12Resource> g_compactReadback;  // readback heap
 UINT64 g_compactReadbackCapacity = 0;
 std::string g_sceneStats = "no scene";
 std::string g_sceneStatsWind;
+std::vector<int> g_instanceSlot;      // per instance handed to SetInstances: its entry of g_instances (-1 left out)
 std::vector<int> g_instanceGeometry;  // per entry of g_instances
 std::vector<bool> g_instanceMoving;   // per entry of g_instances: flag bit 3 (a car's part)
 std::vector<int> g_instanceMaterial;
@@ -1461,11 +1462,15 @@ NFX_EXPORT void NFX_Native_SetInstances(const float* transforms, const int* geom
 	g_instanceMaterial.clear();
 	g_instanceSways.clear();
 	g_instanceMoving.clear();
+	// UpdateTransforms gets the caller's numbering: a left out instance would shift every later one (a car's parts
+	// moved other instances and stood still themselves until the next scene upload)
+	g_instanceSlot.assign(count > 0 ? count : 0, -1);
 	for (int i = 0; i < count; ++i) {
 		int id = geometries[i];
 		if (id < 0 || id >= static_cast<int>(g_geometries.size()) || g_geometries[id].released) {
 			continue;
 		}
+		g_instanceSlot[i] = static_cast<int>(g_instances.size());
 		D3D12_RAYTRACING_INSTANCE_DESC d = {};
 		memcpy(d.Transform, transforms + i * 12, sizeof(d.Transform));
 		d.InstanceID = static_cast<UINT>(i);
@@ -2699,7 +2704,7 @@ NFX_EXPORT void* NFX_Native_RenderEventAndDataFunc() {
 NFX_EXPORT void NFX_Native_UpdateTransforms(const int* indices, const float* transforms, int count) {
 	std::lock_guard<std::mutex> lock(g_sceneMutex);
 	for (int i = 0; i < count; ++i) {
-		int index = indices[i];
+		int index = indices[i] >= 0 && indices[i] < static_cast<int>(g_instanceSlot.size()) ? g_instanceSlot[indices[i]] : -1;
 		if (index >= 0 && index < static_cast<int>(g_resolved.size())) {
 			memcpy(g_resolved[index].Transform, transforms + i * 12, sizeof(g_resolved[index].Transform));
 		}
