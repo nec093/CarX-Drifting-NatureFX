@@ -460,15 +460,29 @@ namespace NatureFX.Rendering {
 			if (sizeLogAt_ > 0.0f && Time.unscaledTime >= sizeLogAt_) {
 				sizeLogAt_ = 0.0f;
 				long bytes = 0, retiredBytes = 0;
-				foreach (var b in buffers_) {
-					bytes += b.Surface != null ? (long)b.Surface.count * b.Surface.stride + (long)b.Result.count * b.Result.stride : 0;
+				// per kind too (MB, 1 decimal), to see which of them a change of layout shrank
+				var parts = new System.Text.StringBuilder();
+				for (int k = 0; k < buffers_.Length; ++k) {
+					var b = buffers_[k];
+					if (b.Surface == null) {
+						continue;
+					}
+					long kb = (long)b.Surface.count * b.Surface.stride + (long)b.Result.count * b.Result.stride;
+					bytes += kb;
+					parts.Append($" {KindName(k)} {kb / 1048576.0:0.0}");
 				}
-				bytes += screen_ != null ? (long)screen_.count * screen_.stride : 0;
+				long screenBytes = screen_ != null ? (long)screen_.count * screen_.stride : 0;
+				bytes += screenBytes;
+				parts.Append($" screen {screenBytes / 1048576.0:0.0}");
+				long guideBytes = 0;
+				foreach (var g in new[] { nrdSunGuide_, nrdAmbientGuide_, nrdReflectionGuide_ }) {
+					guideBytes += g.Buffer != null ? (long)g.Buffer.count * g.Buffer.stride : 0;
+				}
 				foreach (var r in retired_) {
 					retiredBytes += (long)r.Buffer.count * r.Buffer.stride;
 				}
-				Kino.Log.Info($"[NatureFX] Camera {sizeWidth_}x{sizeHeight_}: GPU memory {GpuMemory}; trace buffers {bytes / 1048576} MB, " +
-				              $"{retired_.Count} replaced ones still held ({retiredBytes / 1048576} MB)");
+				Kino.Log.Info($"[NatureFX] Camera {sizeWidth_}x{sizeHeight_}: GPU memory {GpuMemory}; trace buffers {bytes / 1048576} MB " +
+				              $"(+ NRD guides {guideBytes / 1048576} MB), {retired_.Count} replaced ones still held ({retiredBytes / 1048576} MB); by kind (MB):{parts}");
 			}
 			try {
 				UpdatePipeline();
@@ -545,6 +559,23 @@ namespace NatureFX.Rendering {
 		// ------------------------------------------------------------------ traces
 		// Each trace: Prepare (Unity compute, NFX_NativeBridge) fills a buffer the engine reads, render event 3 runs the
 		// engine's shader on Unity's queue, Unpack (Unity compute) copies the result into the shadow pass's texture.
+
+		private static string KindName(int kind) {
+			switch (kind) {
+				case TraceSun_: return "sun";
+				case TraceAmbient_: return "ambient";
+				case TraceLocal_: return "local";
+				case TraceShafts_: return "shafts";
+				case TraceSurface_: return "surface";
+				case TraceReflection_: return "reflection";
+				case TraceGI_: return "gi";
+				case TraceGlass_: return "glass";
+				case TraceFog_: return "fog";
+				case TraceFogVolume_: return "fog-volume";
+				case TraceLampMask_: return "lamp-mask";
+				default: return $"kind{kind}";
+			}
+		}
 
 		public const int TraceSun_ = 0, TraceAmbient_ = 1, TraceLocal_ = 2, TraceShafts_ = 3, TraceSurface_ = 4, TraceReflection_ = 5,
 		                 TraceGI_ = 6, TraceCacheResolve_ = 7, TraceGlass_ = 8;
