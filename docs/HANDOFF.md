@@ -145,6 +145,8 @@
 
 - **7F・7A・7C も実装（11-02、未ビルド・未確認）**。7A は C++ も変わる（PackSun → CopyRaw、`PackSun.hlsl` 削除）ので DLL の通常ビルドと再起動が要る。ここでも .ksm・DLL・バンドルの 3 つをそろえる。確認: 反射（塗装・水たまり・クローム、NRD オン/オフ）、太陽の影と半影の幅（DXR 1.2 オン/オフ、NRD の SIGMA）、ガラスの映り込み・屈折。ログの `by kind` で sun・reflection・glass が減ったか。
 
+- **7G・3（CPU 側）・5（BLAS プールと記述子の回収）も実装（11-02、未ビルド・未確認）**。7G はレイアウト変更（.ksm・DLL・バンドルをそろえる）。5 は C++ のみ。確認: 環境光・GI・ランプの影・NRD（REBLUR）が前と同じ、タイヤスモークの見た目が同じで fps が上がる、F8 の Scene に `BLAS pool X of Y MB in N chunks`、BLAS の MB と GPU memory が減る、マップを何度切り替えても `DESCRIPTOR HEAP FULL` が出ない・落ちない。
+
 ## 1. インストール済みのもの（ゲームに入っている）
 
 | 物 | 状態 |
