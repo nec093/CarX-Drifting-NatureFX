@@ -159,6 +159,9 @@
 - **デバッグページでの実測（11-02、1916x997、DXR 1.1）**: GPU 6422 / 11228 MB、NatureFX 計 3286 MB。独自エンジン 2366 MB のうち geometry data pool 1408 MB（使用 1383）、BLAS 162.6 MB（圧縮後）、揺れる葉 302.5 MB、NRD 288.3 MB。トレースバッファ 417.6 MB、NatureFX の描画ターゲット 501.9 MB、ゲーム・HDRP の描画ターゲット 377.6 MB。
 - **データプールが大きすぎた原因**: C# がサブメッシュごとに頂点数 `mesh.vertexCount - sm.baseVertex` で登録し、ネイティブはサブメッシュごとにメッシュ全体の位置・法線・UV をコピーしていた（サブメッシュの数だけ重複）。→ `g_sharedData`（元のアドレス・間隔・形式・頂点数が同じなら 1 つを共有）と `g_spanRefs`（区間の参照カウント、ReleaseGeometry で減らし 0 で共有表から外す、退役時に 0 なら Free）。未ビルド・未確認。
 
+- **頂点データの共有の結果（ユーザー実測）**: geometry data pool 1383 → 205 MB、GPU 6422 → 5248 MB（同じマップ・1916x997）。
+- **VRAM 削減の続き（11-02、未ビルド・未確認、.ksm と DLL）**: NRD のとき自前フィルターのデノイズ・履歴を確保しない（RTShadowPass `Accumulation.EnsureFilter/DropFilter`、RTReflectionPass `EnsureFilterTargets`。見込み −90 MB）、3D 霧の Surface を必要量だけ（−14 MB）、ランプの影・ランプマスクは自分の Surface を持たない（−15 MB）、揺れる葉の揺らした頂点を `g_windPool`、BLAS を `g_blasPool` に置き圧縮（更新はそのまま）。見送り: 星のキューブマップ（点の大きさが変わる）、DBufferNone 系（HDRP が Load で読むので 1x1 にできない）、TrackMap（タイヤ痕の細かさと相談）。
+
 ## 1. インストール済みのもの（ゲームに入っている）
 
 | 物 | 状態 |
