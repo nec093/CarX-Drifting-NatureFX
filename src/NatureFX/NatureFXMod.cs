@@ -236,6 +236,11 @@ namespace NatureFX {
 			Wind.Update(s);
 			Accumulation.Update(s);
 			Accumulation.UpdateRoad(rebuiltSurface ? s.RoadWear : 0.0f);
+			// the time of day running on (F8 > Sun & time); saved with the rest when the window closes
+			if (s.Enabled && s.SunOverride && s.TimePasses && s.TimeSpeed > 0.0f) {
+				float hours = Mathf.Min(Time.unscaledDeltaTime, 0.1f) * s.TimeSpeed / 3600.0f;
+				s.TimeOfDay = Mathf.Repeat(s.TimeOfDay + hours, 24.0f);
+			}
 			Sun.Update(s);
 			// the game's own night lighting (its street lights) at NatureFX's night
 			NatureFX.Tools.CpuTimings.Section("day / night, headlights, lights");

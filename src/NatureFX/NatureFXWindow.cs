@@ -534,6 +534,11 @@ namespace NatureFX {
 				"The track's own night lighting (its street lights, lit windows) switches on at dusk and off at dawn of NatureFX's time, as the game does for a night race."));
 			Widgets.Info($"Now: {mod_.GameNight.Status}");
 			Other(Widgets.Slider("Time", S.TimeOfDay, 0, 24, v => S.TimeOfDay = v, "0.0", $" h  ({Clock(S.TimeOfDay)})"));
+			Other(Widgets.Switch("Time passes", S.TimePasses, v => S.TimePasses = v,
+				"The time of day runs on by itself, at the speed below (the slider above follows it)."));
+			Widgets.BeginDependent(S.TimePasses);
+			Other(Widgets.Slider("Speed", S.TimeSpeed, 1, 720, v => S.TimeSpeed = Mathf.Round(v), "0", $"x  (a day in {DayLength(S.TimeSpeed)})"));
+			Widgets.EndDependent();
 			Other(Widgets.Slider("Heading offset", S.SunAzimuthOffset, -180, 180, v => S.SunAzimuthOffset = v, "0", "°"));
 			Other(Widgets.Slider("Max elevation", S.SunMaxElevation, 5, 90, v => S.SunMaxElevation = v, "0", "°"));
 			Other(Widgets.Slider("Intensity", S.SunIntensityScale, 0, 3, v => S.SunIntensityScale = v));
@@ -1339,6 +1344,12 @@ namespace NatureFX {
 		}
 
 		// ---------------------------------------------------------------- helpers
+
+		// how long a whole day takes at a time speed, in real time
+		private static string DayLength(float speed) {
+			float minutes = 1440.0f / Mathf.Max(speed, 1.0f);
+			return minutes >= 60.0f ? $"{minutes / 60.0f:0.#} h" : $"{minutes:0.#} min";
+		}
 
 		private static string Clock(float hours) {
 			int h = Mathf.FloorToInt(hours) % 24;

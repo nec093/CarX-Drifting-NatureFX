@@ -42,6 +42,8 @@ namespace NatureFX {
 		public bool SunOverride { get; set; }
 		public bool SyncGameNight { get; set; }            // the game's night lighting (street lights) follows NatureFX's sun
 		public float TimeOfDay { get; set; }          // hours 0..24
+		public bool TimePasses { get; set; }          // the time of day runs on by itself
+		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
 		public float SunMaxElevation { get; set; }    // degrees at noon
 		public float SunIntensityScale { get; set; }
@@ -255,6 +257,8 @@ namespace NatureFX {
 		public bool SunOverride { get; set; }
 		public bool SyncGameNight { get; set; }            // the game's night lighting (street lights) follows NatureFX's sun
 		public float TimeOfDay { get; set; }          // hours 0..24
+		public bool TimePasses { get; set; }          // the time of day runs on by itself
+		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
 		public float SunMaxElevation { get; set; }    // degrees at noon
 		public float SunIntensityScale { get; set; }
@@ -793,6 +797,11 @@ namespace NatureFX {
 				// the debug page: off, its port
 				d.DebugPagePort = 8765;
 				d.ConfigVersion = 62;
+			}
+			if (d.ConfigVersion < 63) {
+				// the time of day running on: off, an hour a minute
+				d.TimeSpeed = 60.0f;
+				d.ConfigVersion = 63;
 			}
 		}
 
