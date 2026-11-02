@@ -211,6 +211,8 @@ namespace NatureFX.Rendering {
 		private RenderTargetIdentifier[] lampTargets_ = new RenderTargetIdentifier[3];
 		private static readonly int LampsTotalId = Shader.PropertyToID("_NFX_LampsTotalTex");
 		private static readonly int GBuffer3Id = Shader.PropertyToID("_NFX_GBuffer3Tex");
+		private static readonly int GBuffer0Id = Shader.PropertyToID("_NFX_GBuffer0Tex");
+		private static readonly int GBuffer0OnId = Shader.PropertyToID("_NFX_GBuffer0On");
 		private static readonly int LampMaskId = Shader.PropertyToID("_NFX_LampMask");
 		private static readonly int LampMaskHistoryId = Shader.PropertyToID("_NFX_LampMaskHistory");
 		private static readonly int LampMaskSizeId = Shader.PropertyToID("_NFX_LampMaskSize");
@@ -690,6 +692,8 @@ namespace NatureFX.Rendering {
 			bool relight = exactUsed_ && FullRelight && (maskUsed_ || !localShadows);
 			props_.SetTexture(LampsTotalId, maskUsed_ ? lampsTotal_ : color_);
 			props_.SetTexture(GBuffer3Id, exactUsed_ ? gbuffer_[3] : color_);
+			props_.SetTexture(GBuffer0Id, exactUsed_ ? gbuffer_[0] : color_);
+			props_.SetFloat(GBuffer0OnId, exactUsed_ ? 1.0f : 0.0f);
 			props_.SetVector(SunExactParams, new Vector4(exactUsed_ ? 1.0f : 0.0f, maskUsed_ ? 1.0f : 0.0f, relight ? 1.0f : 0.0f, 0.0f));
 			RelightActive = relight;
 			props_.SetVector(RTSunDir, SunDirection);
