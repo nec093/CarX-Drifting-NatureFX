@@ -391,8 +391,11 @@ namespace NatureFX.Rendering {
 			// the own post-processing off: its eye adaptation still runs (only the meter), HDRP's post-processing draws
 			// the picture at the exposure worked out here
 			bool meterOnly = on && !active && pass_ != null && s.ExposureMode == 1;
+			// the game's exposure, raised as far as NatureFX raised the sun (Units): the track's exposure was set for its
+			// sun of a few lux, against real sunshine it left the picture white
+			bool gameScaled = on && s.ExposureMode == 0;
 			Active = active;
-			volume_.enabled = active || meterOnly;
+			volume_.enabled = active || meterOnly || gameScaled;
 			tonemapping_.active = active;
 			bloom_.active = active;
 			color_.active = active;
@@ -408,6 +411,11 @@ namespace NatureFX.Rendering {
 				OwnExposure = false;
 				exposure_.active = false;
 				ev_ = float.NaN;
+				if (gameScaled) {
+					GameExposure();
+					Status = FormattableString.Invariant($"HDRP's post-processing; the game's exposure {gameWhat_}");
+					return;
+				}
 				Status = pass_ == null ? "not in the shader bundle (HDRP's post-processing)" : "off (HDRP's post-processing)";
 				return;
 			}
@@ -436,12 +444,65 @@ namespace NatureFX.Rendering {
 			string[] curves = { "ACES", "Neutral", "AgX", "none" };
 			Status = s.ExposureMode == 1
 				? FormattableString.Invariant($"own: exposure {ev_:0.00} EV100, eye adaptation, white balance {(warm_ >= 0 ? "cooler" : "warmer")} by {Mathf.Abs(warm_):0.00} stops (red / blue), bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
-				: FormattableString.Invariant($"own: the game's exposure, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}");
+				: FormattableString.Invariant($"own: the game's exposure {gameWhat_}, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}");
+		}
+
+		// The game's exposure (its highest priority volume with one), shifted by the stops NatureFX raised the sun
+		// (Units.Log2Scale): a fixed one stays fixed, an automatic one keeps its mode with its limits moved; none: HDRP's
+		// default fixed 0 EV, raised. Looked up every 2 s.
+		private float nextGameScan_;
+		private string gameWhat_ = "";
+		private ExposureMode gameMode_ = ExposureMode.Fixed;
+		private float gameFixed_, gameMin_, gameMax_, gameCompensation_;
+		private void GameExposure() {
+			if (Time.unscaledTime >= nextGameScan_) {
+				nextGameScan_ = Time.unscaledTime + 2.0f;
+				gameMode_ = ExposureMode.Fixed;
+				gameFixed_ = 0.0f;
+				gameMin_ = 0.0f;
+				gameMax_ = 0.0f;
+				gameCompensation_ = 0.0f;
+				float best = float.NegativeInfinity;
+				foreach (var v in UnityEngine.Object.FindObjectsByType<Volume>(FindObjectsSortMode.None)) {
+					if (v == null || !v.isActiveAndEnabled || !v.isGlobal || v.gameObject.name.StartsWith("NatureFX", StringComparison.Ordinal) || v.priority < best) {
+						continue;
+					}
+					var profile = v.sharedProfile;
+					if (profile == null || profile.name.StartsWith("NatureFX", StringComparison.Ordinal) || !profile.TryGet<Exposure>(out var e) || !e.active || !e.mode.overrideState) {
+						continue;
+					}
+					best = v.priority;
+					gameMode_ = e.mode.value;
+					gameFixed_ = e.fixedExposure.value;
+					gameMin_ = e.limitMin.value;
+					gameMax_ = e.limitMax.value;
+					gameCompensation_ = e.compensation.value;
+				}
+			}
+			float up = Units.Log2Scale;
+			exposure_.active = true;
+			if (gameMode_ == ExposureMode.Automatic || gameMode_ == ExposureMode.AutomaticHistogram) {
+				exposure_.mode.Override(gameMode_);
+				exposure_.limitMin.Override(gameMin_ + up);
+				exposure_.limitMax.Override(gameMax_ + up);
+				exposure_.compensation.Override(gameCompensation_);
+				gameWhat_ = FormattableString.Invariant($"(automatic, {gameMin_ + up:0.0} to {gameMax_ + up:0.0} EV, +{up:0.0} for the real sun)");
+			} else {
+				exposure_.mode.Override(ExposureMode.Fixed);
+				exposure_.fixedExposure.Override(gameFixed_ + up);
+				gameWhat_ = FormattableString.Invariant($"(fixed {gameFixed_ + up:0.0} EV, +{up:0.0} for the real sun)");
+			}
 		}
 
 		// eye adaptation (with the game's exposure chosen, HDRP keeps it)
 		private void Adapt(ISettings s) {
-			exposure_.active = s.ExposureMode == 1;
+			if (s.ExposureMode == 0) {
+				ev_ = float.NaN; // nothing of the eye adaptation's left over (its fixed exposure, the white balance)
+				GameExposure();
+			} else {
+				exposure_.active = true;
+				exposure_.mode.Override(ExposureMode.Fixed);
+			}
 			if (s.ExposureMode == 1 && float.IsNaN(ev_) && !float.IsNaN(HdrpEV)) {
 				// taking over: from where HDRP's exposure is (it adapted until now), not a jump to the first reading
 				ev_ = HdrpEV;
@@ -480,7 +541,9 @@ namespace NatureFX.Rendering {
 			}
 			OwnExposure = s.ExposureMode == 1 && !float.IsNaN(ev_);
 			// until the first reading HDRP keeps its own (a fixed exposure of nothing would flash the first frames)
-			exposure_.active = s.ExposureMode == 1 && !float.IsNaN(ev_);
+			if (s.ExposureMode == 1) {
+				exposure_.active = !float.IsNaN(ev_);
+			}
 			pass_.White = WhiteBalance(s);
 			if (!float.IsNaN(ev_)) {
 				// the compensation: the own final pass's with the own post-processing, HDRP's fixed exposure without it
