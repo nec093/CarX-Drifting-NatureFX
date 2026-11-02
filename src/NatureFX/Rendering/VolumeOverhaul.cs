@@ -176,17 +176,22 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			nextSkyUnload_ = Time.unscaledTime + 5.0f;
-			foreach (var v in Object.FindObjectsOfType<Volume>()) {
-				if (v == volume_ || v.sharedProfile == null) {
+			// every profile loaded, not only those on the scene's volumes: a track's sky profile may be held by a
+			// volume that is off, or by the game's own scripts (the stack still showed its sky)
+			foreach (var profile in Resources.FindObjectsOfTypeAll<VolumeProfile>()) {
+				if (profile == null || profile == profile_) {
 					continue;
 				}
-				if (v.sharedProfile.TryGet<PhysicallyBasedSky>(out var pbs)) {
+				if (profile.TryGet<PhysicallyBasedSky>(out var pbs)) {
 					UnloadSky(pbs.spaceEmissionTexture.value, keep);
 				}
-				if (v.sharedProfile.TryGet<HDRISky>(out var hdri)) {
+				if (profile.TryGet<HDRISky>(out var hdri)) {
 					UnloadSky(hdri.hdriSky.value, keep);
 				}
 			}
+			// and what the camera's stack draws with now (whatever profile it came from)
+			var stack = VolumeOverhaul.Stack();
+			UnloadSky(stack?.GetComponent<PhysicallyBasedSky>()?.spaceEmissionTexture.value, keep);
 		}
 
 		private void UnloadSky(Texture t, Texture keep) {

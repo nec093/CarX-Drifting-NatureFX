@@ -239,6 +239,42 @@ namespace NatureFX.Tools {
 		private static int meshCount_, rtMeshCount_, natureMeshCount_;
 		private static List<(string Name, long Bytes)> bigMeshes_ = new();
 
+		// The largest game texture and what refers to it (materials, volume profiles' skies): where a texture nothing
+		// draws comes from
+		private static Texture biggest_;
+		private static long biggestBytes_;
+		private static string biggestUsers_ = "-";
+
+		private static string UsersOf(Texture t) {
+			if (t == null) {
+				return "-";
+			}
+			var users = new List<string>();
+			foreach (var m in Resources.FindObjectsOfTypeAll<Material>()) {
+				if (m == null) {
+					continue;
+				}
+				foreach (int id in m.GetTexturePropertyNameIDs()) {
+					if (m.GetTexture(id) == t) {
+						users.Add($"material {m.name} ({(m.shader != null ? m.shader.name : "-")})");
+						break;
+					}
+				}
+				if (users.Count >= 8) {
+					break;
+				}
+			}
+			foreach (var p in Resources.FindObjectsOfTypeAll<UnityEngine.Rendering.VolumeProfile>()) {
+				if (p != null && p.TryGet<UnityEngine.Rendering.HighDefinition.PhysicallyBasedSky>(out var pbs) && pbs.spaceEmissionTexture.value == t) {
+					users.Add($"volume profile {p.name} (physically based sky, space emission{(pbs.active ? "" : ", component off")})");
+				}
+			}
+			if (RenderSettings.skybox != null && RenderSettings.skybox.HasProperty("_Tex") && RenderSettings.skybox.GetTexture("_Tex") == t) {
+				users.Add($"RenderSettings.skybox {RenderSettings.skybox.name}");
+			}
+			return $"{t.name}: " + (users.Count > 0 ? string.Join("; ", users) : "nothing found (a script holds it)");
+		}
+
 		// What a mesh's vertex and index buffers take on the GPU
 		private static long MeshBytes(Mesh m) {
 			long bytes = 0;
@@ -257,6 +293,8 @@ namespace NatureFX.Tools {
 			var big = new List<(string, long)>();
 			var bigGame = new List<(string, long)>();
 			var formats = new Dictionary<string, (long Bytes, int Count)>();
+			biggest_ = null;
+			biggestBytes_ = 0;
 			long other = 0, game = 0, readable = 0, streamed = 0;
 			int otherCount = 0, gameCount = 0, streamedCount = 0;
 			foreach (var t in Resources.FindObjectsOfTypeAll<Texture>()) {
@@ -296,6 +334,10 @@ namespace NatureFX.Tools {
 					string f = t.graphicsFormat.ToString();
 					formats.TryGetValue(f, out var fv);
 					formats[f] = (fv.Bytes + bytes, fv.Count + 1);
+					if (bytes >= 64L << 20 && (biggest_ == null || bytes > biggestBytes_)) {
+						biggest_ = t;
+						biggestBytes_ = bytes;
+					}
 					if (bytes >= 4L << 20) {
 						bigGame.Add(($"{(name.Length > 0 ? name : "(no name)")} ({t.GetType().Name} {t.width}x{t.height} {t.graphicsFormat}{(t.isReadable ? ", readable" : "")})", bytes));
 					}
@@ -324,6 +366,7 @@ namespace NatureFX.Tools {
 			gameTextureStreamedCount_ = streamedCount;
 			bigGameTextures_ = bigGame.Count > 30 ? bigGame.GetRange(0, 30) : bigGame;
 			gameTextureFormats_ = formatList.Count > 12 ? formatList.GetRange(0, 12) : formatList;
+			biggestUsers_ = bigGame.Count > 0 && bigGame[0].Item2 >= 64L << 20 ? UsersOf(biggest_) : "-";
 
 			// meshes: the game's, NatureFX's own (grass, forest, debris), and the ones made only for the ray tracing
 			// scene (NFX_RT_*: terrain chunks, baked skinned meshes; the engine keeps its own copy of their data)
@@ -638,6 +681,7 @@ namespace NatureFX.Tools {
 			gameTex.Add($"of them mip streamed ({gameTextureStreamedCount_})", Mb(gameTexturesStreamed_), gameTexturesStreamed_, true);
 			gameTex.Try("Unity's streaming", () => TextureBudget.Status);
 			gameTex.Try("own sky: out of video memory", () => VolumeOverhaul.UnloadedSky);
+			gameTex.Add("the largest is used by", biggestUsers_);
 			foreach (var (format, bytes, count) in gameTextureFormats_) {
 				gameTex.Add($"format {format} ({count})", Mb(bytes), bytes, true);
 			}
