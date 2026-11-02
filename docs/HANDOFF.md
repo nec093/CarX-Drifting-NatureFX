@@ -225,7 +225,6 @@ NatureFX は次の 3 つの成果物で構成される。3 つの成果物は必
 | 独自エンジン | `native/NFXNative/src/NFXNative.cpp`、`Nrd.inl`、`Dlss.inl`、`Wind.inl`、`RtDevice.inl`（DXR 1.2）、`shaders/`（`NFXCommon.hlsli`、`NfxPack.hlsli`、トレースごとの .hlsl） |
 | シェーダーバンドル | `unity/Assets/NatureFX/Shaders/`（合成、後処理、パーティクル、連携）、`ShaderLibrary/`（Lit に組み込む hlsl）、`Editor/`（生成、ビルド、変種の削減） |
 | ビルド | `tools/build_bundle.sh`、`tools/build_native.ps1`、`tools/build_dxr12_probe.ps1`、`unity/variants/` |
-| テストマップ | `tools/kino_sdk/`（`NfxDataTestMap.cs`、`NfxTestBays.cs`、素材の取り込み） |
 
 ### 7.1 リポジトリ外の場所（ユーザーの PC）
 
@@ -233,6 +232,5 @@ NatureFX は次の 3 つの成果物で構成される。3 つの成果物は必
 |---|---|
 | リポジトリ | `C:\Users\kppn1223\Documents\carx\mods\NatureFX` |
 | シェーダーバンドル用の Unity プロジェクト | `C:\Users\kppn1223\NatureFX-Unity`（ログは `Logs\naturefx_build.log`） |
-| Kino Content SDK（テストマップ） | `C:/Users/kppn1223/Desktop/kino_content_sdk` |
 | ゲーム | `C:\Program Files (x86)\Steam\steamapps\common\CarX Drift Racing Online`（ログは `kino/output.log`） |
 | 外部の依存物・素材 | `%USERPROFILE%\NatureFX-Deps`（NRD、DLSS、Agility SDK 1.619、dxc 1.9、Poly Haven の素材） |

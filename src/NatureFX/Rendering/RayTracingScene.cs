@@ -491,7 +491,7 @@ namespace NatureFX.Rendering {
 		private static readonly string[] NotGlass = {
 			"blobshadow", "fakeshadow", "shadowplane", "shadow", "decal", "particle", "unlit", "additive", "sprite", "ui/", "text",
 			"flare", "glow", "smoke", "dust", "fog", "cloud", "water", "skid", "tire", "trail", "light shaft", "beam",
-			// overlays blended onto roads and walls (a touge map's blend_road_wear dimmed the whole road as "glass")
+			// overlays blended onto roads and walls (a map's road wear overlay dimmed the whole road as "glass")
 			"blend", "wear", "dirt", "overlay", "puddle", "stain", "leak", "grime", "moss", "crack", "mark",
 		};
 		// what a material's name or shader says glass is, whatever its smoothness

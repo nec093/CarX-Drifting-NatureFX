@@ -1,5 +1,5 @@
-# Turns the baked shrub levels (bake_shrub_lods.py) into the textures HDRP/Lit reads, as cards_to_png.py does for
-# the cards: <name>_<impostor|cloud>_diff.png (sRGB albedo with the scan's AO, colour bled past the edges, alpha in A),
+# Turns the baked shrub levels (bake_shrub_lods.py) into the textures HDRP/Lit reads:
+# <name>_<impostor|cloud>_diff.png (sRGB albedo with the scan's AO, colour bled past the edges, alpha in A),
 # _nor.png (the tile's camera axes = the card's tangent space, OpenGL) and _mask.png (G: AO, A: smoothness).
 #
 #   python tools/kino_sdk/shrubs_to_png.py <bake folder> <SDK>/Assets/Content/NfxAssets/shrubs
@@ -48,7 +48,7 @@ for name in meta:
         Image.fromarray(mask, 'RGBA').save(os.path.join(dst, f'{name}_{level}_mask.png'))
         print(name, level, 'coverage', round(float(solid.mean()), 3))
 shutil.copyfile(os.path.join(src, 'shrubs.json'), os.path.join(dst, 'shrubs.json'))
-# the same as a list for Unity's JsonUtility (NfxShrubs.cs): corners flattened
+# the same as a list for Unity's JsonUtility: corners flattened
 listed = {'shrubs': [dict(name=k, asset=v['asset'], node=v['node'], frames=v['frames'], size_m=v['size_m'], centre_y=v['centre_y'], height_m=v['height_m'],
                           cards=[dict(corners=sum(c['corners'], []), uv=c['uv'], normal=c['normal'], tangent=c['tangent'])
                                  for c in v['cards']])

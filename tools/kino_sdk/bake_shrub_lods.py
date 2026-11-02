@@ -74,7 +74,7 @@ def reset():
 
 
 def add_alpha(asset):
-    # Poly Haven ships the plants' alpha beside the glTF (as bake_tree_cards.py)
+    # Poly Haven ships the plants' alpha beside the glTF
     tex = os.path.join(src, 'models', asset, 'textures')
     for m in bpy.data.materials:
         if not m.use_nodes:

@@ -11,7 +11,7 @@ namespace NatureFX.Rendering {
 		private const float Priority = 10000.0f;
 
 		// The volume values the game camera renders with. HDRP keeps a stack per camera; VolumeManager's own stack is
-		// never updated for it and holds the defaults (it said "sky type 0" over the test map's physically based sky).
+		// never updated for it and holds the defaults (it said "sky type 0" over a map's physically based sky).
 		public static VolumeStack Stack() {
 			var cam = Camera.main;
 			if (cam != null && cam.TryGetComponent<HDAdditionalCameraData>(out _)) {

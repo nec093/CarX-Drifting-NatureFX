@@ -80,7 +80,7 @@ F8 > Map には、プロファイルを操作する次のボタンがありま�
 INI に近い形式です。行頭、または空白の直後にある `#` から行末まではコメントとして扱います。正規表現の中の `#` は、直前に空白がなければそのまま使用できます。同じセクションに同じキーを 2 回記述した場合は、後の記述を使用します。未知のキーは、ログに警告を出力して無視します。
 
 ```ini
-# Sample Touge 用
+# 峠のマップの例
 [map]
 name = Sample Touge
 inheritGlobalRules = true      # true（既定）: このファイルのルールの後に既定のルールも使う
@@ -440,7 +440,7 @@ nocol_nfx_shrub_<名前>+<名前>__density-0p8__scale-1p2    生やす面（Mesh
 | `scale` | 大きさの倍率。1 本ごとに ±25 % のばらつきを加える |
 
 - 40° より急な面には生成しません。
-- 板の束とインポスターの画像は、`tools/kino_sdk/bake_shrub_lods.py`（Blender）と `shrubs_to_png.py` で作成します。テストマップでは、`NfxShrubs.cs` の `ShrubProto` と `ShrubArea` が組み立てます（区画 N4）。
+- 板の束とインポスターの画像は、`tools/kino_sdk/bake_shrub_lods.py`（Blender）と `shrubs_to_png.py` で作成します。
 - 季節の色は、`[foliage]` でマテリアル名（スキャンの葉のマテリアル `nfxshrub_`）に対して指定します。
 
 ## 6. 光
@@ -737,30 +737,6 @@ rut   = 120,402.1,-29.2; 210,404.2,6.8 | width=0.35 strength=0.6
 
 路面と地面の境界から 2 m 以内に、小石、落ち葉、小枝の 3D の粒を配置します。密度は F8 > Map の「Debris」で変更できます（0 で無効）。カメラが 24 m 移動すると、周囲に配置し直します。
 
-## 8. map generator からの自動書き出し（予定）
-
-map generator の設定（`config/<name>.yaml`）と生成物から、NatureFX 用のデータを自動で作成する予定です（[ROADMAP.md](ROADMAP.md)）。処理の流れは次のとおりです。
-
-1. map generator（Python）が、プロファイルの本文と、マーカーや光源などの一覧（位置、向き、大きさ、種類）を JSON で書き出す。
-2. Unity でシーンを組み立てる `MapBuilder.cs` が、その JSON をもとに `nfx_profile`（TextMesh）、空のオブジェクト、無効にした Light などを配置し、メッシュに頂点カラーを書き込む。
-
-| map generator の要素 | NatureFX への書き出し |
-|---|---|
-| `trees_*`（枝葉のカード） | 頂点カラー R = 高さ ÷ 樹高、G = 木ごとの乱数、A は林の密度から算出。`[foliage]` `conifer` / `deciduous` |
-| `trees_bark` | 頂点カラー (0, 0, 0.8, 1) |
-| `grass` / `sasa` / `shrubs` | 頂点カラー R = 株の中の高さ、G = 株ごとの乱数。`[foliage]` `grass` / `bamboo`。路肩の地面に `nocol_nfx_grass_wild` |
-| 路面、地形 | 頂点カラー (0, 0, 1, 1 − 樹冠の被覆率) |
-| `markings` | `[materials]` `asphalt_paint, retro=0.6` |
-| `guardrail` | `metal_galvanized, rust=0.15`。反射板（`delineator`）に `retro=1.0` |
-| `warning_sign` / `route_sign` | `metal_painted, retro=1.0` |
-| `led_sign` | `[emissive]` `nits=800, when=always` |
-| `masonry` / `rubble` / `rock` | `masonry` / `rock`。`moss` は林の中にあるものほど高くする |
-| 道路の縦断の低い所、待避所 | `nfx_puddle` |
-| 側溝 | `nocol_nfx_water_gutter` |
-| 林に囲まれた区間と開けた区間の境目 | `nfx_probe` |
-| 谷側の低い所 | `nfx_volume_mist` |
-| 電柱、待避所の照明（設定にある場合） | `nfx_light_sodium` などの無効にした Light |
-
 ## 付録 コードの場所（NatureFX 側）
 
 | 項目 | 場所 |
@@ -776,4 +752,4 @@ map generator の設定（`config/<name>.yaml`）と生成物から、NatureFX �
 | 汚れ、デトリタス | `Map/MapPaint.cs`、`Map/Detritus.cs`（地面の地図は `Rendering/GroundMap.cs`） |
 | 草、森、藪 | `Nature/GrassRenderer.cs`、`Nature/ForestRenderer.cs`、`Nature/ShrubRenderer.cs` |
 | 雲海 | `Rendering/CloudController.cs` |
-| マップ内データの確認ログ | `Tools/MapDataProbe.cs`（テストマップ `tools/kino_sdk/NfxDataTestMap.cs` の D0 区画と組み合わせる） |
+| マップ内データの確認ログ | `Tools/MapDataProbe.cs` |

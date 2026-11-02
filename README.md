@@ -219,7 +219,7 @@ NatureFX のシェーダー（`NatureFX/Foliage`、`NatureFX/LitAccumulation`）
 ├─ unity/
 │  ├─ Assets/NatureFX/         シェーダーバンドルのソース（Editor/、ShaderLibrary/、Shaders/）
 │  └─ variants/                バリアント絞り込み用のデータ
-└─ tools/                      build_bundle.sh, build_native.ps1, build_dxr12_probe.ps1, kino_sdk/（テストマップ）, maykr.exe（gitignore）
+└─ tools/                      build_bundle.sh, build_native.ps1, build_dxr12_probe.ps1, kino_sdk/（藪の素材を焼くスクリプト、Poly Haven 素材の取り込み）, maykr.exe（gitignore）
 ```
 
 ## 7. 既知の制限

@@ -151,19 +151,7 @@
 - ランプの影（`LocalShadows.hlsl`）は、寄与に比例して 1 画素あたり 2 本のライトを選択する（RIS）。
 - `LightColor.w` が 2 のライトは、発光面の代役（HDRP にない光）である。届いた光を、負の「遮られた光」として加算する。合成の `color -= min(...)` は、負の値を通すことを前提としている。
 
-### 8.7 テストマップ
-
-- テストマップ `test_map` は、区画ごとに 1 つのテーマを割り当てる。配置のルールは docs/testmap-layout.md に、区画の表と内容は `tools/kino_sdk/NfxTestBays.cs` に、地面・峠区間・看板は `NfxDataTestMap.cs` に記述している。
-- 新しいテストを追加するときは、区画の表に 1 行追加する。
-- ビルドの前に、`NfxDataTestMap.cs` と `NfxTestBays.cs` を SDK の `Assets/Editor/NatureFX/` にコピーする。その後、次のコマンドを実行する。ゲームの起動中は、環境変数 `NFX_MAP_OUT` で出力先を別のフォルダーに指定する。
-
-  ```
-  Unity.exe -batchmode -quit -projectPath C:/Users/kppn1223/Desktop/kino_content_sdk -executeMethod NfxDataTestMap.BuildAll
-  ```
-
-- 実写素材の峠区間（`BuildRealArea`、スポーン地点の後方）には、Poly Haven の CC0 素材を使用する。事前に `tools/kino_sdk/polyhaven_import.py` で、SDK の `Assets/Content/NfxAssets` に変換しておく（docs/testmap-assets.md）。
-
-### 8.8 DLSS
+### 8.7 DLSS
 
 - DLSS（`src/Dlss.inl`）のソースは `%USERPROFILE%\NatureFX-Deps\DLSS` に置く（GitHub NVIDIA/DLSS を clone）。
 - `build_native.ps1` は、`include` と `nvsdk_ngx_s.lib`（/MT）でリンクする。また、`lib/Windows_x86_64/rel/nvngx_dlss.dll`、`nvngx_dlssd.dll`（Ray Reconstruction）、LICENSE を `kino/mods/NatureFX/` に配置する。NGX は NFXNative.dll と同じフォルダーから DLL を探す。
