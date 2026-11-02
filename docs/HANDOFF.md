@@ -402,3 +402,9 @@
   - HDRP の ambient probe の代わりに独自の空のプローブ（NativeEngine.SkyProbe、同じ詰め方）を全体で使う（OwnLighting.Probe: 合成、ネイティブのトレース）。空のプローブは毎フレーム作る（以前は day > 0 のときだけ）。
   - 空の切り替え（太陽の薄明 → 月、-7.5° / -6.5°）は sky view LUT の 6 秒のクロスフェード（NFX_NativeBridge SkyFade）。太陽は円盤が沈みきる -0.6° まで「出ている」扱い。
   - 未確認: 合成を通らない透明な物（HDRP のまま描く半透明）は空の光と映り込みがなくなる。独自ガラスでない HDRP のガラスの合成は HDRP の空を引く前提のまま。
+- **11-02 HDRP からの移行の続き（A 置き換え済み機能の停止 / 露出 / B 太陽 / C ランプ）**:
+  - A: CameraVolumetrics に「オフにする」向きを追加（value=false）。独自エンジンが動いている間、ゲームのカメラの Volumetrics・VolumetricClouds・AtmosphericScattering（独自の霧と雲）、SSR・ReflectionProbe・PlanarProbe・SkyReflection（OwnLighting.Reflections）、SSAO・SSGI（OwnLighting.Ambient）、ContactShadows（影の合成が動いている間）をオフ。
+  - 露出: PostProcess の目の順応が動いている間は HDRP の AutomaticHistogram をオフ（二重制御だった）。HDRP の露出（ExposureProbe）から始め、読み取りの間隔の時間で順応。独自のポストプロセス（NativePost）がオフのときは HDRP の自動露出のまま。
+  - B（設定 OwnSunLight、移行 65）: エンジンが追う光（太陽か月）の HDAdditionalLightData の affectDiffuse/affectSpecular をオフ。SunExact パスは dimmer を 1 に戻して計算し、合成は影を付けて足す（G-buffer がない画素は Lambert + GGX + クリアコート）。
+  - C（設定 OwnLampLight、移行 66）: 点光源・スポットの affect をオフ（1 秒ごとに探す）。LampsExact パスで dimmer を 1 に戻し、合成は lampsTotal − blocked を足す（G-buffer がない画素は影なしの拡散）。
+  - 未確認・注意: HDRP が affect の両方オフのライトを光源リストから外すなら、太陽・ランプが消える（スイッチで戻せる）。合成のあとに描く半透明は太陽・ランプ・空の光がない。1 画素 4 灯を超えるランプは影なし。G-buffer のコピーと各 exact パスは独自の照明計算として残るので VRAM は減らない。
