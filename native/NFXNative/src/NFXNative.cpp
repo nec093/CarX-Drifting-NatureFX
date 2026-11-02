@@ -1765,14 +1765,14 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 				if (size == 0 || BufferPool::Align(size) >= g.blas.bytes) {
 					continue;
 				}
-				PoolSpan small = g_blasPool.Allocate(size);
-				if (!small) {
+				PoolSpan compacted = g_blasPool.Allocate(size);
+				if (!compacted) {
 					continue;  // no room: the BLAS stays as built
 				}
-				list->CopyRaytracingAccelerationStructure(small.Address(), g.blas.Address(),
+				list->CopyRaytracingAccelerationStructure(compacted.Address(), g.blas.Address(),
 				                                          D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT);
 				uncompacted.push_back(g.blas);
-				g.blas = small;
+				g.blas = compacted;  // (not "small": windows.h defines it as char)
 				copied = true;
 			}
 			D3D12_RANGE none = { 0, 0 };
