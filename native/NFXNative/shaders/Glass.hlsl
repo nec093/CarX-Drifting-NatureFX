@@ -4,8 +4,9 @@
 // the scene and what it hits is shaded as a reflection (camera colour where the hit is on screen, else shaded). HDRP
 // already reflects its sky / probe in the glass: the result is the change to that, the hit's radiance less the sky
 // light guess HDRP had there, times the glass's Fresnel. A ray that reaches the sky changes nothing.
-// Surface (NFX_NativeBridge PrepareGlass): 2 float4 per pixel (view direction xyz, distance to the opaque surface
-// (<= 0: nothing to trace); packed full resolution pixel, exposure multiplier). Output: float4 per pixel (change to
+// Surface (NFX_NativeBridge PrepareGlass): a uint4 per pixel (view direction as an octahedron (NfxPackOct16, about
+// 3e-5 rad off: a twentieth of a pixel), distance to the opaque surface (float; <= 0: nothing to trace), packed full
+// resolution pixel, exposure multiplier (float)). Output: float4 per pixel (change to
 // the pixel's colour rgb, pre-exposed and signed; the glass's Fresnel). Compiled into Glass.h.
 // NFX_FLAG_OWN_GLASS (roadmap E): HDRP does not draw the glass (OwnGlass.cs hides it), the camera colour is what is
 // behind it, and the glass is drawn here whole: what it lets through (1 - Fresnel, tinted by its colour as far as it
@@ -76,8 +77,9 @@ NFX_ENTRY(id)
     if (id.x >= Width || id.y >= Height)
         return;
     uint index = id.y * Width + id.x;
-    float4 a = asfloat(Surface.Load4(index * 32));
-    float4 b = asfloat(Surface.Load4(index * 32 + 16));
+    uint4 packed = Surface.Load4(index * 16);
+    float4 a = float4(NfxUnpackOct16(packed.x), asfloat(packed.y)); // view direction, distance to the opaque surface
+    float4 b = float4(asfloat(packed.z), asfloat(packed.w), 0.0, 0.0); // packed pixel, exposure
     float4 result = 0;
     Hit glass;
     glass.t = 0.0;

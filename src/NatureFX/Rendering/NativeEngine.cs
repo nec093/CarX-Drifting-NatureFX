@@ -906,7 +906,7 @@ namespace NatureFX.Rendering {
 		// Sun shadows into the shadow pass's sun texture
 		public static void TraceSun(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, RTHandle sunOutput, Vector4 size) {
 			int width = (int)size.x, height = (int)size.y;
-			var b = Buffers(TraceSun_, width * height, 2, 8);
+			var b = Buffers(TraceSun_, width * height, 1, 4); // packed: SunShadow.hlsl (origin and pixel; 2 halves)
 			int prepare = bridge.FindKernel("Prepare");
 			int unpack = bridge.FindKernel("Unpack");
 			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
@@ -1314,7 +1314,7 @@ namespace NatureFX.Rendering {
 			reflParams_ = reflParams;
 			PrepareScreen(cmd, bridge, ctx, color);
 
-			var b = Buffers(TraceReflection_, width * height, 3, 32);
+			var b = Buffers(TraceReflection_, width * height, 2, 16); // packed: NfxReflSurface / NfxPackReflResult
 			int prepare = bridge.FindKernel("PrepareReflection");
 			int unpack = bridge.FindKernel("UnpackReflection");
 			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
@@ -1369,7 +1369,7 @@ namespace NatureFX.Rendering {
 			int width = (int)size.x, height = (int)size.y;
 			reflParams_ = reflParams;
 			PrepareScreen(cmd, bridge, ctx, color);
-			var b = Buffers(TraceGlass_, width * height, 2, 16);
+			var b = Buffers(TraceGlass_, width * height, 1, 16); // packed: Glass.hlsl (one uint4 per pixel)
 			int prepare = bridge.FindKernel("PrepareGlass");
 			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
 			cmd.SetComputeTextureParam(bridge, prepare, CameraDepthId, ctx.cameraDepthBuffer);

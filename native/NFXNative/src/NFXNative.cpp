@@ -76,8 +76,6 @@
 #include "CopyRaw.h"          // g_CopyRaw: shaders/CopyRaw.hlsl as DXIL
 #include "WindDisplace.h"     // g_WindDisplace: shaders/WindDisplace.hlsl (foliage swayed by the wind)
 #include "BakeAlpha.h"        // g_BakeAlpha: shaders/BakeAlpha.hlsl as DXIL
-#include "PackSunPackIn.h"    // g_PackSunPackIn: shaders/PackSun.hlsl (Prepare's sun output, packed for the DXR 1.2 device)
-#include "PackSunUnpackOut.h" // g_PackSunUnpackOut: shaders/PackSun.hlsl (its result back for Unpack)
 #include "BakeOmm.h"          // g_BakeOmm: shaders/BakeOmm.hlsl (opacity micromaps from the alpha masks)
 #include "SunShadow619.h"     // g_SunShadow619: shaders/SunShadow.hlsl for the DXR 1.2 device (SM 6.9, alpha masks)
 #include "NrdSigmaPack.h"     // g_NrdSigmaPack: shaders/NrdSigmaPack.hlsl (SIGMA's inputs, Nrd.inl)

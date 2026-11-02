@@ -92,7 +92,6 @@ std::vector<RtGeometry> g_rtGeometries;
 std::vector<RtMaterial> g_rtMaterials;
 std::vector<D3D12_RAYTRACING_INSTANCE_DESC> g_rtResolved;  // g_resolved with the 1.619 BLAS addresses
 ComputePipeline g_copyRaw;
-ComputePipeline g_packSunIn, g_unpackSunOut;
 // BakeAlpha: u0, 5 root constants, a linear wrap sampler, the heap indexed directly
 ComPtr<ID3D12RootSignature> g_bakeRoot;
 ComPtr<ID3D12PipelineState> g_bakePso;
@@ -241,8 +240,7 @@ D3D12_VERSIONED_ROOT_SIGNATURE_DESC HeapIndexedRoot(D3D12_ROOT_PARAMETER1* param
 }
 
 bool CreateRtPipelines() {
-	if (!g_copyRaw.Create(g_CopyRaw, sizeof(g_CopyRaw), 4) || !g_packSunIn.Create(g_PackSunPackIn, sizeof(g_PackSunPackIn), 4) ||
-	    !g_unpackSunOut.Create(g_PackSunUnpackOut, sizeof(g_PackSunUnpackOut), 4)) {
+	if (!g_copyRaw.Create(g_CopyRaw, sizeof(g_CopyRaw), 4)) {
 		return false;
 	}
 	if (!g_rtWindDisplace.Create(g_WindDisplace, sizeof(g_WindDisplace), 28, 1, g_rt.device.Get())) {
@@ -975,15 +973,16 @@ bool RtEnsureHandover(UINT64 inBytes, UINT64 outBytes) {
 	return true;
 }
 
-// One of PackSun.hlsl's kernels over every pixel (64 a group)
-void RtPack(ID3D12GraphicsCommandList* list, const ComputePipeline& kernel, ID3D12Resource* source, ID3D12Resource* target, UINT pixels) {
-	UINT constants[4] = { pixels, 0, 0, 0 };
-	list->SetComputeRootSignature(kernel.root.Get());
-	list->SetPipelineState(kernel.pso.Get());
+// CopyRaw.hlsl over whole 32 bit words (4 words a thread, 64 threads a group). The sun trace's buffers are already
+// packed by the bridge and SunShadow.hlsl (16 bytes in, 4 out per pixel): they are handed over as they are.
+void RtCopyWords(ID3D12GraphicsCommandList* list, ID3D12Resource* source, ID3D12Resource* target, UINT words) {
+	UINT constants[4] = { words, 0, 0, 0 };
+	list->SetComputeRootSignature(g_copyRaw.root.Get());
+	list->SetPipelineState(g_copyRaw.pso.Get());
 	list->SetComputeRootShaderResourceView(0, source->GetGPUVirtualAddress());
 	list->SetComputeRootUnorderedAccessView(1, target->GetGPUVirtualAddress());
 	list->SetComputeRoot32BitConstants(2, 4, constants, 0);
-	list->Dispatch((pixels + 63) / 64, 1, 1);
+	list->Dispatch((words + 255) / 256, 1, 1);
 }
 
 // TLAS of this frame on the 1.619 device into its open list (once per frame). g_sceneMutex held.
@@ -1055,7 +1054,7 @@ bool RtRecordTlas(ID3D12GraphicsCommandList4* rl, UINT32 frame, int slot, UINT64
 
 // Render event 3 on the 1.619 device, for the kinds it handles (the sun); false: Unity's device traces it instead
 bool TraceRt(const TraceEventData* data, ID3D12CommandQueue* queue) {
-	if (!g_rtActive || !g_rtReady || data->kind != kTraceSun || !g_rt.sun || !g_packSunIn.pso || !g_unpackSunOut.pso) {
+	if (!g_rtActive || !g_rtReady || data->kind != kTraceSun || !g_rt.sun || !g_copyRaw.pso) {
 		return false;
 	}
 	UINT64 pixels = static_cast<UINT64>(data->width) * data->height;
@@ -1134,7 +1133,7 @@ bool TraceRt(const TraceEventData* data, ID3D12CommandQueue* queue) {
 		g_rt.toUnityRt->Signal(serial);  // the trace is not submitted: let the waits for this serial pass
 		return false;
 	}
-	RtPack(list, g_packSunIn, data->surface, g_rt.inUnity[pair].Get(), static_cast<UINT>(pixels));
+	RtCopyWords(list, data->surface, g_rt.inUnity[pair].Get(), static_cast<UINT>(inBytes / 4));
 	g_render.Submit(queue);
 	queue->Signal(g_rt.toRtUnity.Get(), serial);
 
@@ -1152,7 +1151,7 @@ bool TraceRt(const TraceEventData* data, ID3D12CommandQueue* queue) {
 		g_crumbTag = "rt unpack " + std::to_string(previous);
 		list = g_render.Begin();
 		if (list != nullptr) {
-			RtPack(list, g_unpackSunOut, g_rt.outUnity[previous & 1].Get(), data->output, static_cast<UINT>(pixels));
+			RtCopyWords(list, g_rt.outUnity[previous & 1].Get(), data->output, static_cast<UINT>(outBytes / 4));
 			g_render.Submit(queue);
 		}
 	}

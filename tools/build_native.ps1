@@ -45,12 +45,8 @@ if ($LASTEXITCODE -ne 0) { throw 'dxc failed on ProbeOmm' }
 & $dxc19 -nologo -T lib_6_9 -O3 -Vn g_ProbeSer -Fh (Join-Path $out 'ProbeSer.h') (Join-Path $probe 'ProbeSer.hlsl')
 if ($LASTEXITCODE -ne 0) { throw 'dxc failed on ProbeSer' }
 # the sun shadows on the DXR 1.2 device: Shader Model 6.9, alpha from the baked byte masks
-& $dxc19 -nologo -T cs_6_9 -E main -O3 -D NFX_ALPHA_MASK -D NFX_PACKED_SUN -D NFX_OMM -Vn g_SunShadow619 -Fh (Join-Path $out 'SunShadow619.h') (Join-Path $src 'shaders\SunShadow.hlsl')
+& $dxc19 -nologo -T cs_6_9 -E main -O3 -D NFX_ALPHA_MASK -D NFX_NO_GLASS_SHADOWS -D NFX_OMM -Vn g_SunShadow619 -Fh (Join-Path $out 'SunShadow619.h') (Join-Path $src 'shaders\SunShadow.hlsl')
 if ($LASTEXITCODE -ne 0) { throw 'dxc failed on SunShadow619' }
-foreach ($entry in @('PackIn', 'UnpackOut')) {
-	& $dxc -nologo -T cs_6_5 -E $entry -O3 -Vn "g_PackSun$entry" -Fh (Join-Path $out "PackSun$entry.h") (Join-Path $src 'shaders\PackSun.hlsl')
-	if ($LASTEXITCODE -ne 0) { throw "dxc failed on PackSun $entry" }
-}
 $agilityInclude = Join-Path $agility 'build\native\include'
 
 # NVIDIA Real-Time Denoisers (Nrd.inl): the static library built from %USERPROFILE%\NatureFX-Deps\NRD (cmake, NMake,

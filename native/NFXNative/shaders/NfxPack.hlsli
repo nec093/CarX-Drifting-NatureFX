@@ -66,4 +66,46 @@ NfxNrdGuide NfxLoadNrdGuide(ByteAddressBuffer buffer, uint index)
     return r;
 }
 
+// The reflection trace's surface (the bridge's PrepareReflection), 2 uint4 per trace pixel:
+//   a: origin xyz (absolute, float), the packed full resolution pixel
+//   b: normal (NfxPackOct16), Fresnel r g (halves), Fresnel b and the GGX alpha (halves; < 0: nothing to trace),
+//      the exposure multiplier (float: a day's 2.5e-5 is below a half's normal range)
+struct NfxReflSurface
+{
+    float3 origin;
+    uint pixel;
+    float3 normal;
+    float3 fresnel;
+    float alpha;
+    float exposure;
+};
+
+NfxReflSurface NfxUnpackReflSurface(uint4 a, uint4 b)
+{
+    NfxReflSurface r;
+    r.origin = asfloat(a.xyz);
+    r.pixel = a.w;
+    r.normal = NfxUnpackOct16(b.x);
+    float2 rg = NfxUnpackHalf2(b.y);
+    float2 bAlpha = NfxUnpackHalf2(b.z);
+    r.fresnel = float3(rg, bAlpha.x);
+    r.alpha = bAlpha.y;
+    r.exposure = asfloat(b.w);
+    return r;
+}
+
+// The reflection trace's result (Reflection.hlsl), a uint4 per trace pixel: Fresnel * radiance r g, b and the
+// Fresnel's luminance (halves: the trace texture is RGBA16F anyway), the distance to the reflected point (float: it
+// goes to an R32 texture; 0 nothing reflected), 0
+uint4 NfxPackReflResult(float4 result, float dist)
+{
+    float4 r = min(result, 60000.0);
+    return uint4(NfxPackHalf2(r.rg), NfxPackHalf2(r.ba), asuint(dist), 0u);
+}
+
+float4 NfxUnpackReflResult(uint4 p)
+{
+    return float4(NfxUnpackHalf2(p.x), NfxUnpackHalf2(p.y));
+}
+
 #endif

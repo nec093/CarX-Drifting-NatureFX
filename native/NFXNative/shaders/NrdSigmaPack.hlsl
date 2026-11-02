@@ -5,7 +5,7 @@
 // blocked share)), and writes NRD's input textures. Penumbra: none when lit (NRD_FP16_MAX), back facing (0) when the
 // pixel faces away from the sun, else from the first occluder's distance and the sun's disc. Translucency: what gets
 // through that occluder (glass: its share, grey; anything solid: 0).
-// Root: t0 guides (a packed uint4 per pixel, NfxLoadNrdGuide), t1 sun surfaces (2 float4 per pixel), t2 sun result (float2 per pixel),
+// Root: t0 guides (a packed uint4 per pixel, NfxLoadNrdGuide), t1 sun surfaces (a uint4 per pixel: w 0xFFFFFFFF not traced), t2 sun result (2 halves per pixel),
 // u0..u4 a table (normal and roughness, view Z, motion, penumbra, translucency), b0 { width, height, tan of the sun's
 // angular radius }. Compiled into NrdSigmaPack.h (NRD's Shaders folder on the include path).
 #include "NRD.hlsli"
@@ -35,8 +35,8 @@ void main(uint3 id : SV_DispatchThreadID)
         return;
     uint index = id.y * Width + id.x;
     NfxNrdGuide guide = NfxLoadNrdGuide(Guide, index);
-    float traced = asfloat(SunSurface.Load(index * 32 + 12));
-    float2 sun = asfloat(SunResult.Load2(index * 8));
+    float traced = SunSurface.Load(index * 16 + 12) != 0xFFFFFFFFu ? 1.0 : 0.0;
+    float2 sun = NfxUnpackHalf2(SunResult.Load(index * 4));
     OutNormalRoughness[id.xy] = NRD_FrontEnd_PackNormalAndRoughness(guide.normal, saturate(guide.roughness), 0.0);
     OutViewZ[id.xy] = guide.viewZ;
     OutMotion[id.xy] = guide.motion;

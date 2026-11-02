@@ -143,6 +143,8 @@
 - F8 に「GPU stage timings are not reported on this GPU / API」と出る環境で、**F8 の「fog volume」の ms は出ない**。4 の比較は fps / フレーム時間で（霧のあるマップができてから）。
 - メモリ: F8 では GPU memory 8136 / 10379 MB（比較前の値なし）。`trace buffers N MB` は `kino/output.log` の `[NatureFX] Camera WxH: ... trace buffers` 行にだけ出る。1916x997・NRD オンなら 7B/D/E 前の見積もり 458 MB → 約 375 MB。
 
+- **7F・7A・7C も実装（11-02、未ビルド・未確認）**。7A は C++ も変わる（PackSun → CopyRaw、`PackSun.hlsl` 削除）ので DLL の通常ビルドと再起動が要る。ここでも .ksm・DLL・バンドルの 3 つをそろえる。確認: 反射（塗装・水たまり・クローム、NRD オン/オフ）、太陽の影と半影の幅（DXR 1.2 オン/オフ、NRD の SIGMA）、ガラスの映り込み・屈折。ログの `by kind` で sun・reflection・glass が減ったか。
+
 ## 1. インストール済みのもの（ゲームに入っている）
 
 | 物 | 状態 |
