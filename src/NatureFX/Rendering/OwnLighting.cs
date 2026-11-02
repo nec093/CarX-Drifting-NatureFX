@@ -19,6 +19,7 @@ namespace NatureFX.Rendering {
 		public static bool Ambient { get; private set; }      // HDRP's indirect diffuse is off; the shadow composite adds the sky
 		public static bool Reflections { get; private set; }  // HDRP's reflections are off; the reflections composite adds them
 		public static bool Sky => Ambient && Reflections;     // HDRP draws no sky at all
+		public static bool ShadowsRunning { get; private set; } // the shadow composite ran (the traced sun and lamp shadows)
 
 		// the composites say they ran (with what they need: the own sky probe)
 		public static void ShadowComposed() => shadowFrame_ = Time.frameCount;
@@ -28,7 +29,8 @@ namespace NatureFX.Rendering {
 		public static void Update(bool wanted) {
 			wanted_ = wanted && NativeEngine.SkyProbe != null;
 			int now = Time.frameCount;
-			Ambient = wanted_ && now - shadowFrame_ <= Grace;
+			ShadowsRunning = now - shadowFrame_ <= Grace;
+			Ambient = wanted_ && ShadowsRunning;
 			Reflections = wanted_ && now - reflectionFrame_ <= Grace;
 		}
 

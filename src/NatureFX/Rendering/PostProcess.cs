@@ -273,6 +273,12 @@ namespace NatureFX.Rendering {
 		private Material material_;
 		private float ev_ = float.NaN;
 		private int lastMeter_ = -1;
+		private float lastMeterTime_ = -1.0f;
+		// the exposure is NatureFX's alone (HDRP's own automatic exposure off: VolumeOverhaul): eye adaptation on and
+		// the own post-processing running. HDRP's histogram is only the fallback while it is not
+		public static bool OwnExposure { get; private set; }
+		// HDRP's exposure now (ExposureProbe): where the own adaptation starts, so taking over does not jump
+		public static float HdrpEV = float.NaN;
 		private readonly float[] sorted_ = new float[PostPass.MeterW * PostPass.MeterH];
 		private readonly float[] weights_ = new float[PostPass.MeterW * PostPass.MeterH];
 
@@ -362,6 +368,7 @@ namespace NatureFX.Rendering {
 				pass_.enabled = active;
 			}
 			if (!active) {
+				OwnExposure = false;
 				HdrpBlur(false);
 				Dlaa.Wanted = false;
 				ev_ = float.NaN;
@@ -387,18 +394,30 @@ namespace NatureFX.Rendering {
 
 			// eye adaptation (with the game's exposure chosen, HDRP keeps it)
 			exposure_.active = s.ExposureMode == 1;
+			if (s.ExposureMode == 1 && float.IsNaN(ev_) && !float.IsNaN(HdrpEV)) {
+				// taking over: from where HDRP's exposure is (it adapted until now), not a jump to the first reading
+				ev_ = HdrpEV;
+			}
 			if (s.ExposureMode == 1 && pass_.MeterFrame != lastMeter_ && pass_.MeterFrame >= 0) {
 				lastMeter_ = pass_.MeterFrame;
 				// real-world EVs (the sun is raised to real sunshine, Units): a moonlit night and a sunny day where they are
 				float target = Mathf.Clamp(MeteredEV(pass_.Meter), s.AutoExposureMin, Mathf.Max(s.AutoExposureMin + 0.5f, s.AutoExposureMax));
+				// the time since the last reading (readings come every frame or two): adapting by one frame's time per
+				// reading made the eye half as fast when they came every other frame, and uneven
+				float dt = lastMeterTime_ < 0.0f ? Time.unscaledDeltaTime : Mathf.Clamp(Time.unscaledTime - lastMeterTime_, 0.0f, 0.25f);
+				lastMeterTime_ = Time.unscaledTime;
 				if (float.IsNaN(ev_)) {
 					ev_ = target;
-				} else {
+				} else if (!float.IsNaN(target)) {
 					// the eye opens up slowly in the dark and closes faster in the light
 					float speed = target > ev_ ? s.AdaptationSpeed * 2.0f : s.AdaptationSpeed;
-					ev_ += (target - ev_) * (1.0f - Mathf.Exp(-Time.unscaledDeltaTime * Mathf.Max(0.05f, speed)));
+					ev_ += (target - ev_) * (1.0f - Mathf.Exp(-dt * Mathf.Max(0.05f, speed)));
 				}
 			}
+			if (float.IsNaN(ev_) || float.IsInfinity(ev_)) {
+				ev_ = float.NaN;
+			}
+			OwnExposure = s.ExposureMode == 1 && !float.IsNaN(ev_);
 			// until the first reading HDRP keeps its own (a fixed exposure of nothing would flash the first frames)
 			exposure_.active = s.ExposureMode == 1 && !float.IsNaN(ev_);
 			if (!float.IsNaN(ev_)) {

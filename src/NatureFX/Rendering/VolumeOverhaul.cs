@@ -140,7 +140,9 @@ namespace NatureFX.Rendering {
 			color_.contrast.Override(s.Contrast);
 
 			// Exposure: eye adaptation (histogram metering, slow to adjust like a real eye / camera), or the game's
-			exposure_.active = s.ExposureMode != 0;
+			// HDRP's own automatic exposure only while NatureFX's (PostProcess: metered, its eye adaptation, HDRP given
+			// the result as a fixed exposure) is not running: two controllers fought over it
+			exposure_.active = s.ExposureMode != 0 && !PostProcess.OwnExposure;
 			exposure_.mode.Override(ExposureMode.AutomaticHistogram);
 			exposure_.meteringMode.Override(MeteringMode.CenterWeighted);
 			exposure_.limitMin.Override(s.AutoExposureMin);

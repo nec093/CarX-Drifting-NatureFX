@@ -55,6 +55,19 @@ namespace NatureFX {
 		internal readonly CarGlow Glow = new();
 		internal readonly CameraVolumetrics CameraFog = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.Volumetrics, "the local fog and the tyre smoke");
 		internal readonly CameraVolumetrics CameraClouds = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.VolumetricClouds, "the sky's clouds");
+		// HDRP's effects the own engine has replaced, off on the game camera while it does (back as the game had them
+		// when it stops): its volumetric fog, clouds and fog, screen space reflections, AO and GI, contact shadows, and
+		// the reflection probes and sky reflections
+		internal readonly CameraVolumetrics HdrpFogOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.Volumetrics, "the own engine's 3D fog draws the fog and smoke", false);
+		internal readonly CameraVolumetrics HdrpCloudsOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.VolumetricClouds, "the own engine draws the clouds", false);
+		internal readonly CameraVolumetrics HdrpScatterOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.AtmosphericScattering, "the own engine draws the fog", false);
+		internal readonly CameraVolumetrics HdrpSsrOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.SSR, "the own engine traces the reflections", false);
+		internal readonly CameraVolumetrics HdrpProbesOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.ReflectionProbe, "the own engine traces the reflections", false);
+		internal readonly CameraVolumetrics HdrpPlanarOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.PlanarProbe, "the own engine traces the reflections", false);
+		internal readonly CameraVolumetrics HdrpSkyReflOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.SkyReflection, "the own engine gives the sky's reflections", false);
+		internal readonly CameraVolumetrics HdrpSsaoOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.SSAO, "the own engine's GI shades the ambient light", false);
+		internal readonly CameraVolumetrics HdrpSsgiOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.SSGI, "the own engine's GI bounces the light", false);
+		internal readonly CameraVolumetrics HdrpContactOff = new(UnityEngine.Rendering.HighDefinition.FrameSettingsField.ContactShadows, "the own engine traces the shadows", false);
 		internal readonly LensEffects Lens = new();
 		internal readonly PostProcess Post = new();
 		internal readonly GameParticles GameFx = new();
@@ -176,6 +189,9 @@ namespace NatureFX {
 			Volume.Destroy();
 			CameraFog.Restore();
 			CameraClouds.Restore();
+			foreach (var off in new[] { HdrpFogOff, HdrpCloudsOff, HdrpScatterOff, HdrpSsrOff, HdrpProbesOff, HdrpPlanarOff, HdrpSkyReflOff, HdrpSsaoOff, HdrpSsgiOff, HdrpContactOff }) {
+				off.Restore();
+			}
 			GroundMap.Release();
 			ShaderGlobals.DestroyNoiseTexture();
 		}
@@ -208,6 +224,17 @@ namespace NatureFX {
 			CameraFog.Update(cam, s.Enabled && hdrpVolumetric);
 			CameraClouds.Update(cam, s.Enabled && s.Clouds && !s.NativeSky);
 			OwnLighting.Update(s.Enabled && s.NativeSky && s.OwnSkyLighting && NativeEngine.Active);
+			bool own = s.Enabled && s.OwnSkyLighting && NativeEngine.Active;
+			HdrpFogOff.Update(cam, own && nativeFog && !hdrpVolumetric);
+			HdrpCloudsOff.Update(cam, own && s.NativeSky);
+			HdrpScatterOff.Update(cam, own && nativeFog);
+			HdrpSsrOff.Update(cam, OwnLighting.Reflections);
+			HdrpProbesOff.Update(cam, OwnLighting.Reflections);
+			HdrpPlanarOff.Update(cam, OwnLighting.Reflections);
+			HdrpSkyReflOff.Update(cam, OwnLighting.Reflections);
+			HdrpSsaoOff.Update(cam, OwnLighting.Ambient);
+			HdrpSsgiOff.Update(cam, OwnLighting.Ambient);
+			HdrpContactOff.Update(cam, own && OwnLighting.ShadowsRunning);
 			Volume.UpdateSky(Sun.Sun, s.Enabled && s.SunOverride, s.Enabled && s.NativeSky);
 			Weather.UpdateIce(s.Enabled && s.Accumulation, Sun.Sun);
 			PhotoMode.Update(cam);
@@ -305,9 +332,11 @@ namespace NatureFX {
 				nextFinishRebuild_ = Time.unscaledTime + 5.0f;
 				RT.RequestSceneRebuild();
 			}
-			if (window_ != null && window_.Visible) {
+			// HDRP's exposure: for the F8 window, and where NatureFX's own exposure starts from when it takes over
+			if (window_ != null && window_.Visible || !PostProcess.OwnExposure) {
 				Exposure.Update();
 			}
+			PostProcess.HdrpEV = Exposure.Valid ? Exposure.EV100 : float.NaN;
 			NatureFX.Tools.CpuTimings.Section("F8 window and rescans");
 			window_?.Update();
 
