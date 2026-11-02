@@ -165,6 +165,8 @@
 - **ゲーム側の VRAM（11-02 実測、test_map、1916x997）**: ゲームのテクスチャ 1880 MB（うち CarX の `starmap` キューブマップ 4096、無圧縮 RGB8 で 288 MB 以上: 独自の空の間は誰も描かない）、メッシュ 214 MB（`NFX_RT_*` は 0.5 MB: 重複なし）、HDRP の描画ターゲット 430 MB（クッキーのアトラス 4096 で 85 MB、カスケード影 3072 で 36 MB、物理ベースの空のテーブル 48 MB）。HDRP の SSR/SSAO/SSGI/体積雲/ブルームは Volume でオフ（無駄なし）。mip ストリーミングはオン、予算 4198 MB。
 - **対応（未ビルド・未確認、.ksm のみ）**: 独自の空の間、トラックの Volume の物理ベースの空の space emission と HDRI のテクスチャを `Resources.UnloadAsset`（`VolumeOverhaul.UnloadTrackSkyTextures`、独自の空をやめれば Unity がディスクから読み直す）。設定 `TextureStreamingBudget`（F8 > Developer > Video memory、0 はゲームの値、`TextureBudget.cs`）。デバッグページに mip ストリーミングの量・Unity の統計・降ろした空のテクスチャ・影を持つ平行光源。
 
+- **ユーザー実測（11-02）**: トラックの空のテクスチャを降ろして game textures 1760 → 1488 MB、GPU 5150 → 4802 MB（starmap と HDRI 3 枚）。mip ストリーミングの対象は 66〜79 MB だけ（1.42 GB はストリーミングされない）ので予算のスライダーはほぼ効かない。残る HDRP の固定確保: クッキーのアトラス 85 MB（4096、mip 付き）、カスケード影 36 MB（影を持つ平行光源なしでも残る）。
+
 ## 1. インストール済みのもの（ゲームに入っている）
 
 | 物 | 状態 |

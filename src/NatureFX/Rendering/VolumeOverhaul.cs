@@ -170,6 +170,7 @@ namespace NatureFX.Rendering {
 		private readonly System.Collections.Generic.HashSet<Texture> unloadedSky_ = new();
 		private float nextSkyUnload_;
 		public static string UnloadedSky { get; private set; } = "none";
+		private readonly System.Collections.Generic.List<string> unloadedNames_ = new();
 
 		private void UnloadTrackSkyTextures(Texture keep) {
 			if (Time.unscaledTime < nextSkyUnload_) {
@@ -208,7 +209,8 @@ namespace NatureFX.Rendering {
 				long mb = (long)t.width * t.height * (t is Cubemap ? 6 : 1) * 4 / 1048576;
 				Resources.UnloadAsset(t);
 				unloadedSky_.Add(t);
-				UnloadedSky = unloadedSky_.Count == 1 ? $"{name} ({t.GetType().Name} {t.width}x{t.height}, about {mb} MB)" : $"{UnloadedSky}, {name}";
+				unloadedNames_.Add($"{name} ({t.GetType().Name} {t.width}x{t.height}, about {mb} MB)");
+				UnloadedSky = string.Join(", ", unloadedNames_);
 				Kino.Log.Info($"[NatureFX] Own sky: the track's sky texture {name} ({t.GetType().Name} {t.width}x{t.height}) taken out of video memory");
 			} catch (System.Exception e) {
 				unloadedSky_.Add(t); // not again
@@ -256,6 +258,7 @@ namespace NatureFX.Rendering {
 			} else if (unloadedSky_.Count > 0) {
 				// HDRP draws the track's sky again: Unity loads them back from disk as they are used
 				unloadedSky_.Clear();
+				unloadedNames_.Clear();
 				UnloadedSky = "none (HDRP draws the track's sky)";
 			}
 			if (cube != null) {
