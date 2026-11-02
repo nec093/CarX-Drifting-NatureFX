@@ -205,7 +205,9 @@ namespace NatureFX.Rendering {
 		private readonly Accumulation local_ = new("Local", GraphicsFormat.R16G16B16A16_SFloat);
 		private int frame_;
 
-		// A traced signal's buffers: new frame, two histories (ping-pong) and a blur target
+		// A traced signal's buffers: new frame, two histories (ping-pong) and a blur target. The histories and the blur
+		// target only while the own filter runs on it: NRD (or DLSS Ray Reconstruction) gives the finished signal in
+		// Raw, and they were three idle screens of memory (the sun's at full resolution) the whole time.
 		private class Accumulation {
 			private readonly string name_;
 			private readonly GraphicsFormat format_;
@@ -225,10 +227,25 @@ namespace NatureFX.Rendering {
 				Release();
 				Scale = scale;
 				Raw = Alloc(Vector2.one * scale, $"NFX_RT{name_}_Raw", format_);
-				Denoise = Alloc(Vector2.one * scale, $"NFX_RT{name_}_Denoise", format_);
-				HistoryA = Alloc(Vector2.one * scale, $"NFX_RT{name_}_HistoryA", format_);
-				HistoryB = Alloc(Vector2.one * scale, $"NFX_RT{name_}_HistoryB", format_);
 				fresh_ = true;
+			}
+
+			// The own filter's targets; true when they were just made (their history is whatever memory held)
+			public bool EnsureFilter() {
+				if (Denoise != null) {
+					return false;
+				}
+				Denoise = Alloc(Vector2.one * Scale, $"NFX_RT{name_}_Denoise", format_);
+				HistoryA = Alloc(Vector2.one * Scale, $"NFX_RT{name_}_HistoryA", format_);
+				HistoryB = Alloc(Vector2.one * Scale, $"NFX_RT{name_}_HistoryB", format_);
+				return true;
+			}
+
+			public void DropFilter() {
+				Denoise?.Release();
+				HistoryA?.Release();
+				HistoryB?.Release();
+				Denoise = HistoryA = HistoryB = null;
 			}
 
 			// True once after Ensure made new textures: their history holds whatever memory had (a NaN stays in a
@@ -243,9 +260,7 @@ namespace NatureFX.Rendering {
 
 			public void Release() {
 				Raw?.Release();
-				Denoise?.Release();
-				HistoryA?.Release();
-				HistoryB?.Release();
+				DropFilter();
 				Raw = null;
 			}
 		}
@@ -653,6 +668,15 @@ namespace NatureFX.Rendering {
 		// Temporal accumulation and two a-trous steps; returns the filtered buffer
 		private RTHandle Filter(CommandBuffer cmd, Accumulation a, Vector4 size, float blend, int denoisePass, float sunRadius, float fov, int steps = 2,
 		                        bool oneFrameLate = false, float stillShare = 1.0f) {
+			// already denoised (NRD, Ray Reconstruction): the temporal pass at a blend of 1 and no blur step only
+			// copied Raw; Raw itself is the result, and the filter's targets go
+			if (blend >= 0.999f && steps == 0 && !oneFrameLate) {
+				a.DropFilter();
+				return a.Raw;
+			}
+			if (a.EnsureFilter()) {
+				blend = 1.0f; // new histories: this frame's samples only
+			}
 			props_.Clear();
 			props_.SetVector(TargetSize, size);
 			props_.SetVector(ShadowCompose, new Vector4(oneFrameLate ? 1.0f : 0.0f, 0.0f, blend, stillShare));

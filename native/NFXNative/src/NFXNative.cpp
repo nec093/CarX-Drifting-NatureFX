@@ -1290,6 +1290,7 @@ NFX_EXPORT void NFX_Native_ClearScene() {
 	g_instanceMaterial.clear();
 	g_materials.clear();
 	g_windBlas.clear();
+	g_windPool.Reset();
 	g_instanceWind.clear();
 	g_instanceSways.clear();
 	g_heapNext = 0;
@@ -2014,7 +2015,7 @@ NFX_EXPORT int NFX_Native_BuildScene() {
 	if (BuildWindBlas()) {
 		for (size_t i = 0; i < instances.size() && i < g_instanceWind.size(); ++i) {
 			if (g_instanceWind[i] >= 0) {
-				instances[i].AccelerationStructure = g_windBlas[g_instanceWind[i]].blas->GetGPUVirtualAddress();
+				instances[i].AccelerationStructure = g_windBlas[g_instanceWind[i]].blas.Address();
 			}
 		}
 	}
@@ -2931,10 +2932,8 @@ NFX_EXPORT int NFX_Native_MemoryStats(unsigned long long* out, int capacity) {
 		}
 		v[7] = ResourceBytes(g_records.Get()) + ResourceBytes(g_traceTables.Get()) + ResourceBytes(g_frameConstants.Get());
 		v[8] = ResourceBytes(g_cache.Get());
-		v[9] = ResourceBytes(g_windScratch.Get()) + ResourceBytes(g_windFrames.Get());
-		for (const auto& w : g_windBlas) {
-			v[9] += ResourceBytes(w.positions.Get()) + ResourceBytes(w.blas.Get());
-		}
+		// (their BLAS are in the BLAS pool's numbers)
+		v[9] = ResourceBytes(g_windScratch.Get()) + ResourceBytes(g_windFrames.Get()) + g_windPool.Reserved();
 		for (const NrdContext* c : { &g_nrdSun, &g_nrdAmbient, &g_nrdLocal, &g_nrdReflection }) {
 			for (const auto& t : c->permanent) {
 				v[10] += ResourceBytes(t.resource.Get());

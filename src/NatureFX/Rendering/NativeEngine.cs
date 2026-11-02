@@ -752,7 +752,9 @@ namespace NatureFX.Rendering {
 			}
 		}
 
-		private static TraceBuffers Buffers(int kind, int pixels, int surfaceFloat4s, int resultStride) {
+		// surfaceFloat4s: per pixel; surfaceTotal (when not negative): the surface's float4s in all instead (a kind
+		// whose surface is not per pixel, or 0 for one that reads another kind's surface)
+		private static TraceBuffers Buffers(int kind, int pixels, int surfaceFloat4s, int resultStride, int surfaceTotal = -1) {
 			var b = buffers_[kind];
 			if (b.Surface != null && b.Pixels == pixels) {
 				return b;
@@ -762,7 +764,7 @@ namespace NatureFX.Rendering {
 				retired_.Add((b.Result, Time.frameCount));
 			}
 			b.Pixels = pixels;
-			b.Surface = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, pixels * surfaceFloat4s), 16) { name = $"NFX_NativeSurface{kind}" };
+			b.Surface = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, surfaceTotal >= 0 ? surfaceTotal : pixels * surfaceFloat4s), 16) { name = $"NFX_NativeSurface{kind}" };
 			b.Result = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, pixels), resultStride) { name = $"NFX_NativeResult{kind}" };
 			b.SurfacePtr = b.Surface.GetNativeBufferPtr();
 			b.ResultPtr = b.Result.GetNativeBufferPtr();
@@ -1230,7 +1232,7 @@ namespace NatureFX.Rendering {
 		// Blocked local light into the shadow pass's local light texture (same resolution as the ambient light)
 		public static void TraceLocal(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, RTHandle target, Vector4 size) {
 			int width = (int)size.x, height = (int)size.y;
-			var result = Buffers(TraceLocal_, width * height, 1, 16);
+			var result = Buffers(TraceLocal_, width * height, 0, 16); // its surface is the ambient light's
 			TraceBuffers surface;
 			var ambient = buffers_[TraceAmbient_];
 			if (ambientPreparedFrame_ == Time.frameCount && ambient.Surface != null && ambient.Pixels == width * height) {
@@ -1315,7 +1317,7 @@ namespace NatureFX.Rendering {
 
 		public static void TraceLampMask(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, RTHandle target, Vector4 size) {
 			int width = (int)size.x, height = (int)size.y;
-			var result = Buffers(TraceLampMask_, width * height, 1, 16);
+			var result = Buffers(TraceLampMask_, width * height, 0, 16); // its surface is the ambient light's
 			var ambient = buffers_[TraceAmbient_];
 			TraceBuffers surface = ambientPreparedFrame_ == Time.frameCount && ambient.Surface != null && ambient.Pixels == width * height
 				? ambient
@@ -1503,6 +1505,9 @@ namespace NatureFX.Rendering {
 			}
 		}
 		public const int FogW = 160, FogH = 90, FogD = 64;
+		// columns (3 each, FogW * FogH * 3), 64 boxes (5 each), the smoke grid (3 + its cells / 4: up to FogW * FogH * 4),
+		// then the light lists (20 x 12 tiles, 4 bands): FOG_LIST_BASE + 960 in NFX_NativeBridge.compute
+		private const int FogSurfaceFloat4s = FogW * FogH * 4 + 20 * 12 * 4;
 		private static readonly int FogTargetId = Shader.PropertyToID("_NFX_FogTarget");
 		private static readonly int FogSourceId = Shader.PropertyToID("_NFX_FogSource");
 		private static readonly int FogCamDeltaId = Shader.PropertyToID("_NFX_FogCamDelta");
@@ -1516,7 +1521,8 @@ namespace NatureFX.Rendering {
 			if (skyTransmittance_ == null) {
 				return; // the fog reads the sky data (its noise, the transmittance): nothing sensible without it
 			}
-			var b = Buffers(TraceFogVolume_, FogW * FogH * FogD, 1, 16);
+			// the surface holds the columns, the boxes, the smoke and the light lists (FogVolume.hlsl), not a float4 per cell
+			var b = Buffers(TraceFogVolume_, FogW * FogH * FogD, 1, 16, FogSurfaceFloat4s);
 			if (boxes != null && boxCount > 0) {
 				cmd.SetBufferData(b.Surface, boxes, 0, FogW * FogH * 3, boxCount * 5);
 			} // surface: 3 float4 per column (fits)

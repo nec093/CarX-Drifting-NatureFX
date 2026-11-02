@@ -60,19 +60,34 @@ namespace NatureFX.Rendering {
 			allocatedFull_ = FullResolution;
 			var scale = Vector2.one * (FullResolution ? 1.0f : 0.5f);
 			trace_ = Alloc(scale, "NFX_RTRefl_Trace");
-			denoise_ = Alloc(scale, "NFX_RTRefl_Denoise");
-			historyA_ = Alloc(scale, "NFX_RTRefl_HistoryA");
-			historyB_ = Alloc(scale, "NFX_RTRefl_HistoryB");
+			// the own filter's targets only while it runs (under NRD REBLUR_SPECULAR denoises the trace itself)
 			distance_ = RTHandles.Alloc(scale, TextureXR.slices, dimension: TextureXR.dimension,
 				colorFormat: GraphicsFormat.R32_SFloat, enableRandomWrite: true, useDynamicScale: true, name: "NFX_RTRefl_Distance");
 		}
 
 		private void ReleaseTraceTargets() {
 			trace_?.Release();
+			ReleaseFilterTargets();
+			distance_?.Release();
+		}
+
+		private void ReleaseFilterTargets() {
 			denoise_?.Release();
 			historyA_?.Release();
 			historyB_?.Release();
-			distance_?.Release();
+			denoise_ = historyA_ = historyB_ = null;
+		}
+
+		// the own filter's history and blur target; true when just made (their history is whatever memory held)
+		private bool EnsureFilterTargets() {
+			if (denoise_ != null) {
+				return false;
+			}
+			var scale = Vector2.one * (allocatedFull_ ? 1.0f : 0.5f);
+			denoise_ = Alloc(scale, "NFX_RTRefl_Denoise");
+			historyA_ = Alloc(scale, "NFX_RTRefl_HistoryA");
+			historyB_ = Alloc(scale, "NFX_RTRefl_HistoryB");
+			return true;
 		}
 
 		private static RTHandle Alloc(Vector2 scale, string name) {
@@ -109,6 +124,11 @@ namespace NatureFX.Rendering {
 
 			var cmd = ctx.cmd;
 			bool resetHistory = History.CheckReset(ctx.hdCamera);
+			if (NativeEngine.NrdReflections) {
+				ReleaseFilterTargets();
+			} else if (EnsureFilterTargets()) {
+				resetHistory = true;
+			}
 			int width = ctx.hdCamera.actualWidth;
 			int height = ctx.hdCamera.actualHeight;
 			// rounded like the RTHandle system sizes the half resolution targets (width / 2 left their last column
