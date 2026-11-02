@@ -159,8 +159,16 @@ Shader "Hidden/NatureFX/RTReflect"
         {
             float3 posWS = ComputeWorldSpacePosition(uv, depth, UNITY_MATRIX_I_VP); // camera relative
             float3 R = reflect(normalize(posWS), nd.normalWS);
-            float3 sky = SAMPLE_TEXTURECUBE_LOD(_NFX_HdrpSkyCube, sampler_NFX_HdrpSkyCube, R, 0).rgb * GetCurrentExposureMultiplier();
-            removed = min(max(removed, sky * share), color);
+            // the sky as HDRP mirrors it: through the scene's reflection multiplier (y), and with HDRP's own Fresnel of the
+            // surface (a clear coat or a dielectric 0.04, a metal its colour), not the traced share, which counts what the
+            // trace found as a whole; never more than nine tenths of the pixel (the paint went black)
+            float3 sky = SAMPLE_TEXTURECUBE_LOD(_NFX_HdrpSkyCube, sampler_NFX_HdrpSkyCube, R, 0).rgb * GetCurrentExposureMultiplier() * _NFX_HdrpSky.y;
+            float4 surf = LOAD_TEXTURE2D_X(_NFX_SurfaceAlbedo, pixel);
+            float metal = saturate((surf.a - (surf.a > 0.495 ? 0.5 : 0.0)) / 0.49);
+            float3 f0 = lerp(0.04, surf.rgb, metal);
+            float nv = saturate(dot(nd.normalWS, -normalize(posWS)));
+            float3 fresnel = f0 + (1.0 - f0) * pow(1.0 - nv, 5.0);
+            removed = min(max(removed, sky * fresnel * weight), color * 0.9);
         }
         float3 result = color - removed + refl.rgb * weight;
         return float4(max(result, 0.0), 1);

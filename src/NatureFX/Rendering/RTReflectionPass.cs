@@ -196,7 +196,11 @@ namespace NatureFX.Rendering {
 			if (hdrpSky) {
 				props_.SetTexture(HdrpSkyCubeId, AtmospherePass.SkyCube);
 			}
-			props_.SetVector(HdrpSkyId, new Vector4(hdrpSky ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f));
+			// HDRP's own reflections are scaled by the scene's Indirect Lighting Controller (a garage sets them low): the
+			// mirrored sky to take away is that much weaker than the cube (the paint went dark taking the whole sky off)
+			var indirect = VolumeOverhaul.Stack()?.GetComponent<UnityEngine.Rendering.HighDefinition.IndirectLightingController>();
+			float reflMul = indirect != null ? Mathf.Max(indirect.reflectionLightingMultiplier.value, 0.0f) : 1.0f;
+			props_.SetVector(HdrpSkyId, new Vector4(hdrpSky ? 1.0f : 0.0f, reflMul, 0.0f, 0.0f));
 			CoreUtils.SetRenderTarget(cmd, ctx.cameraColorBuffer, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, CompositeMaterial, props_, 0);
 			RTTimings.ReflectionFilter.End(cmd);
