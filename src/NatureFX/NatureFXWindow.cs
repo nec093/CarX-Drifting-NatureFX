@@ -1176,6 +1176,15 @@ namespace NatureFX {
 			Widgets.EndCard();
 
 			DrawVariantRecording();
+			DrawMaterialInventory();
+		}
+
+		private void DrawMaterialInventory() {
+			Widgets.BeginCard("Material inventory", "For the shader rebuild: at each map load, every material with its shader, values and " +
+				"where it is used, and samples of its textures (kino/config/NatureFX/inventory). Costs a hitch and some hundred MB of " +
+				"video memory for a moment at each load: off unless collecting.", true);
+			Other(Widgets.Switch("Write at each map load", S.WriteMaterialInventory, v => S.WriteMaterialInventory = v));
+			Widgets.EndCard();
 		}
 
 		private void DrawVariantRecording() {

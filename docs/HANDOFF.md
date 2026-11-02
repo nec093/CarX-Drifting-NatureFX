@@ -169,6 +169,9 @@
 
 - **デバッグページの負荷（11-02、未ビルド・未確認、.ksm と DLL）**: `RenderThreadGpu` の Begin / Submit にタイムスタンプ（クエリヒープ 2×64、readback を常時 Map、スロットが一巡したとき読んで名前ごとに合計、`NFX_Native_GpuTimings` で取り出して 0 に）。名前は `g_crumbTag`（trace の種類名、NRD は 4 種に分けた）。C# は `Tools/GpuStats.cs`（nvml.dll: 使用率・メモリ帯域・クロック・電力・温度・クロック制限の理由）、`FrameTimingManager`（ゲームのビルドで無効なら出ない）、プロセスの CPU 使用率。ページに「load」「gpu-time」と負荷のグラフ。シーン読み込み後の各ステップの VRAM（events）も追加済み。
 
+- **events で分かったこと（11-02 実測）**: シーン読み込み後の「VRAM が倍」は MaterialInventory.Write（TextureSampler.Export がテクスチャを読み取り可能なコピーにして PNG に書く）の一時的な山（+330〜490 MB、次のフレームで戻る）。置き換えでは増えない。→ 設定 `WriteMaterialInventory`（F8 > Developer > Material inventory、既定オフ）のときだけ書く。
+- **GPU 負荷（1916x997、60 fps 垂直同期、GPU 使用率 65 %）**: 独自エンジン 4.89 ms（フレームの 29 %）。上位: NRD REBLUR 反射 1.07、表面 0.94、sky view 0.64（そのフレームの最初のトレースなので毎フレームの TLAS 構築と揺れる葉の BLAS 更新 64 本を含む。空の LUT 自体はごく小さいはず）、SIGMA 0.51、反射 0.34、REBLUR GI 0.33、ランプ 0.30。
+
 ## 1. インストール済みのもの（ゲームに入っている）
 
 | 物 | 状態 |

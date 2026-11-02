@@ -452,7 +452,11 @@ namespace NatureFX {
 			}
 			// the game's materials as they are, before any switch: data for the translators (stages 1 to 4)
 			Replacer.Full = Settings.Data.FullReplacement;
-			NatureFX.Tools.MaterialInventory.Write(Replacer);
+			// only on request (F8 > Developer): it read every material's textures back from the GPU and wrote them as
+			// PNG at each map load (some 300 to 500 MB more video memory for that frame, and a hitch)
+			if (Settings.Data.WriteMaterialInventory) {
+				NatureFX.Tools.MaterialInventory.Write(Replacer);
+			}
 			NatureFX.Tools.DebugPage.MarkStep("rescan: material inventory");
 			if (Settings.Data.Enabled && Settings.Data.ReplaceShaders) {
 				ApplyReplacement();
