@@ -420,7 +420,7 @@ uint   NfxPackUnorm4x8(float4 v); float4 NfxUnpackUnorm4x8(uint p);
 | 7F Reflection 80 → 48 B | 実装 | Surface 2 uint4 = `{ origin f32×3, pixel }`, `{ oct16 法線, half fresnel.rg, half fresnel.b + alpha, f32 露出 }`、Result uint4 = `{ half rg, half b + Fresnel 輝度, f32 距離, 0 }`（`NfxReflSurface` / `NfxPackReflResult`、`NfxPack.hlsli`）。`Reflection.hlsl`、`NrdSpecPack`、`NrdSpecUnpack`（色の 8 B だけ書き戻す）、ブリッジ `PrepareReflection` / `UnpackReflection`、C# `Buffers(..., 2, 16)` |
 | 7A Sun 40 → 20 B | 実装 | Surface uint4 = `{ origin f32×3, traced ? pixel : 0xFFFFFFFF }`、Result = half2。`SunShadow.hlsl` は常にこの形（DXR 1.2 版は `-D NFX_NO_GLASS_SHADOWS`、旧 `NFX_PACKED_SUN`）。`RtDevice.inl` の PackSun を `RtCopyWords`（`CopyRaw.hlsl`）に、`PackSun.hlsl` と `build_native.ps1` の PackSun のビルドを削除。`NrdSigmaPack` / `NrdSigmaUnpack`、ブリッジ `Prepare` / `Unpack`（`_NFX_NativeSun` は uint、既定 `0x3C00`）、C# `Buffers(..., 1, 4)` |
 | 7C Glass Surface 32 → 16 B | 実装（資料と別の詰め方） | uint4 = `{ oct16 方向, f32 距離, pixel, f32 露出 }`。資料案（方向 f32 + half の距離・log2 露出、pixel を捨てる）より、`TracePixel == id` の前提に頼らず距離・露出も無損失。方向の誤差は約 3e-5 rad（1 画素の 1/18） |
-| 7G | 未着手 | 環境光系（Ambient / GI / Local / LampMask）。読み手が多い |
+| 7G Ambient 系 Surface 48 → 32 B | 実装 | 2 uint4 = `{ origin f32×3, valid ? pixel : 0xFFFFFFFF }`, `{ oct16 法線, oct16 幾何法線, f32 viewDepth, f32 レイの距離（+28、Ambient / GI が書く） }`（`NfxAmbientSurface`）。`Ambient` / `GI` / `LocalShadows` / `LampMask` / `NrdReblurPack` / `NrdReblurUnpack`、ブリッジ `PrepareAmbient`（無効な画素は 0 と上向き法線）、C# `Buffers(TraceAmbient_, ..., 2, 16)` |
 | 3 タイヤスモーク | 未着手 | 粒子数・大きさ・`maxParticleSize`・半解像度は見た目が変わるのでユーザーと相談。CPU 側（Burst 化・非同期レイキャスト）だけ先にやる手もある |
 | 5 コミット済みリソース | 未着手 | ネイティブの大きな変更（移行順 1〜6）。DLL のビルドと the sample touge の往復テストができる環境で |
 

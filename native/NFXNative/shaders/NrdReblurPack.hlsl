@@ -6,7 +6,7 @@
 // (Mode 2, LocalShadows.hlsl's blocked light on the ambient light's surfaces): the blocked light to the first, the
 // light added by emissive stand ins (negative) to the second, both without a hit distance (soft, wide). A pixel
 // without a valid surface is put out of NRD's range (view Z 1e6).
-// Root: t0 guides (a packed uint4 per pixel, NfxLoadNrdGuide), t1 surfaces (3 float4 per pixel), t2 result (float4 per pixel), u0..u4 a table
+// Root: t0 guides (a packed uint4 per pixel, NfxLoadNrdGuide), t1 surfaces (2 uint4 per pixel, NfxAmbientSurface), t2 result (float4 per pixel), u0..u4 a table
 // (normal and roughness, view Z, motion, radiance and hit distance 0 and 1), b0 { width, height, mode, scale }.
 // Scale shrinks light before exposure (GI's bounce, the lamps' lux: tens of thousands in the sun) into what REBLUR's
 // half float moments hold (their squares overflowed: infinities spread over the whole image, white).
@@ -41,8 +41,8 @@ void main(uint3 id : SV_DispatchThreadID)
         return;
     uint index = id.y * Width + id.x;
     NfxNrdGuide guide = NfxLoadNrdGuide(Guide, index);
-    float valid = asfloat(TraceSurface.Load(index * 48 + 12));
-    float hitDist = asfloat(TraceSurface.Load(index * 48 + 44));
+    float valid = TraceSurface.Load(index * NfxAmbientStride + 12) != 0xFFFFFFFFu ? 1.0 : 0.0;
+    float hitDist = asfloat(TraceSurface.Load(index * NfxAmbientStride + NfxAmbientTravelledOffset));
     float4 result = asfloat(TraceResult.Load4(index * 16));
     float viewZ = valid > 0.5 ? guide.viewZ : 1e6;
     OutNormalRoughness[id.xy] = NRD_FrontEnd_PackNormalAndRoughness(guide.normal, 1.0, 0.0);

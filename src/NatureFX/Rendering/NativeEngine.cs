@@ -1142,7 +1142,7 @@ namespace NatureFX.Rendering {
 		private static TraceBuffers PrepareAmbient(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, Vector4 size,
 		                                           TraceBuffers result, Vector4 resultDefault) {
 			int width = (int)size.x, height = (int)size.y;
-			var surface = Buffers(TraceAmbient_, width * height, 3, 16);
+			var surface = Buffers(TraceAmbient_, width * height, 2, 16);
 			int prepare = bridge.FindKernel("PrepareAmbient");
 			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
 			cmd.SetComputeVectorParam(bridge, NativeDefaultId, resultDefault);
@@ -1161,7 +1161,7 @@ namespace NatureFX.Rendering {
 		// in place of TraceAmbient: same surfaces, same result (ambient light relative to HDRP's)
 		public static void TraceGI(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, RTHandle target, Vector4 size) {
 			int width = (int)size.x, height = (int)size.y;
-			var surface = PrepareAmbient(cmd, bridge, ctx, surfaceNormal, size, Buffers(TraceAmbient_, width * height, 3, 16), Vector4.one);
+			var surface = PrepareAmbient(cmd, bridge, ctx, surfaceNormal, size, Buffers(TraceAmbient_, width * height, 2, 16), Vector4.one);
 			Issue(cmd, TraceGI_, surface.SurfacePtr, surface.ResultPtr, width, height);
 			// this frame's samples into the cache (the buffers only fill the trace's slots: the resolve uses the cache)
 			Issue(cmd, TraceCacheResolve_, surface.SurfacePtr, surface.ResultPtr, CacheWidth, CacheHeight);
@@ -1173,7 +1173,7 @@ namespace NatureFX.Rendering {
 
 		public static void TraceAmbient(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, RTHandle target, Vector4 size) {
 			int width = (int)size.x, height = (int)size.y;
-			var surface = PrepareAmbient(cmd, bridge, ctx, surfaceNormal, size, Buffers(TraceAmbient_, width * height, 3, 16), Vector4.one);
+			var surface = PrepareAmbient(cmd, bridge, ctx, surfaceNormal, size, Buffers(TraceAmbient_, width * height, 2, 16), Vector4.one);
 			Issue(cmd, TraceAmbient_, surface.SurfacePtr, surface.ResultPtr, width, height);
 			if (NrdAmbient) {
 				IssueNrd(cmd, bridge, ctx, nrdAmbientGuide_, surface.SurfacePtr, surface.ResultPtr, width, height, size, 6, 0);

@@ -8,9 +8,9 @@
 // Unlike the one bounce ambient light it is not a factor on HDRP's ambient light: the sky light HDRP already gives is
 // only darkened by what blocks the sky, and the light bounced in is added as it is (a factor relative to the open
 // sky stayed small indoors, where HDRP's own ambient light is dark too, and the colour bleeding barely showed).
-// Surface (NFX_NativeBridge PrepareAmbient): 3 float4 per pixel, as Ambient.hlsl. Output: float4 per pixel (light
+// Surface (NFX_NativeBridge PrepareAmbient): 2 uint4 per pixel, as Ambient.hlsl. Output: float4 per pixel (light
 // bounced in: the average radiance the hits send back, before exposure, rgb; share of the sky seen, a). The distance
-// the ray went goes into the surface's last float (view depth, read above) for NRD's REBLUR (NrdReblurPack.hlsl).
+// the ray went goes into the surface's last float (NfxAmbientTravelledOffset) for NRD's REBLUR (NrdReblurPack.hlsl).
 // Compiled into GI.h.
 #include "NFXCommon.hlsli"
 
@@ -65,19 +65,17 @@ NFX_ENTRY(id)
     if (id.x >= Width || id.y >= Height)
         return;
     uint index = id.y * Width + id.x;
-    float4 a = asfloat(Surface.Load4(index * 48));
-    float4 b = asfloat(Surface.Load4(index * 48 + 16));
-    float4 c = asfloat(Surface.Load4(index * 48 + 32));
+    NfxAmbientSurface surface = NfxUnpackAmbientSurface(Surface.Load4(index * NfxAmbientStride), Surface.Load4(index * NfxAmbientStride + 16));
     float3 bounce = 0.0;
     float sky = 1.0;
     float giDistance = AmbientParams.x;
-    if (a.w > 0.5 && giDistance > 0.0)
+    if (surface.valid && giDistance > 0.0)
     {
-        float3 origin = a.xyz;
-        float3 n = b.xyz;
-        float3 geomN = c.xyz;
-        uint2 pixel = UnpackPixel(b.w);
-        bool coarse = c.w > 50.0;
+        float3 origin = surface.origin;
+        float3 n = surface.normal;
+        float3 geomN = surface.geomNormal;
+        uint2 pixel = UnpackPixel(asfloat(surface.pixel));
+        bool coarse = surface.viewDepth > 50.0;
         float3 dir = CosineSampleHemisphere(n, Hash22(pixel, FrameIndex, 5));
         if (dot(dir, geomN) < 0.05)
             dir = normalize(dir + geomN * (0.05 - dot(dir, geomN)));
@@ -86,7 +84,7 @@ NFX_ENTRY(id)
 
         Hit hit;
         bool hitSomething = Closest(origin, dir, giDistance, coarse, hit);
-        Surface.Store(index * 48 + 44, asuint(hitSomething ? hit.t : giDistance));
+        Surface.Store(index * NfxAmbientStride + NfxAmbientTravelledOffset, asuint(hitSomething ? hit.t : giDistance));
         if (!hitSomething)
         {
             sky = FarSky(origin, dir, giDistance);

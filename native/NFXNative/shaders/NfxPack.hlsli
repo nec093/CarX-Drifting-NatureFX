@@ -108,4 +108,33 @@ float4 NfxUnpackReflResult(uint4 p)
     return float4(NfxUnpackHalf2(p.x), NfxUnpackHalf2(p.y));
 }
 
+// The ambient light's surfaces (the bridge's PrepareAmbient; Ambient, GI, LocalShadows, LampMask), 2 uint4 per pixel:
+//   a: origin xyz (absolute, float), the packed full resolution pixel (0xFFFFFFFF: no valid surface)
+//   b: shading normal and geometric normal (NfxPackOct16), view depth (float), the distance the ambient / GI ray went
+//      (float, written by Ambient.hlsl / GI.hlsl at byte 28 for NRD's REBLUR: NfxAmbientTravelledOffset)
+static const uint NfxAmbientStride = 32;
+static const uint NfxAmbientTravelledOffset = 28;
+
+struct NfxAmbientSurface
+{
+    bool valid;
+    float3 origin;
+    uint pixel;
+    float3 normal;
+    float3 geomNormal;
+    float viewDepth;
+};
+
+NfxAmbientSurface NfxUnpackAmbientSurface(uint4 a, uint4 b)
+{
+    NfxAmbientSurface r;
+    r.valid = a.w != 0xFFFFFFFFu;
+    r.origin = asfloat(a.xyz);
+    r.pixel = a.w;
+    r.normal = NfxUnpackOct16(b.x);
+    r.geomNormal = NfxUnpackOct16(b.y);
+    r.viewDepth = asfloat(b.z);
+    return r;
+}
+
 #endif

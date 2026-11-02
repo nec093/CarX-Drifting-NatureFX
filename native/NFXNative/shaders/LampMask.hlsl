@@ -17,8 +17,10 @@ NFX_ENTRY(id)
     if (id.x >= Width || id.y >= Height)
         return;
     uint index = id.y * Width + id.x;
-    float4 a = asfloat(Surface.Load4(index * 48));
-    float4 b = asfloat(Surface.Load4(index * 48 + 16));
+    NfxAmbientSurface surface = NfxUnpackAmbientSurface(Surface.Load4(index * NfxAmbientStride), Surface.Load4(index * NfxAmbientStride + 16));
+    // (the names the code below used: a the origin, b the normal)
+    float4 a = float4(surface.origin, surface.valid ? 1.0 : 0.0);
+    float4 b = float4(surface.normal, 0.0);
     int lamp[Slots] = { 255, 255, 255, 255 };
     float weight[Slots] = { 0.0, 0.0, 0.0, 0.0 };
     float3 dirTo[Slots] = { (float3)0, (float3)0, (float3)0, (float3)0 };

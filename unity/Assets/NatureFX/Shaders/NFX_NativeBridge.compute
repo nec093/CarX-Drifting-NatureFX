@@ -177,9 +177,16 @@ void PrepareAmbient(uint3 id : SV_DispatchThreadID)
     float viewDepth, offset;
     bool thin;
     bool valid = TraceSurface(pixel, origin, n, geomN, viewDepth, thin, offset);
-    _NFX_NativeSurface[index * 3] = float4(origin, valid ? 1.0 : 0.0);
-    _NFX_NativeSurface[index * 3 + 1] = float4(n, asfloat(pixel.x | (pixel.y << 16)));
-    _NFX_NativeSurface[index * 3 + 2] = float4(geomN, viewDepth);
+    if (!valid)
+    {
+        origin = 0.0;
+        n = geomN = float3(0.0, 1.0, 0.0);
+        viewDepth = 0.0;
+    }
+    // packed (NfxAmbientSurface in the engine's NfxPack.hlsli): origin, the pixel (0xFFFFFFFF: not valid); the shading
+    // and geometric normals as octahedra, the view depth, the ray's distance (Ambient / GI write it; 0 until then)
+    _NFX_NativeSurface[index * 2] = float4(origin, asfloat(valid ? (pixel.x | (pixel.y << 16)) : 0xFFFFFFFFu));
+    _NFX_NativeSurface[index * 2 + 1] = asfloat(uint4(NfxPackOct16(n), NfxPackOct16(geomN), asuint(viewDepth), 0u));
     _NFX_NativeResult[index] = _NFX_NativeDefault;
 }
 
