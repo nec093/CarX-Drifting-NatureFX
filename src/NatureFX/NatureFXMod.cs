@@ -190,6 +190,7 @@ namespace NatureFX {
 			NatureFX.Tools.CpuTimings.Active = NatureFX.Tools.DebugPage.Running;
 			NatureFX.Tools.CpuTimings.BeginFrame();
 			TextureBudget.Apply(s.TextureStreamingBudget);
+			Replacer.Resync();
 
 			// the map's [defaults] and weather zones at the camera, before the weather and wind read them
 			var cam = Camera.main;

@@ -54,6 +54,15 @@ namespace NatureFX.Nature {
 
 		private readonly Dictionary<Material, MaterialSnapshot> originals_ = new();
 
+		// Textures a translator moved from the game's property names to HDRP/Lit's (game shader _MainTex -> _BaseColorMap):
+		// the game may assign its finished textures after the switch (a map reload: a small stand-in first, the full
+		// texture later) under its own names, which the NFX shader does not read. Resync follows them.
+		private readonly Dictionary<Material, List<(string From, string To)>> links_ = new();
+		private static readonly string[] LinkedTargets = { "_BaseColorMap", "_NormalMap", "_MaskMap", "_EmissiveColorMap" };
+		private float nextResync_;
+		public int Resynced { get; private set; }
+		public int Unreadable { get; private set; }
+
 		// Shader rebuild (docs/shader-rebuild-plan.md): every game material the rules leave alone becomes a NatureFX
 		// material too (GenericTranslator), except what later stages rebuild or what is not a surface
 		public bool Full { get; set; }
@@ -289,6 +298,36 @@ namespace NatureFX.Nature {
 			for (int i = 0; i < bad.Count && i < worst; ++i) {
 				rows.Add(("  smaller", bad[i].Text));
 			}
+			rows.Add(("textures moved from the game's names", $"{links_.Count} materials; {Resynced} set again by the game after the switch and followed, {Unreadable} names unreadable"));
+			int blocks = 0, blockTextures = 0;
+			var block = new MaterialPropertyBlock();
+			foreach (var r in Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None)) {
+				if (r == null || !r.HasPropertyBlock()) {
+					continue;
+				}
+				bool ours = false;
+				foreach (var m in r.sharedMaterials) {
+					if (m != null && originals_.ContainsKey(m)) {
+						ours = true;
+						break;
+					}
+				}
+				if (!ours) {
+					continue;
+				}
+				++blocks;
+				r.GetPropertyBlock(block);
+				foreach (string name in new[] { "_MainTex", "_BaseMap", "_BaseColorMap", "_Albedo", "_AlbedoMap", "_Diffuse" }) {
+					if (block.HasTexture(name)) {
+						++blockTextures;
+						if (rows.Count < 60) {
+							var bt = block.GetTexture(name);
+							rows.Add(("  block", $"{ObjectPath(r.transform)}: {name} = {(bt != null ? $"{bt.name} {bt.width}x{bt.height}" : "none")}"));
+						}
+					}
+				}
+			}
+			rows.Add(("renderers of switched materials with a property block", $"{blocks}, {blockTextures} colour textures set there"));
 			rows.Add(("colour map smaller than the game's largest texture", $"{smallerBase} materials"));
 			foreach (string line in smaller) {
 				rows.Add(("  picked", line));
@@ -346,6 +385,72 @@ namespace NatureFX.Nature {
 				}
 			}
 			originals_.Clear();
+			links_.Clear();
+		}
+
+		// which game property each translated texture came from (same texture object, another name)
+		private void Link(Material m, MaterialSnapshot snapshot) {
+			List<(string, string)> list = null;
+			foreach (string to in LinkedTargets) {
+				if (!m.HasProperty(to)) {
+					continue;
+				}
+				var t = m.GetTexture(to);
+				if (t == null) {
+					continue;
+				}
+				if (snapshot.Textures.TryGetValue(to, out var same) && same.Texture == t) {
+					continue; // the game's own name: its later changes land in the NFX shader as they are
+				}
+				foreach (var kv in snapshot.Textures) {
+					if (kv.Value.Texture == t && kv.Key != to) {
+						(list ??= new List<(string, string)>()).Add((kv.Key, to));
+						break;
+					}
+				}
+			}
+			if (list != null) {
+				links_[m] = list;
+			}
+		}
+
+		// Once a second: a texture the game set after the switch under its own name goes where the NFX shader reads it
+		public void Resync() {
+			if (Time.unscaledTime < nextResync_ || links_.Count == 0) {
+				return;
+			}
+			nextResync_ = Time.unscaledTime + 1.0f;
+			int unreadable = 0;
+			List<Material> gone = null;
+			foreach (var kv in links_) {
+				var m = kv.Key;
+				if (m == null || !originals_.TryGetValue(m, out var snapshot)) {
+					(gone ??= new List<Material>()).Add(m);
+					continue;
+				}
+				foreach (var (from, to) in kv.Value) {
+					if (!m.HasTexture(from)) {
+						++unreadable;
+						continue;
+					}
+					var now = m.GetTexture(from);
+					if (now == null || now == m.GetTexture(to)) {
+						continue;
+					}
+					snapshot.Textures.TryGetValue(from, out var before);
+					Kino.Log.Info($"[NatureFX] Shader rebuild: '{m.name}' {from} became {now.name} {now.width}x{now.height} after the switch " +
+					              $"(was {(before.Texture != null ? $"{before.Texture.name} {before.Texture.width}x{before.Texture.height}" : "none")}); now its {to}");
+					m.SetTexture(to, now);
+					snapshot.Textures[from] = (now, before.Scale, before.Offset); // switching off restores the game's latest
+					++Resynced;
+				}
+			}
+			if (gone != null) {
+				foreach (var m in gone) {
+					links_.Remove(m);
+				}
+			}
+			Unreadable = unreadable;
 		}
 
 		// The NFX shader this material becomes, or null with the reason it stays (null reason: nothing to say,
@@ -483,6 +588,7 @@ namespace NatureFX.Nature {
 			m.renderQueue = queue;
 			// the game's values under HDRP/Lit names (HDRP/Lit sources keep theirs), then the keywords they imply
 			GenericTranslator.Apply(m, snapshot);
+			Link(m, snapshot);
 			foreach (string k in DerivedLitKeywords(m)) {
 				wanted.Add(k);
 			}
