@@ -35,7 +35,7 @@ float4 _NFX_LampMaskSize;          // xy the mask's size
 float4 _NFX_LampMaskParams;        // x the new frame's share, y 1 = lamp masks in use
 float4 _NFX_LampPos[128];          // the engine's lamps (LocalLights): xyz absolute position
 float _NFX_LampCount;
-float _NFX_OwnLamps;
+float _NFX_OwnLamps;   // 1: HDRP's lamps light nothing for HDRP (OwnLighting.Lamps); worked out at full strength here
 #ifdef NFX_OWN_BRDF
 TEXTURE2D_X(_NFX_SurfaceAlbedo); // RTSurfaceTrace: rgb albedo, a metallic and clear coat (0.5 + metal)
 TEXTURE2D_X(_NFX_SurfaceNormal); // RTSurfaceTrace: w != 0 where the albedo is the pixel's own
@@ -79,7 +79,7 @@ void NFX_OwnBrdf(float3 n, float3 V, float3 L, float perceptualRoughness, float4
         specular += F * min(D * visTerm, 100.0) * ndl;
     }
 }
-#endif   // 1: HDRP's lamps light nothing for HDRP (OwnLighting.Lamps); worked out at full strength here
+#endif
 
 struct LampsOut
 {
