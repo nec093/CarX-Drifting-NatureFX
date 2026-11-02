@@ -58,6 +58,7 @@ namespace NatureFX {
 
 		// camera / filters
 		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral, 2 Filmic (GT-style custom curve), 3 None
+		public float WhiteBalance { get; set; }       // 0..1 how much the eye takes the light around as white (PostProcess)
 
 		// --- added in config version 3: screen space path tracing ---
 
@@ -280,6 +281,7 @@ namespace NatureFX {
 
 		// camera / filters
 		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral, 2 Filmic (GT-style custom curve), 3 None
+		public float WhiteBalance { get; set; }       // 0..1 how much the eye takes the light around as white (PostProcess)
 
 		// --- added in config version 3: screen space path tracing ---
 
@@ -846,6 +848,16 @@ namespace NatureFX {
 				// see-through surfaces lit again under the own engine's lighting
 				d.OwnTransparentLight = true;
 				d.ConfigVersion = 69;
+			}
+			if (d.ConfigVersion < 70) {
+				// true to life: Khronos PBR Neutral (the surfaces' own colours, highlights rolled off to white, no hue
+				// shift like ACES's), no added contrast or saturation, the eye's white balance
+				d.TonemapMode = 1;
+				d.AcesTonemapping = true;
+				d.Contrast = 0.0f;
+				d.Saturation = 0.0f;
+				d.WhiteBalance = 0.6f;
+				d.ConfigVersion = 70;
 			}
 		}
 

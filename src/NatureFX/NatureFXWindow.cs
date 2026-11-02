@@ -886,6 +886,10 @@ namespace NatureFX {
 			Widgets.EndDependent();
 			Other(Widgets.Slider("Contrast", S.Contrast, -50, 50, v => S.Contrast = v, "0"));
 			Other(Widgets.Slider("Saturation", S.Saturation, -50, 50, v => S.Saturation = v, "0"));
+			Widgets.Info("True to life: Neutral, contrast and saturation 0 (the surfaces keep their own colours).");
+			Other(Widgets.Slider("White balance (eye)", S.WhiteBalance, 0, 1, v => S.WhiteBalance = v, "0.00"));
+			Widgets.Info("How much the eye takes the light around as white: a sunset or warm lamps less orange, a shade under a blue " +
+			             "sky less blue. 0: the camera's daylight white. Less in the dark, as the eye. Needs Own post-processing.");
 			Widgets.EndCard();
 		}
 

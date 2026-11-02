@@ -35,6 +35,7 @@ Shader "Hidden/NatureFX/Post"
     float4 _NFX_PostTargetSize;     // the target: xy size, zw 1 / size
     float4 _NFX_PostParams;         // x bloom share, y exposure compensation (EV), z contrast (-1..1), w saturation (-1..1)
     float4 _NFX_PostMode;           // x tone curve: 0 ACES, 1 Neutral, 2 AgX, 3 none; y bloom levels
+    float4 _NFX_PostWhite;          // rgb the eye's white balance (gains on the scene's light, luminance kept)
 
     float _NFX_PostPlain;           // 1: the textures are the display resolution's own (DLSS upscaling), not scaled RTHandles
 
@@ -46,11 +47,15 @@ Shader "Hidden/NatureFX/Post"
     }
 
     // --- meter: each grid cell the mean of 4 x 4 samples' log2 luminance (cd/m²)
+    // x the cell's mean log2 luminance; yzw the mean colour of what is not sky (cd/m²), 0 where all is sky: the light the
+    // surfaces return, which the eye's white balance adapts to (PostProcess.WhiteBalance)
     float4 Meter(Varyings v) : SV_Target
     {
         float2 uv0 = (floor(v.positionCS.xy)) * _NFX_PostTargetSize.zw;
         float exposure = max(GetCurrentExposureMultiplier(), 1e-10);
         float sum = 0.0;
+        float3 surfaces = 0.0;
+        float count = 0.0;
         for (int y = 0; y < 4; ++y)
         {
             for (int x = 0; x < 4; ++x)
@@ -59,9 +64,15 @@ Shader "Hidden/NatureFX/Post"
                 float3 c = SampleRT(_NFX_PostSource, uv).rgb;
                 float L = dot(c, float3(0.2126, 0.7152, 0.0722)) / exposure;
                 sum += log2(max(L, 1e-5));
+                uint2 px = min((uint2)(saturate(uv) * _ScreenSize.xy), (uint2)_ScreenSize.xy - 1);
+                if (LoadCameraDepth(px) != UNITY_RAW_FAR_CLIP_VALUE && all(isfinite(c)))
+                {
+                    surfaces += max(c, 0.0) / exposure;
+                    count += 1.0;
+                }
             }
         }
-        return float4(sum / 16.0, 0.0, 0.0, 1.0);
+        return float4(sum / 16.0, count > 0.0 ? surfaces / count : (float3)0.0);
     }
 
     // --- bloom: 13 tap down (Jimenez 2014); the first level weights by 1 / (1 + luma) (Karis) against fireflies
@@ -332,6 +343,9 @@ Shader "Hidden/NatureFX/Post"
         if (_NFX_PostFlare.w > 0.5)
             c += LensFlare(uv);
         c = max(c, 0.0) * exp2(_NFX_PostParams.y);
+        // the eye's white balance: the light around taken partly as white (sunset, shade under a blue sky, lamps)
+        if (any(_NFX_PostWhite.rgb > 0.0))
+            c *= _NFX_PostWhite.rgb;
         int mode = (int)_NFX_PostMode.x;
         float3 d = mode == 0 ? AcesFitted(c) : mode == 1 ? PbrNeutral(c) : mode == 2 ? AgX(c) : saturate(c);
         // contrast about mid grey (in a perceptual space), then saturation

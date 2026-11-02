@@ -417,3 +417,7 @@
   - C2 クッキーアトラス・C3 プローブアトラスは見送り: どちらも HDRP のパイプラインアセットの設定で、実行中に小さくするにはパイプラインを作り直す必要がある（ゲーム全体の描画を作り直す、危険）。クッキーは独自 BSDF のランプも HDRP の EvaluateLight_Punctual 経由で使っている。
   - ユーザー確認（11-02）: バンドル 15 本、A の 4 項目 off、B1 OK（48 個が layer 7）、B2 は独自ポスト off でも 15.23 EV で同じ見た目。C1 をオンにすると遠景の森の板が白っぽい影絵に（「二重のテクスチャ」）→ 独自エンジンがトレースしない物（ForestRenderer・GrassRenderer・Detritus の RenderMesh、RayTracingScene が飛ばす小物と影なしの草）は表面トレースで色がなく灰 0.3 で照らされていた。独自 BSDF のときだけ、それらを layer 7 に（OwnLighting.Untraced / UntracedBit / UntracedLit）して HDRP に照らさせ、合成は「色が不明で HDRP の画素に光がある」画素（hdrpLit）で独自の太陽・ランプ・空を足さず、HDRP の太陽の分は推定で影を付ける。HDRP の G-buffer の空の光のため、BeforeRendering の AmbientFeedPass が独自の空のプローブを `_AmbientProbeData` に入れる（層 7 以外は間接光の倍率 0 なので影響なし）。
   - ユーザー確認: リセット OK、露出 OK。Own BSDF は路面（アンチタイリングのある NatureFX マテリアル）で模様が二重に → 表面トレースの色はアンチタイリング・積もり・地面なじませ・ペイント・ディテールを持たないため。実験的として既定オフのまま（F8 の名前と説明に experimental）。将来の候補: 独自エンジンのヒットにも hex tiling（反射・GI の色も正確になる）。
+- **11-02 現実に近いトーンと色（ユーザー依頼「tonemap や色合い、雨等の表現を現実と同じに」）**:
+  - 移行 70: トーンカーブを Khronos PBR Neutral（ACES の色相のずれなし、表面の色をそのまま、ハイライトは白へ）、コントラスト・彩度 0（以前は +8 / +5）、WhiteBalance 0.6。
+  - 目のホワイトバランス（PostProcess.WhiteBalance）: 測光パス（NFX_Post Meter）を RGBA にして、空でない画素の平均の色も測る。中心重みで合計し、赤 / 青の比（log2）だけを WhiteBalance × 暗さの係数（EV 2〜8 で 0→1）ぶん打ち消す（緑と赤紫の軸は触らない）。時定数約 1.4 秒。最終パスで露出補正のあと、トーンカーブの前にゲイン（輝度は保つ）。独自のポストプロセスのときだけ。
+  - 雨はユーザーに現状の気になる点を聞いてから。

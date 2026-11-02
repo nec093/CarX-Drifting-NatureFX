@@ -49,6 +49,10 @@ namespace NatureFX.Rendering {
 
 		// the meter's last reading: log2 luminance per cell, and when it came
 		public readonly float[] Meter = new float[MeterW * MeterH];
+		// the cells' mean colour of what is not sky (cd/m², rgb), 0 where all is sky
+		public readonly Vector3[] MeterColor = new Vector3[MeterW * MeterH];
+		public Vector4 White = Vector4.zero; // the eye's white balance gains (PostProcess), 0: none
+		private static readonly int WhiteId = Shader.PropertyToID("_NFX_PostWhite");
 		public int MeterFrame { get; private set; } = -1;
 
 		private RTHandle source_;
@@ -80,7 +84,7 @@ namespace NatureFX.Rendering {
 				enableRandomWrite: true, useDynamicScale: true, name: "NFX_Post_Motion");
 			work_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.R16G16B16A16_SFloat,
 				useDynamicScale: true, name: "NFX_Post_Work");
-			meter_ = new RenderTexture(MeterW, MeterH, 0, GraphicsFormat.R32_SFloat) { name = "NFX_Post_Meter", hideFlags = HideFlags.DontSave };
+			meter_ = new RenderTexture(MeterW, MeterH, 0, GraphicsFormat.R32G32B32A32_SFloat) { name = "NFX_Post_Meter", hideFlags = HideFlags.DontSave };
 			meter_.Create();
 		}
 
@@ -239,6 +243,7 @@ namespace NatureFX.Rendering {
 			props_.SetTexture(BloomId, levels > 0 ? (levels > 1 ? up[0] : down[0]) : source);
 			props_.SetVector(ParamsId, new Vector4(levels > 0 ? Bloom : 0.0f, Compensation, Contrast, Saturation));
 			props_.SetVector(ModeId, new Vector4(Tonemap, levels, 0.0f, 0.0f));
+			props_.SetVector(WhiteId, White);
 			Draw(cmd, target, PassFinal, Size(width, height));
 			if (upscaled) {
 				cmd.SetGlobalTexture(UpscaledFinalId, fullFinal_);
@@ -260,8 +265,11 @@ namespace NatureFX.Rendering {
 						return;
 					}
 					var data = request.GetData<float>();
-					if (data.Length >= Meter.Length) {
-						NativeArray<float>.Copy(data, Meter, Meter.Length);
+					if (data.Length >= Meter.Length * 4) {
+						for (int i = 0; i < Meter.Length; ++i) {
+							Meter[i] = data[i * 4];
+							MeterColor[i] = new Vector3(data[i * 4 + 1], data[i * 4 + 2], data[i * 4 + 3]);
+						}
 						MeterFrame = frame;
 					}
 				});
@@ -424,7 +432,7 @@ namespace NatureFX.Rendering {
 			Adapt(s);
 			string[] curves = { "ACES", "Neutral", "AgX", "none" };
 			Status = s.ExposureMode == 1
-				? FormattableString.Invariant($"own: exposure {ev_:0.00} EV100, eye adaptation, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
+				? FormattableString.Invariant($"own: exposure {ev_:0.00} EV100, eye adaptation, white balance {(warm_ >= 0 ? "cooler" : "warmer")} by {Mathf.Abs(warm_):0.00} stops (red / blue), bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
 				: FormattableString.Invariant($"own: the game's exposure, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}");
 		}
 
@@ -469,6 +477,7 @@ namespace NatureFX.Rendering {
 			OwnExposure = s.ExposureMode == 1 && !float.IsNaN(ev_);
 			// until the first reading HDRP keeps its own (a fixed exposure of nothing would flash the first frames)
 			exposure_.active = s.ExposureMode == 1 && !float.IsNaN(ev_);
+			pass_.White = WhiteBalance(s);
 			if (!float.IsNaN(ev_)) {
 				// the compensation: the own final pass's with the own post-processing, HDRP's fixed exposure without it
 				exposure_.fixedExposure.Override(pass_ != null && pass_.MeterOnly ? ev_ - s.Exposure : ev_);
@@ -514,6 +523,43 @@ namespace NatureFX.Rendering {
 			data.renderingPathCustomFrameSettings = f;
 			data.customRenderingSettings = true;
 		}
+
+		// The eye's white balance (chromatic adaptation): the light the surfaces in view return (the meter's colour of
+		// what is not sky, which a scene's own colours average out over) taken partly as white, along the warm / cool
+		// axis only (sunset, the blue of a shade under a clear sky, warm lamps; a green forest is not turned magenta).
+		// Partial, as the eye: Settings.WhiteBalance at daylight, less in the dark (at a street lamp's few EV the eye
+		// leaves its colour), slowly (seconds, like the eye's own).
+		private float warm_;
+		private int lastWhiteMeter_ = -1;
+		private Vector4 WhiteBalance(ISettings s) {
+			float strength = Mathf.Clamp01(s.WhiteBalance);
+			if (strength <= 0.0f || float.IsNaN(ev_)) {
+				warm_ = 0.0f;
+				return Vector4.zero;
+			}
+			if (pass_.MeterFrame != lastWhiteMeter_ && pass_.MeterFrame >= 0) {
+				lastWhiteMeter_ = pass_.MeterFrame;
+				Vector3 sum = Vector3.zero;
+				for (int i = 0; i < pass_.MeterColor.Length; ++i) {
+					var c = pass_.MeterColor[i];
+					if (float.IsNaN(c.x) || float.IsNaN(c.y) || float.IsNaN(c.z)) {
+						continue;
+					}
+					sum += c * weights_[i];
+				}
+				if (sum.x > 1e-6f && sum.z > 1e-6f) {
+					// log2 of red over blue: 0 under daylight white (D65 in the linear Rec. 709 primaries)
+					float target = Mathf.Clamp(Mathf.Log(sum.x / sum.z, 2.0f), -3.0f, 3.0f);
+					target *= strength * Mathf.Clamp01((ev_ - 2.0f) / 6.0f);
+					warm_ += (target - warm_) * (1.0f - Mathf.Exp(-Time.unscaledDeltaTime * 0.7f));
+				}
+			}
+			float r = Mathf.Pow(2.0f, -warm_ * 0.5f), b = Mathf.Pow(2.0f, warm_ * 0.5f);
+			float luma = 0.2126f * r + 0.7152f + 0.0722f * b;
+			return new Vector4(r / luma, 1.0f / luma, b / luma, 0.0f);
+		}
+
+		public float WarmShift => warm_;
 
 		// the meter's cells as EV100 (K = 12.5): the brightness weighted to the centre, the darkest 30 % and the
 		// brightest 5 % left out (dark corners and the sun's disc would pull it)
