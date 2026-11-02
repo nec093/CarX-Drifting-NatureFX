@@ -162,10 +162,17 @@ namespace NatureFX.Nature {
 			int replaced = 0;
 			var samples = new List<string>();
 			Deferred.Clear();
+			var replacedNow = new HashSet<Material>();
 			foreach (var r in Object.FindObjectsByType<Renderer>(FindObjectsInactive.Include, FindObjectsSortMode.None)) {
 				string path = null;
-				foreach (var m in r.sharedMaterials) {
-					if (m == null || originals_.ContainsKey(m)) {
+				bool touched = false;
+				var materials = r.sharedMaterials;
+				foreach (var m in materials) {
+					if (m == null) {
+						continue;
+					}
+					if (originals_.ContainsKey(m)) {
+						touched |= replacedNow.Contains(m); // switched for an earlier renderer that shares it
 						continue;
 					}
 					path ??= ObjectPath(r.transform);
@@ -180,11 +187,20 @@ namespace NatureFX.Nature {
 					}
 					if (TryReplace(m, path, bundle, target)) {
 						++replaced;
+						touched = true;
+						replacedNow.Add(m);
 						if (samples.Count < 5) {
 							samples.Add($"{m.name}#{m.GetInstanceID()} ({from} -> {m.shader.name}) @ {path}");
 						}
 						Diagnose(m, r, path);
 					}
+				}
+				// the shader was switched on the material itself, which the renderer is not told of: Unity's texture
+				// mip streaming kept the texture list it read from the old shader and dropped the swapped material's
+				// textures to their smallest allowed mips (blurred windows and walls once the budget is short).
+				// Assigning the same materials again makes the renderer read them anew.
+				if (touched) {
+					r.sharedMaterials = materials;
 				}
 			}
 
