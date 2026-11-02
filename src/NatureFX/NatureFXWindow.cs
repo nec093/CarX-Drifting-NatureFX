@@ -485,7 +485,9 @@ namespace NatureFX {
 				"HDRP's street lights, headlights and other lamps light nothing; the lamp masks' pass works their light out " +
 				"(cookies included) and the shadow composite adds the share each lamp's traced shadow lets through. Only " +
 				"while the lamp masks run (Lighting & shadows)."));
-			Other(Widgets.Switch("Own BSDF (no G-buffer copy)", S.OwnBrdf, v => S.OwnBrdf = v,
+			Other(Widgets.Switch("Own BSDF (no G-buffer copy, experimental)", S.OwnBrdf, v => S.OwnBrdf = v,
+				"Experimental: the colour comes from the traced surface, which lacks NatureFX's material work (anti-tiling, " +
+				"build-up, ground blend, paint, detail maps), so such surfaces can show two patterns over each other. " +
 				"The sun and the lamps lit by the own engine's BSDF from the traced surface and HDRP's normals, instead of " +
 				"HDRP's own BSDF from its G-buffer drawn a second time: less video memory and one scene pass fewer. HDRP's " +
 				"material details (subsurface, anisotropy, the paint's flakes) are approximated. Needs the sun and lamp " +
