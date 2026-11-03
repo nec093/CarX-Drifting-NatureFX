@@ -243,7 +243,8 @@ namespace NatureFX.Map {
 				}
 				l.Hd.lightDimmer = level;
 				// light in fog and rain at night, as strong as the headlights' (Volumetric headlight beams)
-				l.Hd.volumetricDimmer = shafts > 0.0f ? shafts * 4.0f : 1.0f;
+				// (0: none; it was HDRP's full 1 at 0)
+				l.Hd.volumetricDimmer = Mathf.Max(shafts, 0.0f) * 4.0f;
 			}
 		}
 

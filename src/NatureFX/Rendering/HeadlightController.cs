@@ -254,10 +254,12 @@ namespace NatureFX.Rendering {
 					continue;
 				}
 				var o = kv.Value;
-				if (changed) {
-					// 0 keeps the game's own value. 1.5 times the physical scattering at 1: at 4 the beams lit a bright
-					// dome of the air right in front of the car, like a filter over the picture
-					hd.volumetricDimmer = shafts > 0.0f ? shafts * 1.5f : o.Volumetric;
+				// HDRP's volumetric light of the lamp (where HDRP's fog still runs): Headlight beams times 1.5 (at 4 the beams
+				// lit a bright dome of the air right in front of the car), 0 none; every frame (the game sets it again).
+				// The game's own value only with NatureFX off: at 0 it was put back, the game's haze round the headlights
+				float volumetric = s.Enabled ? shafts * 1.5f : o.Volumetric;
+				if (!Mathf.Approximately(hd.volumetricDimmer, volumetric)) {
+					hd.volumetricDimmer = volumetric;
 				}
 				var light = hd.GetComponent<Light>();
 				if (light == null || !front_.Contains(light)) {

@@ -258,9 +258,12 @@ namespace NatureFX {
 			NativeEngine.SkyLightSaturation = s.SkyLightSaturation;
 			OwnLighting.TransparentsWanted = s.Enabled && s.OwnTransparentLight;
 			bool own = s.Enabled && s.OwnSkyLighting && NativeEngine.Active;
-			HdrpFogOff.Update(cam, own && nativeFog && !hdrpVolumetric);
+			// HDRP's fog and its volumetric light off whenever the own engine draws the fog (not only with the own sky
+			// light: with it off HDRP's volumetric fog still lit a haze round the headlights)
+			bool ownFog = s.Enabled && NativeEngine.Active && nativeFog;
+			HdrpFogOff.Update(cam, ownFog && !hdrpVolumetric);
 			HdrpCloudsOff.Update(cam, own && s.NativeSky);
-			HdrpScatterOff.Update(cam, own && nativeFog);
+			HdrpScatterOff.Update(cam, ownFog);
 			HdrpSsrOff.Update(cam, OwnLighting.Reflections);
 			HdrpProbesOff.Update(cam, OwnLighting.Reflections);
 			HdrpPlanarOff.Update(cam, OwnLighting.Reflections);
