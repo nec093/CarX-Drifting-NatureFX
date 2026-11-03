@@ -1,5 +1,6 @@
 namespace NatureFX.Tools {
-	// The debug page's HTML (DebugPage.cs serves it at /). Self contained: no scripts or fonts from the internet.
+	// The debug page's HTML (DebugPage.cs serves it at /). Self contained but for its fonts: Noto Sans JP and Noto Sans
+	// Mono from Google Fonts (an installed copy first; offline, Windows' own Japanese fonts).
 	// Written without double quotes, so the C# verbatim string needs no escaping. Plain on purpose: a dense,
 	// monospaced tool page (tables, rules, charts), colour only for warnings. Tabs down the left (overview,
 	// performance, memory, scene, developer, log), each a grid of panels as wide as the window allows, so little
@@ -11,12 +12,15 @@ namespace NatureFX.Tools {
 <meta charset='utf-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
 <title>NatureFX debug</title>
+<link rel='preconnect' href='https://fonts.googleapis.com'>
+<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
+<link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&family=Noto+Sans+Mono:wght@400;700&display=swap'>
 <style>
 :root { --bg:#111; --fg:#d4d4d4; --dim:#808080; --rule:#333; --head:#1a1a1a; --bar:#5a5a5a; --sel:#262626; --warn:#d7ba7d; --bad:#f48771; --a:#9cdcfe; --b:#b5cea8; --c:#d7ba7d; --on:#4ec9b0; }
 @media (prefers-color-scheme: light) { :root { --bg:#fff; --fg:#1e1e1e; --dim:#6e6e6e; --rule:#d0d0d0; --head:#f3f3f3; --bar:#b0b0b0; --sel:#e8e8e8; --warn:#9a6700; --bad:#c42b1c; --a:#0451a5; --b:#267f00; --c:#9a6700; --on:#007a65; } }
 * { box-sizing:border-box; }
 html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); }
-body { font:12px/1.45 'BIZ UDGothic', 'Cascadia Mono', Consolas, 'Osaka-Mono', 'MS Gothic', ui-monospace, Menlo, monospace; display:grid; grid-template-columns:120px 1fr; grid-template-rows:auto 1fr; }
+body { font:12.5px/1.5 'Noto Sans JP', 'Noto Sans', 'BIZ UDPGothic', 'Yu Gothic UI', Meiryo, sans-serif; font-variant-numeric:tabular-nums; display:grid; grid-template-columns:120px 1fr; grid-template-rows:auto 1fr; }
 #bar { grid-column:1 / 3; position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--rule); padding:6px 12px; display:flex; flex-wrap:wrap; gap:4px 16px; z-index:2; }
 #bar b { font-weight:normal; color:var(--dim); }
 #bar a { color:var(--dim); }
@@ -72,7 +76,8 @@ pre { margin:0; padding:4px; height:calc(100vh - 120px); overflow:auto; border:1
 .row .pn { color:var(--dim); font-weight:normal; margin-left:6px; font-size:90%; }
 section .ghelp { padding:4px; color:var(--dim); border:1px solid var(--rule); border-top:0; }
 #lang { margin-left:auto; }
-/* one monospaced face for both scripts: BIZ UDGothic (Windows 10 and later) draws Latin and Japanese at fixed widths */
+/* Noto Sans JP for the texts (its digits tabular), Noto Sans Mono for values typed in, tables' numbers and the log */
+.n, td.v, pre, input[type=number], .srow .dv, #bar span span { font-family:'Noto Sans Mono', 'Cascadia Mono', Consolas, 'BIZ UDGothic', monospace; }
 input, button, select { font:inherit; }
 /* ---- the settings tab: the F8 window's tabs on the left, one tab's cards on the right, a row a setting */
 #tab-settings.cur { display:grid; grid-template-columns:200px minmax(0, 920px); gap:16px; align-items:start; padding-top:12px; }
