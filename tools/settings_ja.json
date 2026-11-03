@@ -9,13 +9,17 @@
   "log": "ログ",
   "filter": "絞り込み",
   "changedOnly": "変更した項目のみ",
-  "default": "既定値",
+  "default": "既定",
   "resetToDefault": "既定値に戻す",
   "changed": "変更あり",
   "settingsTitle": "設定（F8 ウィンドウと同じ。変更はすぐ保存）",
   "typeHint": "スライダーの範囲外の値は右の欄に入力",
-  "other": "その他の設定（F8 に単純な項目がないもの）",
-  "changedCount": "件を既定値から変更"
+  "other": "その他（F8 にない設定）",
+  "changedCount": "件を既定値から変更",
+  "changedTab": "変更した項目",
+  "search": "すべての設定を検索（名前・説明）",
+  "noMatch": "該当する設定はありません",
+  "noneChanged": "すべて既定値のままです"
  },
  "groups": {
   "Sky & fog / Sky": {

@@ -16,7 +16,7 @@ namespace NatureFX.Tools {
 @media (prefers-color-scheme: light) { :root { --bg:#fff; --fg:#1e1e1e; --dim:#6e6e6e; --rule:#d0d0d0; --head:#f3f3f3; --bar:#b0b0b0; --sel:#e8e8e8; --warn:#9a6700; --bad:#c42b1c; --a:#0451a5; --b:#267f00; --c:#9a6700; --on:#007a65; } }
 * { box-sizing:border-box; }
 html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); }
-body { font:12px/1.4 Consolas, 'Cascadia Mono', 'BIZ UDGothic', 'Yu Gothic UI', Meiryo, ui-monospace, Menlo, monospace; display:grid; grid-template-columns:120px 1fr; grid-template-rows:auto 1fr; }
+body { font:12px/1.45 'BIZ UDGothic', 'Cascadia Mono', Consolas, 'Osaka-Mono', 'MS Gothic', ui-monospace, Menlo, monospace; display:grid; grid-template-columns:120px 1fr; grid-template-rows:auto 1fr; }
 #bar { grid-column:1 / 3; position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--rule); padding:6px 12px; display:flex; flex-wrap:wrap; gap:4px 16px; z-index:2; }
 #bar b { font-weight:normal; color:var(--dim); }
 #bar a { color:var(--dim); }
@@ -72,13 +72,40 @@ pre { margin:0; padding:4px; height:calc(100vh - 120px); overflow:auto; border:1
 .row .pn { color:var(--dim); font-weight:normal; margin-left:6px; font-size:90%; }
 section .ghelp { padding:4px; color:var(--dim); border:1px solid var(--rule); border-top:0; }
 #lang { margin-left:auto; }
-/* Japanese: Windows' UI fonts (BIZ UDPGothic, Yu Gothic UI, Meiryo UI) for the texts, not the monospaced fallback
-   (MS Gothic); the numbers and values stay monospaced */
-html[lang=ja] #tabs button, html[lang=ja] h2, html[lang=ja] .row > span:first-child, html[lang=ja] .row > label,
-html[lang=ja] .help, html[lang=ja] .ghelp, html[lang=ja] .def span, html[lang=ja] .tools label, html[lang=ja] .tools span, html[lang=ja] button {
-  font-family:'BIZ UDPGothic', 'Yu Gothic UI', 'Meiryo UI', Meiryo, 'Hiragino Sans', 'Noto Sans JP', sans-serif; letter-spacing:0.02em; }
-html[lang=ja] .help, html[lang=ja] .ghelp { font-size:12.5px; line-height:1.6; }
-html[lang=ja] .row .pn, html[lang=ja] input { font-family:Consolas, 'Cascadia Mono', ui-monospace, monospace; }
+/* one monospaced face for both scripts: BIZ UDGothic (Windows 10 and later) draws Latin and Japanese at fixed widths */
+input, button, select { font:inherit; }
+/* ---- the settings tab: the F8 window's tabs on the left, one tab's cards on the right, a row a setting */
+#tab-settings.cur { display:grid; grid-template-columns:200px minmax(0, 920px); gap:16px; align-items:start; padding-top:12px; }
+.snav { position:sticky; top:44px; border:1px solid var(--rule); }
+.snav button { display:flex; justify-content:space-between; width:100%; text-align:left; border:0; border-top:1px solid var(--rule); background:none; color:var(--dim); padding:5px 8px; cursor:pointer; }
+.snav button:first-child { border-top:0; }
+.snav button:hover { color:var(--fg); }
+.snav button.cur { color:var(--fg); background:var(--sel); box-shadow:inset 2px 0 0 var(--a); }
+.snav .n { color:var(--warn); }
+.spane { min-width:0; display:grid; gap:12px; }
+.stop { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.stop input[type=search] { flex:1; min-width:24ch; background:var(--bg); color:var(--fg); border:1px solid var(--rule); padding:3px 6px; }
+.stop .cnt { color:var(--warn); }
+.scard { border:1px solid var(--rule); }
+.shead { background:var(--head); padding:4px 8px; font-weight:bold; display:flex; gap:8px; align-items:center; }
+.shead .tabname { color:var(--dim); font-weight:normal; }
+.srow { display:grid; grid-template-columns:minmax(0, 1fr) 330px 150px; gap:8px; align-items:center; padding:3px 8px; border-top:1px solid var(--rule); min-height:28px; }
+.srow .lab { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.srow .lab.tip { text-decoration:underline dotted var(--dim); text-underline-offset:3px; cursor:help; }
+.srow .ctrl { display:flex; justify-content:flex-end; align-items:center; gap:6px; }
+.srow .ctrl input[type=range] { width:190px; }
+.srow input.num { width:10ch; background:var(--sel); color:var(--fg); border:1px solid var(--rule); padding:1px 4px; }
+input[type=range] { accent-color:var(--a); }
+.srow .dv { color:var(--dim); text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.srow .dv button { padding:0 6px; color:var(--warn); border-color:var(--warn); }
+.srow.chg { box-shadow:inset 3px 0 0 var(--warn); background:color-mix(in srgb, var(--warn) 7%, transparent); }
+.srow.chg .lab { color:var(--warn); }
+.srow.chg .dv .d { display:none; }
+.srow:not(.chg) .dv button { display:none; }
+.q { color:var(--dim); border:1px solid var(--rule); border-radius:50%; width:15px; height:15px; display:inline-flex; align-items:center; justify-content:center; font-weight:normal; font-size:10px; cursor:help; }
+.sempty { color:var(--dim); padding:12px; border:1px solid var(--rule); }
+#tip { position:fixed; z-index:9; max-width:440px; background:var(--head); color:var(--fg); border:1px solid var(--bar); padding:6px 8px; pointer-events:none; white-space:pre-line; display:none; box-shadow:0 2px 8px rgba(0,0,0,.35); }
+#tip .tn { color:var(--dim); display:block; margin-top:4px; }
 .sw { appearance:none; width:30px; height:15px; border:1px solid var(--dim); border-radius:8px; position:relative; cursor:pointer; margin:0; }
 .sw::after { content:''; position:absolute; top:2px; left:2px; width:9px; height:9px; border-radius:50%; background:var(--dim); transition:left .1s; }
 .sw:checked { border-color:var(--on); }
@@ -108,6 +135,7 @@ html[lang=ja] .row .pn, html[lang=ja] input { font-family:Consolas, 'Cascadia Mo
   <button id='lang' title='English / 日本語'>EN / JP</button>
 </div>
 <nav id='tabs'></nav>
+<div id='tip'></div>
 <main>
   <div class='tab' id='tab-overview'>
     <section class='wide' id='s-chart'>
@@ -171,7 +199,8 @@ let LANG = 'en', META = null;
 try { LANG = localStorage.getItem('nfxLang') || ((navigator.language || '').startsWith('ja') ? 'ja' : 'en'); } catch (e) {}
 const T = k => (LANG === 'ja' && META && META.ja.ui && META.ja.ui[k]) || ({ settingsTitle: 'settings (the F8 window\'s, saved as they change)', typeHint: 'a value outside a slider\'s range: type it in the box',
   filter: 'filter', changedOnly: 'changed only', default: 'default', resetToDefault: 'reset', changed: 'changed', other: 'Other settings (no plain F8 control)',
-  changedCount: 'changed from the defaults' })[k] || k;
+  changedCount: 'changed from the defaults', changedTab: 'Changed', search: 'search every setting (name, description)',
+  noMatch: 'nothing matches', noneChanged: 'every setting is at its default' })[k] || k;
 function tabLabels() { document.documentElement.lang = LANG; for (const [id, label] of TABS) { const b = $('tb-' + id); if (b) b.textContent = T(id) === id ? label : T(id); } $('lang').textContent = LANG === 'ja' ? '日本語 / EN' : 'EN / 日本語'; }
 $('tabs').innerHTML = TABS.map(([id, label]) => `<button id='tb-${id}'>${label}</button>`).join('');
 for (const [id] of TABS) $('tb-' + id).onclick = () => pick(id);
@@ -263,59 +292,119 @@ function controls(list) {
     if (c.kind === 'number') e.value = fmt(c.value);
     if (c.kind === 'chips') e.querySelectorAll('button').forEach(b => b.classList.toggle('cur', +b.dataset.i === Math.round(c.value)));
   }
-  const cc = $('setCount'); if (cc) cc.textContent = `${changed} ${T('changedCount')}`;
+  const cc = $('setCount'); if (cc) cc.textContent = changed ? `${changed} ${T('changedCount')}` : '';
   filterSettings();
 }
 
-// the settings tab's filter: words, and changed only
-function filterSettings() {
-  const host = $('tab-settings'), f = $('setFilter'), only = $('setChanged');
-  if (!host || !f) return;
-  const q = f.value.trim().toLowerCase(), changedOnly = only && only.checked;
-  host.querySelectorAll('section[data-g]').forEach(sec => {
-    const inGroup = !q || sec.dataset.g.includes(q);
-    let any = false;
-    sec.querySelectorAll('.row').forEach(r => {
-      const on = (inGroup || r.dataset.k.includes(q)) && (!changedOnly || r.dataset.chg === '1');
-      r.style.display = on ? '' : 'none'; any = any || on;
-    });
-    sec.style.display = any ? '' : 'none';
-  });
+// ---- the settings tab
+let setView = 'changed', setQuery = '';
+try { setView = localStorage.getItem('nfxSetView') || 'changed'; } catch (e) {}
+const tabOf = c => c.group === 'Other' ? 'Other' : c.group.split(' / ')[0];
+const cardOf = c => c.group === 'Other' ? '' : c.group.split(' / ').slice(1).join(' / ');
+
+// the tooltip: a setting's description where the pointer is (data-tip on the element)
+function tipAt(ev) {
+  const t = ev.target.closest && ev.target.closest('[data-tip]'), tip = $('tip');
+  if (!t || !t.dataset.tip) { tip.style.display = 'none'; return; }
+  tip.innerHTML = esc(t.dataset.tip) + (t.dataset.tn ? `<span class='tn'>${esc(t.dataset.tn)}</span>` : '');
+  tip.style.display = 'block';
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = ev.clientX + 14, y = ev.clientY + 16;
+  if (x + w > innerWidth - 8) x = Math.max(8, innerWidth - w - 8);
+  if (y + h > innerHeight - 8) y = Math.max(8, ev.clientY - h - 10);
+  tip.style.left = x + 'px'; tip.style.top = y + 'px';
+}
+document.addEventListener('mousemove', tipAt);
+document.addEventListener('scroll', () => $('tip').style.display = 'none', true);
+
+function buildSettings(host, list) {
+  const tabs = [];
+  for (const c of list) { const t = tabOf(c); if (!tabs.includes(t)) tabs.push(t); }
+  const tabName = t => t === 'Other' ? T('other') : (groupText(t + ' / ').name.split(' / ')[0] || t);
+  // a tab's Japanese name: from the first card's translated group name
+  const tabJa = {};
+  for (const c of list) { const t = tabOf(c); if (!tabJa[t] && c.group !== 'Other') tabJa[t] = groupText(c.group).name.split(' / ')[0]; }
+  const nav = `<button data-v='changed'><span>${esc(T('changedTab'))}</span><span class='n' id='sn-changed'></span></button>` +
+    tabs.map(t => `<button data-v='${esc(t)}'><span>${esc(t === 'Other' ? T('other') : tabJa[t] || t)}</span><span class='n' id='sn-${esc(t)}'></span></button>`).join('');
+  const cards = [];
+  for (const c of list) { let k = cards.find(x => x.group === c.group); if (!k) cards.push(k = { group: c.group, tab: tabOf(c), items: [] }); k.items.push(c); }
+  const body = cards.map(k => {
+    const gt = groupText(k.group);
+    const parts = gt.name.split(' / ');
+    const cardName = k.group === 'Other' ? T('other') : (parts.slice(1).join(' / ') || parts[0]);
+    const q = gt.help ? ` <span class='q' data-tip='${esc(gt.help)}'>?</span>` : '';
+    return `<div class='scard' data-tab='${esc(k.tab)}'><div class='shead'><span>${esc(cardName)}</span>${q}<span class='tabname'>${esc(k.group === 'Other' ? '' : parts[0])}</span></div>` +
+      k.items.map(c => {
+        const t = text(c);
+        const tipAttr = t.help ? ` data-tip='${esc(t.help)}' data-tn='${esc(c.name || '')}'` : ` data-tip='' `;
+        let ctrl = '';
+        if (c.kind === 'switch') ctrl = `<input type='checkbox' class='sw' id='c-${c.id}'>`;
+        else if (c.kind === 'slider') ctrl = `<input type='range' id='c-${c.id}' min='${c.min}' max='${c.max}' step='${c.step}'><input type='number' class='num' id='cn-${c.id}' step='any'>`;
+        else if (c.kind === 'number') ctrl = `<input type='number' class='num' id='c-${c.id}' step='${c.step > 0 ? c.step : 'any'}'>`;
+        else if (c.kind === 'chips') ctrl = `<span class='chips' id='c-${c.id}'>` + c.options.map((o, i) => `<button data-i='${i}'>${esc(o)}</button>`).join('') + `</span>`;
+        const dv = c.def !== undefined ? `<span class='d'>${esc(T('default'))} ${esc(defText(c))}</span><button id='rs-${c.id}' title='${esc(T('resetToDefault'))}'>&#8634; ${esc(defText(c))}</button>` : '';
+        const key = (t.label + ' ' + (c.name || '') + ' ' + c.label + ' ' + t.help + ' ' + k.group + ' ' + gt.name).toLowerCase();
+        return `<div class='srow' id='r-${c.id}' data-k='${esc(key)}'><span class='lab${t.help ? ' tip' : ''}'${tipAttr}>${esc(t.label)}</span><span class='ctrl'>${ctrl}</span><span class='dv'>${dv}</span></div>`;
+      }).join('') + `</div>`;
+  }).join('');
+  host.innerHTML = `<nav class='snav'>${nav}</nav><div class='spane'><div class='stop'><input type='search' id='setFilter' placeholder='${esc(T('search'))}'>` +
+    `<span class='cnt' id='setCount'></span></div>${body}<div class='sempty' id='setEmpty' hidden></div></div>`;
+  host.querySelectorAll('.snav button').forEach(b => b.onclick = () => { setView = b.dataset.v; setQuery = ''; $('setFilter').value = ''; try { localStorage.setItem('nfxSetView', setView); } catch (e) {} filterSettings(); });
+  $('setFilter').value = setQuery;
+  $('setFilter').oninput = () => { setQuery = $('setFilter').value; filterSettings(); };
 }
 
-// a tab's controls, built again only when the list (or the language) changes; the settings tab has a filter on top
+// which rows show: the chosen tab, the changed ones, or what the search finds in every tab
+function filterSettings() {
+  const host = $('tab-settings');
+  if (!host || !$('setFilter')) return;
+  const q = setQuery.trim().toLowerCase();
+  let shown = 0;
+  const counts = {};
+  host.querySelectorAll('.srow').forEach(r => { if (r.classList.contains('chg')) { const t = r.closest('.scard').dataset.tab; counts[t] = (counts[t] || 0) + 1; } });
+  host.querySelectorAll('.scard').forEach(card => {
+    let any = false;
+    card.querySelectorAll('.srow').forEach(r => {
+      const on = q ? r.dataset.k.includes(q) : setView === 'changed' ? r.classList.contains('chg') : card.dataset.tab === setView;
+      r.style.display = on ? '' : 'none'; any = any || on; shown += on ? 1 : 0;
+    });
+    card.style.display = any ? '' : 'none';
+  });
+  let total = 0;
+  for (const k in counts) total += counts[k];
+  host.querySelectorAll('.snav button').forEach(b => {
+    b.classList.toggle('cur', !q && b.dataset.v === setView);
+    const n = b.dataset.v === 'changed' ? total : counts[b.dataset.v] || 0;
+    const e = b.querySelector('.n'); if (e) e.textContent = n ? n : '';
+  });
+  const empty = $('setEmpty');
+  empty.hidden = shown > 0;
+  empty.textContent = q ? T('noMatch') : setView === 'changed' ? T('noneChanged') : '';
+}
+
+// a tab's controls, built again only when the list (or the language) changes
 const ctlKeys = {};
 function build(tab, list) {
   const key = list.map(c => c.id).join(',');
   const host = $('tab-' + tab);
   if (!host || key === ctlKeys[tab]) return;
   ctlKeys[tab] = key;
-  const settings = tab === 'settings';
-  const keep = settings && $('setFilter') ? $('setFilter').value : '', keepOnly = settings && $('setChanged') ? $('setChanged').checked : false;
-  const groups = [];
-  for (const c of list) { let g = groups.find(x => x.name === c.group); if (!g) groups.push(g = { name: c.group, items: [] }); g.items.push(c); }
-  const head = settings
-    ? `<section class='wide'><h2>${esc(T('settingsTitle'))}</h2><div class='tools'><label>${esc(T('filter'))} <input type='text' id='setFilter'></label>` +
-      `<label><input type='checkbox' id='setChanged'> ${esc(T('changedOnly'))}</label><span id='setCount'></span><span>${esc(T('typeHint'))}</span></div></section>`
-    : '';
-  host.innerHTML = head + groups.map(g => {
-    const gt = settings ? groupText(g.name) : { name: g.name, help: '' };
-    return `<section data-g='${esc((gt.name + ' ' + g.name).toLowerCase())}'><h2>${esc(gt.name)}</h2>` + (gt.help ? `<div class='ghelp'>${esc(gt.help)}</div>` : '') + `<div class='ctl'>` + g.items.map(c => {
-      const t = settings ? text(c) : { label: c.label, help: c.help || '' };
-      const help = t.help ? `<div class='help'>${esc(t.help)}</div>` : '';
+  if (tab === 'settings') {
+    buildSettings(host, list);
+  } else {
+    const groups = [];
+    for (const c of list) { let g = groups.find(x => x.name === c.group); if (!g) groups.push(g = { name: c.group, items: [] }); g.items.push(c); }
+    host.innerHTML = groups.map(g => `<section><h2>${esc(g.name)}</h2><div class='ctl'>` + g.items.map(c => {
+      const help = c.help ? `<div class='help'>${esc(c.help)}</div>` : '';
       const state = `<div class='state' id='st-${c.id}'></div>`;
-      const def = c.def !== undefined ? `<div class='def'><span>${esc(T('default'))}: ${esc(defText(c))}</span><button id='rs-${c.id}' hidden>${esc(T('resetToDefault'))}</button></div>` : '';
-      const name = settings && c.name && c.name !== t.label ? `<span class='pn'>${esc(c.name)}</span>` : '';
-      const row = `<div class='row' id='r-${c.id}' data-k='${esc((t.label + ' ' + (c.name || '') + ' ' + c.label + ' ' + t.help).toLowerCase())}'>`;
-      const label = `${esc(t.label)}${name}`;
-      if (c.kind === 'switch') return `${row}<label for='c-${c.id}'>${label}</label><input type='checkbox' class='sw' id='c-${c.id}'>${help}${def}</div>`;
-      if (c.kind === 'slider') return `${row}<span>${label}</span><span class='sl'><input type='range' id='c-${c.id}' min='${c.min}' max='${c.max}' step='${c.step}'><input type='number' class='num' id='cn-${c.id}' step='any'></span>${help}${def}</div>`;
-      if (c.kind === 'number') return `${row}<span>${label}</span><span class='sl'><input type='number' class='num' id='c-${c.id}' step='${c.step > 0 ? c.step : 'any'}'></span>${help}${def}</div>`;
-      if (c.kind === 'chips') return `${row}<span>${label}</span><span class='chips' id='c-${c.id}'>` + c.options.map((o, i) => `<button data-i='${i}'>${esc(o)}</button>`).join('') + `</span>${help}${def}</div>`;
-      if (c.kind === 'button') return `${row}<span></span><button id='c-${c.id}'>${esc(t.label)}</button>${help}${state}</div>`;
-      return `${row}<div class='kv'><span>${esc(t.label)}</span><span id='st-${c.id}'></span></div></div>`;
-    }).join('') + `</div></section>`;
-  }).join('');
+      const row = `<div class='row' id='r-${c.id}'>`;
+      if (c.kind === 'switch') return `${row}<label for='c-${c.id}'>${esc(c.label)}</label><input type='checkbox' class='sw' id='c-${c.id}'>${help}</div>`;
+      if (c.kind === 'slider') return `${row}<span>${esc(c.label)}</span><span class='sl'><input type='range' id='c-${c.id}' min='${c.min}' max='${c.max}' step='${c.step}'><input type='number' class='num' id='cn-${c.id}' step='any'></span>${help}</div>`;
+      if (c.kind === 'chips') return `${row}<span>${esc(c.label)}</span><span class='chips' id='c-${c.id}'>` + c.options.map((o, i) => `<button data-i='${i}'>${esc(o)}</button>`).join('') + `</span>${help}</div>`;
+      if (c.kind === 'button') return `${row}<span></span><button id='c-${c.id}'>${esc(c.label)}</button>${help}${state}</div>`;
+      return `${row}<div class='kv'><span>${esc(c.label)}</span><span id='st-${c.id}'></span></div></div>`;
+    }).join('') + `</div></section>`).join('');
+  }
   for (const c of list) {
     const e = $('c-' + c.id); if (!e) continue;
     const n = $('cn-' + c.id);
@@ -329,10 +418,6 @@ function build(tab, list) {
     if (c.kind === 'chips') e.querySelectorAll('button').forEach(b => b.onclick = () => { send(c.id, b.dataset.i); e.querySelectorAll('button').forEach(x => x.classList.toggle('cur', x === b)); });
     if (c.kind === 'button') e.onclick = () => send(c.id, 1);
     const r = $('rs-' + c.id); if (r) r.onclick = () => send(c.id, c.def);
-  }
-  if (settings) {
-    $('setFilter').value = keep; $('setChanged').checked = keepOnly;
-    $('setFilter').oninput = filterSettings; $('setChanged').onchange = filterSettings;
   }
 }
 
