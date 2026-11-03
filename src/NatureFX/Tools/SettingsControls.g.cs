@@ -22,7 +22,7 @@ namespace NatureFX.Tools {
 			Setting("Sky & fog / Clouds and stars", "CloudShadows", "Cloud shadows", () => S.CloudShadows, v => S.CloudShadows = v, () => D.CloudShadows, 0.0f, 1.0f, 0.005f, () => (S.Clouds));
 			Setting("Sky & fog / Clouds and stars", "StarBrightness", "Star brightness", () => S.StarBrightness, v => S.StarBrightness = v, () => D.StarBrightness, 0.0f, 20.0f, 0.1f, () => (S.NativeSky));
 			Setting("Sky & fog / Fog", "AerialHaze", "Distant haze", () => S.AerialHaze, v => S.AerialHaze = v, () => D.AerialHaze, 0.0f, 1.0f, 0.005f);
-			Setting("Sky & fog / HDRP's fog", "HeadlightShafts", "Headlight beams", () => S.HeadlightShafts, v => S.HeadlightShafts = v, () => D.HeadlightShafts, 0.0f, 4.0f, 0.02f, () => (!(S.NativeSky && S.NativeFog)));
+			Setting("Sky & fog / Fog", "HeadlightShafts", "Headlight beams", () => S.HeadlightShafts, v => S.HeadlightShafts = v, () => D.HeadlightShafts, 0.0f, 4.0f, 0.02f);
 			Setting("Sky & fog / HDRP's fog", "LightShafts", "Sun in the fog", () => S.LightShafts, v => S.LightShafts = v, () => D.LightShafts, 0.0f, 4.0f, 0.02f, () => (!(S.NativeSky && S.NativeFog)));
 			SettingSwitch("Lighting & shadows / HDRP's sun shadows", "RealisticShadows", "Soft HDRP sun shadows", () => S.RealisticShadows, v => S.RealisticShadows = v, () => D.RealisticShadows, () => (!S.NativeLighting));
 			SettingSwitch("Sun & time / Time of day", "SunOverride", "Override sun", () => S.SunOverride, v => S.SunOverride = v, () => D.SunOverride);

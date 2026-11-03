@@ -525,14 +525,14 @@ namespace NatureFX {
 			Other(Widgets.Switch("Native fog", S.NativeFog, v => S.NativeFog = v));
 			Widgets.EndDependent();
 			Other(Widgets.Slider("Distant haze", S.AerialHaze, 0, 1, v => S.AerialHaze = v));
+			Other(Widgets.Slider("Headlight beams", S.HeadlightShafts, 0, 4, v => S.HeadlightShafts = v));
+			Widgets.Info("How much the air shows the headlights' and lamps' beams: clear air, rain and fog alike (0: not at all; 1: as real air; in fog and rain at 1 or more as dense as they are).");
 			Widgets.Info($"Now: {mod_.RT.FogStatus}");
 			Widgets.EndCard();
 
 			DrawLightShafts();
 			Widgets.BeginCard("HDRP's fog", "Only with Native fog off (HDRP's volumetric fog in its place).", true);
 			Widgets.BeginDependent(!(S.NativeSky && S.NativeFog));
-			Other(Widgets.Slider("Headlight beams", S.HeadlightShafts, 0, 4, v => S.HeadlightShafts = v));
-			Widgets.Info("How much clear air shows the headlights' and lamps' beams (0: not at all; 1: about real clear air). In the weather's fog and the map's fog they show in full.");
 			Other(Widgets.Slider("Sun in the fog", S.LightShafts, 0, 4, v => S.LightShafts = v));
 			Widgets.Info("How strongly the sun (and moon) light HDRP's volumetric fog: its shafts between trees and buildings. Needs volumetric fog in the map.");
 			Widgets.EndDependent();
