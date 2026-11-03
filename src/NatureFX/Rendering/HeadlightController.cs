@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using HarmonyLib;
 using UnityEngine;
 using UnityEngine.Rendering.HighDefinition;
+using Object = UnityEngine.Object;
 
 namespace NatureFX.Rendering {
 	// Car headlights (spot lights under heavy rigidbodies) get visible beams in volumetric fog, and (HeadlightType) a
