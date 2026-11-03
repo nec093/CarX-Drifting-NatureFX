@@ -200,7 +200,7 @@ try { LANG = localStorage.getItem('nfxLang') || ((navigator.language || '').star
 const T = k => (LANG === 'ja' && META && META.ja.ui && META.ja.ui[k]) || ({ settingsTitle: 'settings (the F8 window\'s, saved as they change)', typeHint: 'a value outside a slider\'s range: type it in the box',
   filter: 'filter', changedOnly: 'changed only', default: 'default', resetToDefault: 'reset', changed: 'changed', other: 'Other settings (no plain F8 control)',
   changedCount: 'changed from the defaults', changedTab: 'Changed', search: 'search every setting (name, description)',
-  noMatch: 'nothing matches', noneChanged: 'every setting is at its default' })[k] || k;
+  noMatch: 'nothing matches', noneChanged: 'every setting is at its default', on: 'on', off: 'off' })[k] || k;
 function tabLabels() { document.documentElement.lang = LANG; for (const [id, label] of TABS) { const b = $('tb-' + id); if (b) b.textContent = T(id) === id ? label : T(id); } $('lang').textContent = LANG === 'ja' ? '日本語 / EN' : 'EN / 日本語'; }
 $('tabs').innerHTML = TABS.map(([id, label]) => `<button id='tb-${id}'>${label}</button>`).join('');
 for (const [id] of TABS) $('tb-' + id).onclick = () => pick(id);
@@ -264,7 +264,7 @@ function groupText(name) {
 const fmt = v => { const n = +v; return Math.abs(n) >= 100 ? n.toFixed(0) : (+n.toFixed(4)).toString(); };
 function defText(c) {
   if (c.def === undefined) return '';
-  if (c.kind === 'switch') return c.def > 0.5 ? 'on' : 'off';
+  if (c.kind === 'switch') return c.def > 0.5 ? T('on') : T('off');
   if (c.kind === 'chips') return c.options[Math.round(c.def)] ?? fmt(c.def);
   return fmt(c.def);
 }
