@@ -49,7 +49,7 @@ namespace NatureFX.Rendering {
 					continue;
 				}
 				float up = Mathf.Clamp01(-l.transform.forward.y * 4.0f + 0.1f);
-				float e = l.intensity * up;
+				float e = HeadlightController.Intensity(l) * up;
 				if (e > best) {
 					best = e;
 					main = l;
@@ -75,7 +75,7 @@ namespace NatureFX.Rendering {
 			// lamps: the ones that light the camera's surroundings most (their illuminance at the camera)
 			ranked_.Clear();
 			foreach (var l in punctual_) {
-				if (l == null || !l.isActiveAndEnabled || l.intensity <= 0.0f) {
+				if (l == null || !l.isActiveAndEnabled || HeadlightController.Intensity(l) <= 0.0f) {
 					continue;
 				}
 				float d2 = Mathf.Max((l.transform.position - eye).sqrMagnitude, 1.0f);
@@ -83,14 +83,14 @@ namespace NatureFX.Rendering {
 					continue;
 				}
 				// Light.intensity of a point or spot light is in candela whatever unit it was set in (HDRP converts)
-				ranked_.Add((l.intensity / d2, l));
+				ranked_.Add((HeadlightController.Intensity(l) / d2, l));
 			}
 			ranked_.Sort((a, b) => b.Score.CompareTo(a.Score));
 			int count = Mathf.Min(ranked_.Count, MaxLights);
 			for (int i = 0; i < count; ++i) {
 				var l = ranked_[i].Light;
 				var p = l.transform.position;
-				var c = Linear(l) * l.intensity;
+				var c = Linear(l) * HeadlightController.Intensity(l);
 				positions_[i] = new Vector4(p.x, p.y, p.z, l.range);
 				bool isBeam = HeadlightController.Beams.TryGetValue(l, out int beam);
 				beams_[i] = new Vector4(isBeam ? beam : 0.0f, isBeam ? HeadlightController.Roll(l) : 0.0f, 0.0f, 0.0f);

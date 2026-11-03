@@ -83,7 +83,7 @@ namespace NatureFX.Rendering {
 			var eye = camera.transform.position;
 			near_.Clear();
 			foreach (var light in all_) {
-				if (light == null || !light.isActiveAndEnabled || light.intensity <= 0.0f) {
+				if (light == null || !light.isActiveAndEnabled || HeadlightController.Intensity(light) <= 0.0f) {
 					continue;
 				}
 				float distance = Vector3.Distance(light.transform.position, eye) - light.range;
@@ -117,7 +117,8 @@ namespace NatureFX.Rendering {
 					continue;
 				}
 				var t = light.transform;
-				var color = light.color.linear * light.intensity; // HDRP keeps punctual intensities in candela
+				// HDRP keeps punctual intensities in candela; a headlight NatureFX holds: its own value
+				var color = light.color.linear * HeadlightController.Intensity(light);
 				if (light.useColorTemperature) {
 					color *= Mathf.CorrelatedColorTemperatureToRGB(light.colorTemperature);
 				}

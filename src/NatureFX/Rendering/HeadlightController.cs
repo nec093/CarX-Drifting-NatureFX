@@ -102,6 +102,7 @@ namespace NatureFX.Rendering {
 				UnityEngine.Rendering.RenderPipelineManager.beginCameraRendering -= BeforeCamera;
 			}
 			owned_.Clear();
+			intended_.Clear();
 		}
 
 		// ---- the game sets its headlights' intensity again while the car is driven on the throttle (4775 cd, each frame,
@@ -109,6 +110,11 @@ namespace NatureFX.Rendering {
 		// skipped (Harmony), unless NatureFX is the one setting it; where the game sets Light.intensity itself (not
 		// patchable), ours is put back again just before each camera renders.
 		private static readonly HashSet<HDAdditionalLightData> owned_ = new();
+		// the intensity (cd) NatureFX gives each lamp it holds: what the own engine's lamp light and the particles use,
+		// whatever the game wrote over it this frame (it writes Light.intensity itself, not through HDRP's setters, and
+		// the own engine read the game's 4775 cd: the beam dim on the throttle)
+		private static readonly Dictionary<Light, float> intended_ = new();
+		public static float Intensity(Light light) => light != null && intended_.TryGetValue(light, out float cd) ? cd : light != null ? light.intensity : 0.0f;
 		private static bool applying_;
 		private static Harmony harmony_;
 		private static bool stackLogged_;
@@ -354,6 +360,7 @@ namespace NatureFX.Rendering {
 				applying_ = false;
 			}
 			owned_.Add(hd);
+			intended_[light] = t.Candela * (beamHigh ? HighBeamGain : 1.0f);
 			hd.SetCookie(beamHigh ? HighCookie(type) : Cookie(type));
 			hd.shapeRadius = 0.04f;
 			// a cone (HDRP's box and pyramid spots are light types of their own now)
@@ -371,24 +378,41 @@ namespace NatureFX.Rendering {
 		private float Kelvin(int type) => kelvin_ > 0.0f ? kelvin_ : Types[type].Kelvin;
 
 		// the car the camera follows: the heavy body nearest it
+		// once a frame, and it stays the player's until another car is clearly nearer (the camera between two cars, or a
+		// car of two heavy bodies, flipped it frame to frame: the high beam on, off, on: 45 000 / 18 000 cd in the log)
+		private Rigidbody player_;
+		private int playerFrame_ = -1;
+
 		private Rigidbody PlayerCar() {
+			if (playerFrame_ == Time.frameCount) {
+				return player_;
+			}
+			playerFrame_ = Time.frameCount;
 			var cam = Camera.main;
 			if (cam == null) {
-				return null;
+				return player_ = null;
 			}
+			var eye = cam.transform.position;
 			Rigidbody best = null;
 			float bestDistance = float.MaxValue;
 			foreach (var rb in cars_.Values) {
 				if (rb == null) {
 					continue;
 				}
-				float d = (rb.position - cam.transform.position).sqrMagnitude;
+				float d = (rb.position - eye).sqrMagnitude;
 				if (d < bestDistance) {
 					bestDistance = d;
 					best = rb;
 				}
 			}
-			return best;
+			if (player_ != null && best != player_ && cars_.ContainsValue(player_)) {
+				float kept = (player_.position - eye).sqrMagnitude;
+				// half the distance (a quarter squared) nearer, or the kept one far off (a car change, a replay)
+				if (bestDistance > kept * 0.25f && kept < 900.0f) {
+					return player_;
+				}
+			}
+			return player_ = best;
 		}
 
 		// the high beam: the light gathered round the axis (a hot centre a few degrees across, a wider glow out to the
@@ -427,6 +451,7 @@ namespace NatureFX.Rendering {
 			// light loop reads) is set again below in any case
 			if (hd != null) {
 				owned_.Remove(hd);
+				intended_.Remove(light);
 				hd.lightUnit = o.Unit;
 				hd.intensity = o.HdIntensity;
 			}
@@ -521,7 +546,7 @@ namespace NatureFX.Rendering {
 				// lights, which would have sent the markings' light back in red
 				bool frontOnly = front_.Count > 0;
 				foreach (var l in lights_) {
-					if (l != null && l.isActiveAndEnabled && l.intensity > 0.0f && (!frontOnly || front_.Contains(l))) {
+					if (l != null && l.isActiveAndEnabled && Intensity(l) > 0.0f && (!frontOnly || front_.Contains(l))) {
 						nearest_.Add(((l.transform.position - c).sqrMagnitude, l));
 					}
 				}
@@ -534,7 +559,7 @@ namespace NatureFX.Rendering {
 					var d = l.transform.forward;
 					var color = l.color;
 					float tint = Mathf.Max(color.r, Mathf.Max(color.g, color.b));
-					positions_[i] = new Vector4(p.x, p.y, p.z, l.intensity * tint);
+					positions_[i] = new Vector4(p.x, p.y, p.z, Intensity(l) * tint);
 					directions_[i] = new Vector4(d.x, d.y, d.z, Mathf.Cos(l.spotAngle * 0.5f * Mathf.Deg2Rad));
 				} else {
 					positions_[i] = Vector4.zero;
