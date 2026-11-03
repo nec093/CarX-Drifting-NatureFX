@@ -114,7 +114,24 @@ namespace NatureFX.Rendering {
 		// whatever the game wrote over it this frame (it writes Light.intensity itself, not through HDRP's setters, and
 		// the own engine read the game's 4775 cd: the beam dim on the throttle)
 		private static readonly Dictionary<Light, float> intended_ = new();
-		public static float Intensity(Light light) => light != null && intended_.TryGetValue(light, out float cd) ? cd : light != null ? light.intensity : 0.0f;
+		// what a lamp shines now (cd) as the own engine sees it: NatureFX's value for a headlight it holds, else the light's
+		// own; times HDRP's dimmer, which HDRP applies when it lights and the own engine did not (the map lamps' warm-up,
+		// flicker and blink, MapLights, are dimmer only: they were lost under the own lamp light)
+		public static float Intensity(Light light) {
+			if (light == null) {
+				return 0.0f;
+			}
+			float cd = intended_.TryGetValue(light, out float held) ? held : light.intensity;
+			if (!hdOf_.TryGetValue(light, out var hd)) {
+				hd = light.GetComponent<HDAdditionalLightData>();
+				hdOf_[light] = hd;
+				if (hdOf_.Count > 4096) {
+					hdOf_.Clear();
+				}
+			}
+			return hd != null ? cd * Mathf.Max(hd.lightDimmer, 0.0f) : cd;
+		}
+		private static readonly Dictionary<Light, HDAdditionalLightData> hdOf_ = new();
 		private static bool applying_;
 		private static Harmony harmony_;
 		private static bool stackLogged_;

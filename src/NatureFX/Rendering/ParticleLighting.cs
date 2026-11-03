@@ -65,10 +65,19 @@ namespace NatureFX.Rendering {
 			float cloud = Weather.Current.Cloud;
 			float skyLux = best * Mathf.Lerp(0.2f, 0.6f, cloud) + 0.03f;
 			var skyTint = Color.Lerp(new Color(0.75f, 0.85f, 1.0f), new Color(0.9f, 0.92f, 0.95f), cloud);
+			// the air's extinction at the camera: the own fog's (MapFog.NativeParams, HDRP's fog is off while it draws),
+			// else HDRP's
 			float extinction = 0.0f;
-			var fog = VolumeOverhaul.Stack()?.GetComponent<Fog>();
-			if (fog != null && fog.enabled.value) {
-				extinction = 1.0f / Mathf.Max(fog.meanFreePath.value, 1.0f);
+			var native = NatureFX.Map.MapFog.NativeParams;
+			if (native.w > 0.0f && AtmospherePass.FogFrame >= Time.frameCount - 2) {
+				// thinning upwards from its base as the fog volume does
+				float eyeY = Camera.main != null ? Camera.main.transform.position.y : native.y;
+				extinction = native.x * Mathf.Exp(-Mathf.Max(eyeY - native.y, 0.0f) / Mathf.Max(native.z, 1.0f));
+			} else {
+				var fog = VolumeOverhaul.Stack()?.GetComponent<Fog>();
+				if (fog != null && fog.enabled.value) {
+					extinction = 1.0f / Mathf.Max(fog.meanFreePath.value, 1.0f);
+				}
 			}
 			Shader.SetGlobalVector(SkyId, new Vector4(skyTint.r * skyLux, skyTint.g * skyLux, skyTint.b * skyLux, extinction));
 
