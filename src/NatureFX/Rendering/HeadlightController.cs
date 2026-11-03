@@ -144,13 +144,35 @@ namespace NatureFX.Rendering {
 		// child of it (so it goes where the game moves or hides it), shines instead: nothing but NatureFX sets it.
 		private const string OwnLampName = "NatureFX.Headlight";
 		private readonly Dictionary<Light, Light> own_ = new();
+		private GameObject ownRoot_;
+
+		// NatureFX's lamp where the game's is, on while it is, its axis from the car's body (the low beam a little below
+		// level, the high beam level), whatever the game does with its own lamp's rotation
+		private void Follow(Light game, Light lamp, Rigidbody car, bool beamHigh, float aim) {
+			var rotation = car != null ? car.transform.rotation * Quaternion.Euler(beamHigh ? 0.0f : aim, 0.0f, 0.0f) : game.transform.rotation;
+			lamp.transform.SetPositionAndRotation(game.transform.position, rotation);
+			bool on = game.isActiveAndEnabled;
+			if (lamp.enabled != on) {
+				lamp.enabled = on;
+			}
+			if (held_.TryGetValue(lamp, out var h)) {
+				held_[lamp] = (h.Intensity, lamp.transform.localRotation);
+			}
+		}
 
 		private Light OwnLamp(Light game) {
 			if (own_.TryGetValue(game, out var lamp) && lamp != null) {
 				return lamp;
 			}
+			// not a child of the game's lamp: its parents' scales (a mirrored lamp, -1) mirrored the cookie and the beam's
+			// cut-off, and the game's own tilt of its lamp moved the beam; it follows the game's lamp each frame (Follow)
+			if (ownRoot_ == null) {
+				ownRoot_ = new GameObject("NatureFX.Headlights");
+				Object.DontDestroyOnLoad(ownRoot_);
+			}
 			var go = new GameObject(OwnLampName);
-			go.transform.SetParent(game.transform, false);
+			go.transform.SetParent(ownRoot_.transform, false);
+			go.transform.SetPositionAndRotation(game.transform.position, game.transform.rotation);
 			lamp = go.AddComponent<Light>();
 			lamp.type = LightType.Spot;
 			lamp.shadows = game.shadows;
@@ -266,6 +288,7 @@ namespace NatureFX.Rendering {
 				var lampHd = lamp.GetComponent<HDAdditionalLightData>();
 				cars_.TryGetValue(light, out var car);
 				bool beamHigh = highBeam_ && car != null && car == player;
+				Follow(light, lamp, car, beamHigh, lateAim_);
 				if (lampHd != null && !Holds(lamp, beamHigh ? HighCookie(lateType_) : Cookie(lateType_), lateType_)) {
 					ApplyBeam(lamp, lampHd, car, lateType_, beamHigh, lateAim_);
 					if (lateFixes_ < 5) {
@@ -353,6 +376,7 @@ namespace NatureFX.Rendering {
 				cars_.TryGetValue(light, out var car);
 				bool beamHigh = high && car != null && car == player;
 				LogBeam(light, beamHigh, car, player);
+				Follow(light, lamp, car, beamHigh, s.HeadlightAim);
 				if (changed || !Holds(lamp, beamHigh ? HighCookie(type) : Cookie(type), type)) {
 					ApplyBeam(lamp, lampHd, car, type, beamHigh, s.HeadlightAim);
 				}
@@ -711,6 +735,10 @@ namespace NatureFX.Rendering {
 				}
 			}
 			own_.Clear();
+			if (ownRoot_ != null) {
+				Object.Destroy(ownRoot_);
+				ownRoot_ = null;
+			}
 			originals_.Clear();
 			front_.Clear();
 			cars_.Clear();
@@ -765,6 +793,10 @@ namespace NatureFX.Rendering {
 				}
 			}
 			foreach (var l in goneOwn) {
+				// a car that left: its lamps no longer go with it
+				if (own_.TryGetValue(l, out var lamp) && lamp != null) {
+					Object.Destroy(lamp.gameObject);
+				}
 				own_.Remove(l);
 			}
 			foreach (var light in Object.FindObjectsByType<Light>(FindObjectsInactive.Exclude, FindObjectsSortMode.None)) {
