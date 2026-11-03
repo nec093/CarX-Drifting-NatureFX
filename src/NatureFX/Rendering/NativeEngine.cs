@@ -1634,7 +1634,9 @@ namespace NatureFX.Rendering {
 			kindParams_ = true;
 			fogListsIssued_ = lampCount > 0;
 			kindA_ = fog;
-			kindB_ = new Vector4(boxCount, Time.time, smoke != null ? 1.0f : 0.0f, NatureFX.Map.MapFog.LampAirSigma);
+			// z: the smoke grid in its sign, the share of the lamps' light the air scatters in its size (1 + share)
+			float lampShare = 1.0f + NatureFX.Map.MapFog.LampScatterScale;
+			kindB_ = new Vector4(boxCount, Time.time, smoke != null ? lampShare : -lampShare, NatureFX.Map.MapFog.LampAirSigma);
 			// Screen: the sky data (the boxes' noise)
 			Issue(cmd, TraceFogVolume_, b.SurfacePtr, b.ResultPtr, FogW, FogH * FogD, skyTransmittance_ != null ? skyTransmittance_.ResultPtr : IntPtr.Zero);
 			kindParams_ = false;

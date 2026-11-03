@@ -59,7 +59,7 @@ float BoxesSigma(float3 p, out float3 tint)
     return sum;
 }
 
-// The tyre smoke's grid (TireSmoke.UpdateSmokeVolume, after the boxes, ReflParams.z = 1): 3 float4 of header (the
+// The tyre smoke's grid (TireSmoke.UpdateSmokeVolume, after the boxes, ReflParams.z > 0): 3 float4 of header (the
 // grid's lowest corner and 1 / cell size; the smoke's box, its min and max), then the 48 x 24 x 48 cells' extinction
 // (1/m), four to a float4. The light of the sun and the lamps through it on its way to the mist: four steps along the
 // way, where it crosses the smoke's box.
@@ -78,7 +78,7 @@ float SmokeAt(uint base, float3 p, float4 origin)
 
 float SmokeTransmittance(float3 from, float3 to)
 {
-    if (ReflParams.z < 0.5)
+    if (ReflParams.z < 0.0)
         return 1.0;
     uint base = FogW * FogH * 3 + 64 * 5;
     float4 origin = asfloat(Surface.Load4(base * 16));
@@ -200,7 +200,8 @@ NFX_ENTRY(id)
         // the lamps scatter in what the air holds: the weather's fog, the map's fog boxes and the smoke in full, the
         // distance haze (a track's own short fog distance) no more than clear air does (ReflParams.w, 1/m): on a clear
         // night the headlights lit a white dome over the road
-        float lampSigma = boxes + min(baseSigma, ReflParams.w);
+        // Headlight beams below 1 (|ReflParams.z| - 1): the share of it all, boxes and smoke too
+        float lampSigma = (boxes + min(baseSigma, ReflParams.w)) * saturate(abs(ReflParams.z) - 1.0);
         float3 lampLight = light - sunSkyLight;
         result = float4(min((sunSkyLight * sigma + lampLight * lampSigma) * albedo, 1e7), sigma);
     }

@@ -34,6 +34,9 @@ namespace NatureFX.Map {
 		public static Vector4 NativeParams { get; private set; }
 		// the most the air scatters the lamps' light (1/m): unlimited in the weather's or the map's fog, else clear air's
 		public static float LampAirSigma { get; private set; } = 1e-4f;
+		// Headlight beams below 1: the share of the lamps' light the air scatters at all, the map's fog boxes and the
+		// smoke included (0: no glow round the headlights anywhere)
+		public static float LampScatterScale { get; private set; } = 1.0f;
 
 		public void Create() {
 			if (root_ != null) {
@@ -218,8 +221,8 @@ namespace NatureFX.Map {
 			// rain scatters the lamps' light like the fog it is (the beams show as cones in the rain); Headlight beams
 			// scales it in fog and rain too (below 1 a share of the air's own scattering, 0 none: the glow round the
 			// headlights in fog spoilt the night for the user)
-			float scatter = extinction > 0.0f ? extinction : rain;
-			LampAirSigma = 2e-5f * beams + (weight > 0.0f || rain > 0.0f ? (beams >= 1.0f ? 1e6f : scatter * beams) : 0.0f);
+			LampAirSigma = 2e-5f * Mathf.Max(beams, 1.0f) + (weight > 0.0f || rain > 0.0f ? 1e6f : 0.0f);
+			LampScatterScale = Mathf.Clamp01(beams);
 			// HDRP's fog falls off from its base to its maximum height; as an exponential, a third of the layer
 			NativeParams = new Vector4(float.IsInfinity(meanFreePath) ? 0.0f : 1.0f / meanFreePath, baseHeight, Mathf.Max(20.0f, layer / 3.0f), 1.0f);
 			volume_.weight = 1.0f;
