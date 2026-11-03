@@ -41,6 +41,7 @@ namespace NatureFX.Rendering {
 			public Color Color;
 			public Texture Cookie;
 			public float Volumetric;
+			public float Dimmer;
 			public Quaternion LocalRotation;
 			// HDRP's own copy of the intensity (in its unit): SetIntensity changes both, and HDRP writes it back over
 			// Light.intensity whenever it runs UpdateLightIntensity (Awake / OnEnable, a shape setter: a car switched
@@ -59,7 +60,10 @@ namespace NatureFX.Rendering {
 
 		// the high beam of the player's car (the one nearest the camera): F7 or the Headlights card
 		public bool HighBeam { get => highBeam_; set => highBeam_ = value; }
-		public void ToggleHighBeam() => highBeam_ = !highBeam_;
+		public void ToggleHighBeam() {
+			highBeam_ = !highBeam_;
+			KSL.API.Kino.Log.Info($"[NatureFX] Headlights: high beam {(highBeam_ ? "on" : "off")} (F7)");
+		}
 		// retroreflection (docs/map-authoring.md 6.3): the headlights nearest the camera, for the shaders
 		public const int MaxRetroLights = 4;
 		private static readonly int HeadlightsId = Shader.PropertyToID("_NFX_Headlights");
@@ -132,6 +136,62 @@ namespace NatureFX.Rendering {
 			return hd != null ? cd * Mathf.Max(hd.lightDimmer, 0.0f) : cd;
 		}
 		private static readonly Dictionary<Light, HDAdditionalLightData> hdOf_ = new();
+
+		// ---- NatureFX's own lamp in place of each of the game's headlights. The game writes its lights again and again
+		// on the throttle (Light.intensity to 4775 cd every frame, the light switched off and on with its rendering layer
+		// back at HDRP's: its own beam lit the road again, the own one went dim), not through anything NatureFX can
+		// hold. Its lamp is dimmed to nothing (HDRP's dimmer, which it does not touch) and a lamp of NatureFX's own, a
+		// child of it (so it goes where the game moves or hides it), shines instead: nothing but NatureFX sets it.
+		private const string OwnLampName = "NatureFX.Headlight";
+		private readonly Dictionary<Light, Light> own_ = new();
+
+		private Light OwnLamp(Light game) {
+			if (own_.TryGetValue(game, out var lamp) && lamp != null) {
+				return lamp;
+			}
+			var go = new GameObject(OwnLampName);
+			go.transform.SetParent(game.transform, false);
+			lamp = go.AddComponent<Light>();
+			lamp.type = LightType.Spot;
+			lamp.shadows = game.shadows;
+			go.AddComponent<HDAdditionalLightData>();
+			own_[game] = lamp;
+			if (cars_.TryGetValue(game, out var car)) {
+				cars_[lamp] = car;
+			}
+			return lamp;
+		}
+
+		// the game's lamp: no light of its own while NatureFX's shines
+		private static void Silence(HDAdditionalLightData game) {
+			if (game.lightDimmer != 0.0f) {
+				game.lightDimmer = 0.0f;
+			}
+			if (game.volumetricDimmer != 0.0f) {
+				game.volumetricDimmer = 0.0f;
+			}
+		}
+
+		// back to the game's lamp alone
+		private void DropOwn(Light game, HDAdditionalLightData gameHd, Original o) {
+			if (own_.TryGetValue(game, out var lamp)) {
+				own_.Remove(game);
+				if (lamp != null) {
+					var hd = lamp.GetComponent<HDAdditionalLightData>();
+					if (hd != null) {
+						owned_.Remove(hd);
+					}
+					Beams.Remove(lamp);
+					held_.Remove(lamp);
+					intended_.Remove(lamp);
+					cars_.Remove(lamp);
+					Object.Destroy(lamp.gameObject);
+				}
+			}
+			if (gameHd != null) {
+				gameHd.lightDimmer = o.Dimmer;
+			}
+		}
 		private static bool applying_;
 		private static Harmony harmony_;
 		private static bool stackLogged_;
@@ -201,10 +261,13 @@ namespace NatureFX.Rendering {
 				if (light == null || !front_.Contains(light)) {
 					continue;
 				}
+				Silence(hd);
+				var lamp = OwnLamp(light);
+				var lampHd = lamp.GetComponent<HDAdditionalLightData>();
 				cars_.TryGetValue(light, out var car);
 				bool beamHigh = highBeam_ && car != null && car == player;
-				if (!Holds(light, beamHigh ? HighCookie(lateType_) : Cookie(lateType_), lateType_)) {
-					ApplyBeam(light, hd, car, lateType_, beamHigh, lateAim_);
+				if (lampHd != null && !Holds(lamp, beamHigh ? HighCookie(lateType_) : Cookie(lateType_), lateType_)) {
+					ApplyBeam(lamp, lampHd, car, lateType_, beamHigh, lateAim_);
 					if (lateFixes_ < 5) {
 						++lateFixes_;
 						KSL.API.Kino.Log.Info($"[NatureFX] Headlights: '{Path(light.transform)}' changed by the game after NatureFX's update; ours put back before rendering");
@@ -254,32 +317,44 @@ namespace NatureFX.Rendering {
 					continue;
 				}
 				var o = kv.Value;
+				var light = hd.GetComponent<Light>();
+				bool isFront = light != null && front_.Contains(light);
 				// HDRP's volumetric light of the lamp (where HDRP's fog still runs): Headlight beams times 1.5 (at 4 the beams
 				// lit a bright dome of the air right in front of the car), 0 none; every frame (the game sets it again).
 				// The game's own value only with NatureFX off: at 0 it was put back, the game's haze round the headlights
 				float volumetric = s.Enabled ? shafts * 1.5f : o.Volumetric;
-				if (!Mathf.Approximately(hd.volumetricDimmer, volumetric)) {
-					hd.volumetricDimmer = volumetric;
+				if (!isFront || type == 0) {
+					if (!Mathf.Approximately(hd.volumetricDimmer, volumetric)) {
+						hd.volumetricDimmer = volumetric;
+					}
 				}
-				var light = hd.GetComponent<Light>();
-				if (light == null || !front_.Contains(light)) {
+				if (!isFront) {
 					continue;
 				}
 				++front;
 				if (type == 0) {
 					if (changed) {
+						DropOwn(light, hd, o);
 						Apply(light, hd, o);
 						Beams.Remove(light);
 					}
 					continue;
 				}
 				LogTransitions(light, hd);
+				Silence(hd);
+				var lamp = OwnLamp(light);
+				var lampHd = lamp.GetComponent<HDAdditionalLightData>();
+				if (lampHd == null) {
+					continue;
+				}
+				if (!Mathf.Approximately(lampHd.volumetricDimmer, volumetric)) {
+					lampHd.volumetricDimmer = volumetric;
+				}
 				cars_.TryGetValue(light, out var car);
 				bool beamHigh = high && car != null && car == player;
-				// every frame: the game sets its lights again now and then (a lamp switched on, its own presets): put
-				// ours back as soon as it has, not at the next scan
-				if (changed || !Holds(light, beamHigh ? HighCookie(type) : Cookie(type), type)) {
-					ApplyBeam(light, hd, car, type, beamHigh, s.HeadlightAim);
+				LogBeam(light, beamHigh, car, player);
+				if (changed || !Holds(lamp, beamHigh ? HighCookie(type) : Cookie(type), type)) {
+					ApplyBeam(lamp, lampHd, car, type, beamHigh, s.HeadlightAim);
 				}
 			}
 			if (changed) {
@@ -314,6 +389,22 @@ namespace NatureFX.Rendering {
 		// the first 40 (the beam went out on the throttle, not at a creep)
 		private readonly Dictionary<Light, string> lampStates_ = new();
 		private int transitionsLogged_;
+
+		// the high beam going on and off by itself (45 000 / 18 000 cd in turn in the log): why, the first 20 times
+		private readonly Dictionary<Light, bool> beamWas_ = new();
+		private int beamLogged_;
+
+		private void LogBeam(Light light, bool beamHigh, Rigidbody car, Rigidbody player) {
+			if (beamWas_.TryGetValue(light, out bool was) && was != beamHigh && beamLogged_ < 20) {
+				++beamLogged_;
+				var cam = Camera.main;
+				string far = cam != null && car != null ? $"{Vector3.Distance(car.position, cam.transform.position):0.0} m" : "-";
+				string farPlayer = cam != null && player != null ? $"{Vector3.Distance(player.position, cam.transform.position):0.0} m" : "-";
+				KSL.API.Kino.Log.Info($"[NatureFX] Headlights: '{Path(light.transform)}' high beam {was} -> {beamHigh} (high beam switch {highBeam_}, " +
+				                      $"its car {(car != null ? car.name : "none")} {far}, player {(player != null ? player.name : "none")} {farPlayer}, {cars_.Count} lamps known)");
+			}
+			beamWas_[light] = beamHigh;
+		}
 
 		private void LogTransitions(Light light, HDAdditionalLightData hd) {
 			if (transitionsLogged_ >= 40) {
@@ -564,8 +655,10 @@ namespace NatureFX.Rendering {
 				// the front lights where they are known: from a chase camera the nearest lamps are the own car's tail
 				// lights, which would have sent the markings' light back in red
 				bool frontOnly = front_.Count > 0;
-				foreach (var l in lights_) {
-					if (l != null && l.isActiveAndEnabled && Intensity(l) > 0.0f && (!frontOnly || front_.Contains(l))) {
+				foreach (var g in lights_) {
+					// NatureFX's own lamp where it shines in the game's place
+					var l = g != null && own_.TryGetValue(g, out var mine) && mine != null ? mine : g;
+					if (l != null && l.isActiveAndEnabled && Intensity(l) > 0.0f && (!frontOnly || front_.Contains(g))) {
 						nearest_.Add(((l.transform.position - c).sqrMagnitude, l));
 					}
 				}
@@ -608,9 +701,16 @@ namespace NatureFX.Rendering {
 				kv.Key.volumetricDimmer = kv.Value.Volumetric;
 				var light = kv.Key.GetComponent<Light>();
 				if (light != null && front_.Contains(light)) {
+					DropOwn(light, kv.Key, kv.Value);
 					Apply(light, kv.Key, kv.Value);
 				}
 			}
+			foreach (var kv in own_) {
+				if (kv.Value != null) {
+					Object.Destroy(kv.Value.gameObject);
+				}
+			}
+			own_.Clear();
 			originals_.Clear();
 			front_.Clear();
 			cars_.Clear();
@@ -658,8 +758,18 @@ namespace NatureFX.Rendering {
 				cars_.Remove(l);
 			}
 
+			var goneOwn = new List<Light>();
+			foreach (var kv in own_) {
+				if (kv.Key == null || kv.Value == null) {
+					goneOwn.Add(kv.Key);
+				}
+			}
+			foreach (var l in goneOwn) {
+				own_.Remove(l);
+			}
 			foreach (var light in Object.FindObjectsByType<Light>(FindObjectsInactive.Exclude, FindObjectsSortMode.None)) {
-				if (light.type != LightType.Spot) {
+				// NatureFX's own lamps are not the game's
+				if (light.type != LightType.Spot || light.name == OwnLampName) {
 					continue;
 				}
 				// the car's body: the first rigid body up the hierarchy heavy enough for a car (a lamp under a light part
@@ -697,7 +807,7 @@ namespace NatureFX.Rendering {
 					originals_[hd] = new Original {
 						Intensity = light.intensity, Temperature = light.colorTemperature, UseTemperature = light.useColorTemperature, Color = light.color,
 						SpotAngle = light.spotAngle, Inner = light.innerSpotAngle, Range = light.range, Cookie = light.cookie, Volumetric = hd.volumetricDimmer,
-						LocalRotation = light.transform.localRotation, Unit = hd.lightUnit, HdIntensity = hd.intensity,
+						LocalRotation = light.transform.localRotation, Unit = hd.lightUnit, HdIntensity = hd.intensity, Dimmer = hd.lightDimmer,
 					};
 					cars_[light] = rb;
 					lights_.Add(light);
