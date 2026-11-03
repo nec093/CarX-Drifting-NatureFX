@@ -21,7 +21,8 @@
   "noMatch": "該当する設定がありません",
   "noneChanged": "変更した設定はありません",
   "on": "有効",
-  "off": "無効"
+  "off": "無効",
+  "hiddenCount": "件は前提となる機能が無効のため非表示"
  },
  "groups": {
   "Sky & fog / Sky": {

@@ -91,6 +91,8 @@ input, button, select { font:inherit; }
 .stop { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
 .stop input[type=search] { flex:1; min-width:24ch; background:var(--bg); color:var(--fg); border:1px solid var(--rule); padding:3px 6px; }
 .stop .cnt { color:var(--warn); }
+.stop .hid { color:var(--dim); }
+.srow[data-av='0'] { opacity:.5; }
 .scard { border:1px solid var(--rule); }
 .shead { background:var(--head); padding:4px 8px; font-weight:bold; display:flex; gap:8px; align-items:center; }
 .shead .tabname { color:var(--dim); font-weight:normal; }
@@ -205,7 +207,7 @@ try { LANG = localStorage.getItem('nfxLang') || ((navigator.language || '').star
 const T = k => (LANG === 'ja' && META && META.ja.ui && META.ja.ui[k]) || ({ settingsTitle: 'settings (the F8 window\'s, saved as they change)', typeHint: 'a value outside a slider\'s range: type it in the box',
   filter: 'filter', changedOnly: 'changed only', default: 'default', resetToDefault: 'reset', changed: 'changed', other: 'Other settings (no plain F8 control)',
   changedCount: 'changed from the defaults', changedTab: 'Changed', search: 'search every setting (name, description)',
-  noMatch: 'nothing matches', noneChanged: 'every setting is at its default', on: 'on', off: 'off' })[k] || k;
+  noMatch: 'nothing matches', noneChanged: 'every setting is at its default', on: 'on', off: 'off', hiddenCount: 'hidden: what they need is off' })[k] || k;
 function tabLabels() { document.documentElement.lang = LANG; for (const [id, label] of TABS) { const b = $('tb-' + id); if (b) b.textContent = T(id) === id ? label : T(id); } $('lang').textContent = LANG === 'ja' ? '日本語 / EN' : 'EN / 日本語'; }
 $('tabs').innerHTML = TABS.map(([id, label]) => `<button id='tb-${id}'>${label}</button>`).join('');
 for (const [id] of TABS) $('tb-' + id).onclick = () => pick(id);
@@ -288,6 +290,7 @@ function controls(list) {
       changed += ch ? 1 : 0;
       row.classList.toggle('chg', ch);
       row.dataset.chg = ch ? '1' : '';
+      row.dataset.av = c.avail === 0 ? '0' : '1';
       const r = $('rs-' + c.id); if (r) r.hidden = !ch;
     }
     if (n && n !== document.activeElement) n.value = fmt(c.value);
@@ -353,7 +356,7 @@ function buildSettings(host, list) {
       }).join('') + `</div>`;
   }).join('');
   host.innerHTML = `<nav class='snav'>${nav}</nav><div class='spane'><div class='stop'><input type='search' id='setFilter' placeholder='${esc(T('search'))}'>` +
-    `<span class='cnt' id='setCount'></span></div>${body}<div class='sempty' id='setEmpty' hidden></div></div>`;
+    `<span class='cnt' id='setCount'></span><span class='hid' id='setHidden'></span></div>${body}<div class='sempty' id='setEmpty' hidden></div></div>`;
   host.querySelectorAll('.snav button').forEach(b => b.onclick = () => { setView = b.dataset.v; setQuery = ''; $('setFilter').value = ''; try { localStorage.setItem('nfxSetView', setView); } catch (e) {} filterSettings(); });
   $('setFilter').value = setQuery;
   $('setFilter').oninput = () => { setQuery = $('setFilter').value; filterSettings(); };
@@ -364,13 +367,18 @@ function filterSettings() {
   const host = $('tab-settings');
   if (!host || !$('setFilter')) return;
   const q = setQuery.trim().toLowerCase();
-  let shown = 0;
+  let shown = 0, hidden = 0;
   const counts = {};
   host.querySelectorAll('.srow').forEach(r => { if (r.classList.contains('chg')) { const t = r.closest('.scard').dataset.tab; counts[t] = (counts[t] || 0) + 1; } });
   host.querySelectorAll('.scard').forEach(card => {
     let any = false;
     card.querySelectorAll('.srow').forEach(r => {
-      const on = q ? r.dataset.k.includes(q) : setView === 'changed' ? r.classList.contains('chg') : card.dataset.tab === setView;
+      // a setting whose prerequisite is off (the own engine's part, the switch above it) is not shown
+      // (the changed list shows them all, the unusable ones faded)
+      const usable = r.dataset.av !== '0';
+      const want = q ? r.dataset.k.includes(q) : setView === 'changed' ? r.classList.contains('chg') : card.dataset.tab === setView;
+      const on = want && (usable || setView === 'changed' && !q);
+      hidden += want && !on ? 1 : 0;
       r.style.display = on ? '' : 'none'; any = any || on; shown += on ? 1 : 0;
     });
     card.style.display = any ? '' : 'none';
@@ -382,6 +390,7 @@ function filterSettings() {
     const n = b.dataset.v === 'changed' ? total : counts[b.dataset.v] || 0;
     const e = b.querySelector('.n'); if (e) e.textContent = n ? n : '';
   });
+  const hc = $('setHidden'); if (hc) hc.textContent = hidden ? `${hidden} ${T('hiddenCount')}` : '';
   const empty = $('setEmpty');
   empty.hidden = shown > 0;
   empty.textContent = q ? T('noMatch') : setView === 'changed' ? T('noneChanged') : '';

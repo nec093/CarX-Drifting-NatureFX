@@ -26,6 +26,7 @@ namespace NatureFX.Tools {
 			public string Tab;         // the page's tab: "developer" (null) or "settings"
 			public string Name;        // a setting's property name (the page's texts, /meta.json)
 			public Func<float> Default; // a setting's default value (Settings.Defaults)
+			public Func<bool> Avail;   // a setting's use now (the F8 window's dependency: what it needs is on); null always
 		}
 
 		private static readonly List<Control> controls_ = new();
@@ -93,6 +94,14 @@ namespace NatureFX.Tools {
 				  .Append(",\"step\":").Append(c.Step.ToString("0.#####", inv))
 				  .Append(",\"tab\":").Append(json(c.Tab ?? "developer"))
 				  .Append(",\"name\":").Append(json(c.Name ?? ""));
+				if (c.Avail != null) {
+					bool avail = true;
+					try {
+						avail = c.Avail();
+					} catch (Exception) {
+					}
+					sb.Append(",\"avail\":").Append(avail ? '1' : '0');
+				}
 				if (c.Default != null) {
 					float def = 0.0f;
 					try {
@@ -155,22 +164,22 @@ namespace NatureFX.Tools {
 
 		// ---- the settings tab: every setting of the settings file, as the F8 window shows it (SettingsControls.g.cs,
 		// generated from the window), then the ones it has no plain control for, by their names (switch or number)
-		private static void Setting(string group, string name, string label, Func<float> get, Action<float> set, Func<float> def, float min, float max, float step) {
-			Add(new Control { Group = group, Id = "set-" + name, Name = name, Label = label, Kind = Kind.Slider, Get = get, Set = set, Default = def,
+		private static void Setting(string group, string name, string label, Func<float> get, Action<float> set, Func<float> def, float min, float max, float step, Func<bool> avail = null) {
+			Add(new Control { Group = group, Id = "set-" + name, Name = name, Label = label, Kind = Kind.Slider, Get = get, Set = set, Default = def, Avail = avail,
 			                  Min = min, Max = max, Step = step, Saved = true, Tab = "settings" });
 		}
 
-		private static void Setting(string group, string name, string label, Func<int> get, Action<float> set, Func<int> def, float min, float max, float step) {
-			Setting(group, name, label, () => get(), set, () => def(), min, max, step);
+		private static void Setting(string group, string name, string label, Func<int> get, Action<float> set, Func<int> def, float min, float max, float step, Func<bool> avail = null) {
+			Setting(group, name, label, () => get(), set, () => def(), min, max, step, avail);
 		}
 
-		private static void SettingSwitch(string group, string name, string label, Func<bool> get, Action<bool> set, Func<bool> def) {
-			Add(new Control { Group = group, Id = "set-" + name, Name = name, Label = label, Kind = Kind.Switch, Get = () => get() ? 1.0f : 0.0f,
+		private static void SettingSwitch(string group, string name, string label, Func<bool> get, Action<bool> set, Func<bool> def, Func<bool> avail = null) {
+			Add(new Control { Group = group, Id = "set-" + name, Name = name, Label = label, Kind = Kind.Switch, Get = () => get() ? 1.0f : 0.0f, Avail = avail,
 			                  Set = v => set(v > 0.5f), Default = () => def() ? 1.0f : 0.0f, Saved = true, Tab = "settings" });
 		}
 
-		private static void SettingChips(string group, string name, string label, string[] options, Func<int> get, Action<int> set, Func<int> def) {
-			Add(new Control { Group = group, Id = "set-" + name, Name = name, Label = label, Kind = Kind.Chips, Options = options, Get = () => get(),
+		private static void SettingChips(string group, string name, string label, string[] options, Func<int> get, Action<int> set, Func<int> def, Func<bool> avail = null) {
+			Add(new Control { Group = group, Id = "set-" + name, Name = name, Label = label, Kind = Kind.Chips, Options = options, Get = () => get(), Avail = avail,
 			                  Set = v => set(Mathf.Clamp(Mathf.RoundToInt(v), 0, options.Length - 1)), Default = () => def(), Saved = true, Tab = "settings" });
 		}
 
