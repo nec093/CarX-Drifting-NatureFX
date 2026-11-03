@@ -132,6 +132,9 @@ while True:
         text = literal(args[0]) if args else None
         if text and last is not None:
             last['help'] = (last['help'] + ' ' + text).strip()
+        elif not text:
+            # a computed line (a state, the chosen option's description): what follows is not about the control
+            last = None
         continue
     entry = None
     if kind in ('Slider', 'IntSlider') and len(args) >= 5:
@@ -221,18 +224,15 @@ for line in interface.splitlines():
         continue
     m = re.match(r'public (bool|int|float|string) (\w+) \{ get; set; \}\s*(?://\s*(.*))?', t)
     if m:
+        # its own line's comment; else the comment block right above it, for the first setting under it only
+        # (a block heads a section of several settings: the rest get none). Section tags of a word or two say nothing
         text = (m.group(3) or '').strip()
         if not text and pending:
             text = ' '.join(pending)
+        if len(text.split()) < 4:
+            text = ''
         comments[m.group(2)] = (m.group(1), text)
-        if m.group(3):
-            pass
-    if not t:
-        pending = []
-    elif not t.startswith('//') and not m:
-        pending = []
-    elif m and m.group(3):
-        pass
+    pending = []
 
 # ---- the texts
 en = {'settings': {e['prop']: {'label': e['label'], 'help': e['help'] or comments.get(e['prop'], ('', ''))[1]} for e in entries},
