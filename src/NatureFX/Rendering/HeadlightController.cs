@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using HarmonyLib;
 using UnityEngine;
 using UnityEngine.Rendering.HighDefinition;
 
@@ -87,6 +89,8 @@ namespace NatureFX.Rendering {
 			if (!hooked_) {
 				hooked_ = true;
 				UnityEngine.Rendering.RenderPipelineManager.beginContextRendering += BeforeRendering;
+				UnityEngine.Rendering.RenderPipelineManager.beginCameraRendering += BeforeCamera;
+				PatchIntensity();
 			}
 		}
 
@@ -94,7 +98,64 @@ namespace NatureFX.Rendering {
 			if (hooked_) {
 				hooked_ = false;
 				UnityEngine.Rendering.RenderPipelineManager.beginContextRendering -= BeforeRendering;
+				UnityEngine.Rendering.RenderPipelineManager.beginCameraRendering -= BeforeCamera;
 			}
+			owned_.Clear();
+		}
+
+		// ---- the game sets its headlights' intensity again while the car is driven on the throttle (4775 cd, each frame,
+		// at times after the frame's start: the beam went dim, "gone"). HDRP's own setters of a lamp NatureFX holds are
+		// skipped (Harmony), unless NatureFX is the one setting it; where the game sets Light.intensity itself (not
+		// patchable), ours is put back again just before each camera renders.
+		private static readonly HashSet<HDAdditionalLightData> owned_ = new();
+		private static bool applying_;
+		private static Harmony harmony_;
+		private static bool stackLogged_;
+
+		private static void PatchIntensity() {
+			if (harmony_ != null) {
+				return;
+			}
+			try {
+				harmony_ = new Harmony("nec093.NatureFX.headlights");
+				var t = typeof(HDAdditionalLightData);
+				var prefix = new HarmonyMethod(typeof(HeadlightController), nameof(BlockGameIntensity));
+				var methods = new[] {
+					AccessTools.PropertySetter(t, "intensity"),
+					AccessTools.PropertySetter(t, "lightUnit"),
+					AccessTools.Method(t, "SetIntensity", new[] { typeof(float) }),
+					AccessTools.Method(t, "SetIntensity", new[] { typeof(float), typeof(LightUnit) }),
+				};
+				int patched = 0;
+				foreach (var m in methods) {
+					if (m != null) {
+						harmony_.Patch(m, prefix: prefix);
+						++patched;
+					}
+				}
+				KSL.API.Kino.Log.Info($"[NatureFX] Headlights: {patched} of HDRP's intensity setters held for NatureFX's lamps");
+			} catch (Exception e) {
+				KSL.API.Kino.Log.Warning($"[NatureFX] Headlights: intensity setters not patched ({e.GetType().Name}: {e.Message})");
+			}
+		}
+
+		// Harmony prefix: false skips the setter
+		private static bool BlockGameIntensity(HDAdditionalLightData __instance) {
+			if (applying_ || __instance == null || !owned_.Contains(__instance)) {
+				return true;
+			}
+			if (!stackLogged_) {
+				stackLogged_ = true;
+				KSL.API.Kino.Log.Info($"[NatureFX] Headlights: the game's intensity setter held off on '{Path(__instance.transform)}'; called from:\n{new System.Diagnostics.StackTrace(1, false)}");
+			}
+			return false;
+		}
+
+		private void BeforeCamera(UnityEngine.Rendering.ScriptableRenderContext context, Camera camera) {
+			if (lateType_ == 0 || camera == null || camera.cameraType != CameraType.Game) {
+				return;
+			}
+			Reassert();
 		}
 
 		private void BeforeRendering(UnityEngine.Rendering.ScriptableRenderContext context, List<Camera> cameras) {
@@ -102,6 +163,10 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			lateFrame_ = Time.frameCount;
+			Reassert();
+		}
+
+		private void Reassert() {
 			var player = PlayerCar();
 			foreach (var kv in originals_) {
 				var hd = kv.Key;
@@ -281,7 +346,13 @@ namespace NatureFX.Rendering {
 			light.spotAngle = BeamAngle;
 			light.innerSpotAngle = BeamAngle * 0.95f;
 			light.range = 120.0f;
-			hd.SetIntensity(t.Candela * (beamHigh ? HighBeamGain : 1.0f), LightUnit.Candela);
+			applying_ = true;
+			try {
+				hd.SetIntensity(t.Candela * (beamHigh ? HighBeamGain : 1.0f), LightUnit.Candela);
+			} finally {
+				applying_ = false;
+			}
+			owned_.Add(hd);
 			hd.SetCookie(beamHigh ? HighCookie(type) : Cookie(type));
 			hd.shapeRadius = 0.04f;
 			// a cone (HDRP's box and pyramid spots are light types of their own now)
@@ -354,6 +425,7 @@ namespace NatureFX.Rendering {
 			// the unit first (its setter converts the value), then the value in it; Light.intensity (candela, what the
 			// light loop reads) is set again below in any case
 			if (hd != null) {
+				owned_.Remove(hd);
 				hd.lightUnit = o.Unit;
 				hd.intensity = o.HdIntensity;
 			}
