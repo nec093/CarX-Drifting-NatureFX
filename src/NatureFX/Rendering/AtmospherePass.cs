@@ -244,15 +244,14 @@ namespace NatureFX.Rendering {
 			var lightDir = new Vector4(dir.x, dir.y, dir.z, dir.y > SunController.DiscGoneY ? 1.0f : 0.0f);
 			var lightGround = new Vector4(ground.x, ground.y, ground.z, 0.0f);
 			// the frame's constants (the ray traced shadow pass, if it runs, adds its own ambient values)
+			// the sky tables and the fog are issued with a probe's buffer bound: the engine's own (HDRP's is read only for
+			// the status, how HDRP's sky light compares)
+			var ownProbe = NativeEngine.EnsureSkyProbe();
+			NativeEngine.BeginFrame(cam, lightDir, SunController.SkyLightRadius, lightGround, frame_++, Vector4.zero, Lights, ownProbe);
 			var hdrpProbe = HdrpBindings.AmbientProbe(ctx.hdCamera);
-			if (hdrpProbe == null) {
-				// the sky tables and the fog are issued with the probe's buffer bound: without one the engine skips
-				// them silently, and the "made" flags below would have kept it from trying again
-				SkyStatus = FogStatus = "unavailable (HDRP's ambient probe not reachable)";
-				return;
+			if (hdrpProbe != null) {
+				ReadProbes(hdrpProbe);
 			}
-			NativeEngine.BeginFrame(cam, lightDir, SunController.SkyLightRadius, lightGround, frame_++, Vector4.zero, Lights, OwnLighting.Probe(ctx.hdCamera) ?? hdrpProbe);
-			ReadProbes(hdrpProbe);
 
 			float lux = SunController.SkyLightAbove;
 			cameraHeight_ = Mathf.Max(1.0f, camPos.y);

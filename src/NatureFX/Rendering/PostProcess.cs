@@ -511,47 +511,6 @@ namespace NatureFX.Rendering {
 			OwnExposure = true;
 		}
 
-		private void GameExposure() {
-			if (Time.unscaledTime >= nextGameScan_) {
-				nextGameScan_ = Time.unscaledTime + 2.0f;
-				gameMode_ = ExposureMode.Fixed;
-				gameFixed_ = 0.0f;
-				gameMin_ = 0.0f;
-				gameMax_ = 0.0f;
-				gameCompensation_ = 0.0f;
-				float best = float.NegativeInfinity;
-				foreach (var v in UnityEngine.Object.FindObjectsByType<Volume>(FindObjectsSortMode.None)) {
-					if (v == null || !v.isActiveAndEnabled || !v.isGlobal || v.gameObject.name.StartsWith("NatureFX", StringComparison.Ordinal) || v.priority < best) {
-						continue;
-					}
-					var profile = v.sharedProfile;
-					if (profile == null || profile.name.StartsWith("NatureFX", StringComparison.Ordinal) || !profile.TryGet<Exposure>(out var e) || !e.active || !e.mode.overrideState) {
-						continue;
-					}
-					best = v.priority;
-					gameMode_ = e.mode.value;
-					gameFixed_ = e.fixedExposure.value;
-					gameMin_ = e.limitMin.value;
-					gameMax_ = e.limitMax.value;
-					gameCompensation_ = e.compensation.value;
-				}
-			}
-			float up = Units.Log2Scale;
-			exposure_.active = true;
-			if (gameMode_ == ExposureMode.Automatic || gameMode_ == ExposureMode.AutomaticHistogram) {
-				exposure_.mode.Override(gameMode_);
-				// widened rather than moved: a game whose own range already reached real sunshine stays as it was
-				exposure_.limitMin.Override(gameMin_);
-				exposure_.limitMax.Override(Mathf.Max(gameMax_, gameMax_ + up));
-				exposure_.compensation.Override(gameCompensation_);
-				gameWhat_ = FormattableString.Invariant($"(automatic, {gameMin_:0.0} to {gameMax_ + up:0.0} EV, the top raised {up:0.0} for the real sun)");
-			} else {
-				exposure_.mode.Override(ExposureMode.Fixed);
-				exposure_.fixedExposure.Override(gameFixed_ + up);
-				gameWhat_ = FormattableString.Invariant($"(fixed {gameFixed_ + up:0.0} EV, +{up:0.0} for the real sun)");
-			}
-		}
-
 		// eye adaptation (with the game's exposure chosen, HDRP keeps it)
 		private void Adapt(ISettings s) {
 			// the game's automatic exposure under the own post-processing: HDRP would meter the picture this pass has
@@ -573,10 +532,11 @@ namespace NatureFX.Rendering {
 			float lowest = eye ? s.AutoExposureMin : gameMin_;
 			float highest = eye ? Mathf.Max(s.AutoExposureMin + 0.5f, s.AutoExposureMax) : Mathf.Max(gameMin_ + 0.5f, gameMax_ + Units.Log2Scale);
 			if (metering && float.IsNaN(ev_)) {
-				// taking over: from where HDRP's exposure is (it adapted until now), not a jump to the first reading; with
-				// none known a bright day's, so HDRP's own automatic exposure never runs on the own picture (it metered
-				// the tone mapped picture and opened up all the way: white)
-				ev_ = Mathf.Clamp(float.IsNaN(HdrpEV) ? 13.0f : HdrpEV, lowest, highest);
+				// taking over: from the fixed exposure (what the picture had until now), not a jump to the first reading;
+				// HDRP's own automatic exposure never runs on the own picture (it metered the tone mapped picture and
+				// opened up all the way: white)
+				// (own values only: the fixed exposure the user set, not HDRP's state)
+				ev_ = Mathf.Clamp(s.FixedExposure > 0.0f ? s.FixedExposure : 13.0f, lowest, highest);
 			}
 			if (metering && pass_.MeterFrame != lastMeter_ && pass_.MeterFrame >= 0) {
 				lastMeter_ = pass_.MeterFrame;

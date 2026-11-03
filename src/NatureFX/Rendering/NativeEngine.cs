@@ -889,6 +889,17 @@ namespace NatureFX.Rendering {
 		// phase 1c: the sky's light (clouds included) as an ambient probe, in HDRP's packing (7 float4): every trace
 		// after TraceSky in a frame reads it instead of HDRP's probe, and the composite puts it in place of HDRP's
 		public static GraphicsBuffer SkyProbe { get; private set; }
+
+		// the own sky probe before the first TraceSky (dark for that frame): the atmosphere begins its frames with its
+		// own probe, not HDRP's (the native sky and fog ran only once HDRP's probe was reachable)
+		public static GraphicsBuffer EnsureSkyProbe() {
+			if (SkyProbe == null) {
+				SkyProbe = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 8, 16) { name = "NFX_SkyProbe" };
+				SkyProbe.SetData(new Vector4[8]);
+				skyProbePtr_ = SkyProbe.GetNativeBufferPtr();
+			}
+			return SkyProbe;
+		}
 		private static IntPtr skyProbePtr_, skyProbePtrFrame_;
 		private static readonly int SkySamplesId = Shader.PropertyToID("_NFX_SkySamples");
 		private static readonly int SkyLightSaturationId = Shader.PropertyToID("_NFX_SkyLightSaturation");
