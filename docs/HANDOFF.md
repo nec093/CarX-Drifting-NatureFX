@@ -1,4 +1,4 @@
-# 引き継ぎ資料（2026-11-02 時点、ConfigVersion 78）
+# 引き継ぎ資料（2026-11-04 時点、ConfigVersion 82）
 
 本資料は、次の作業者が本資料と `AGENT.md` を読んで作業を継続できるようにするためのものである。
 記載対象は、現在の構成、既定値、未確認の項目および注意点に限る。
@@ -76,7 +76,7 @@ NatureFX は次の 3 つの成果物で構成される。3 つの成果物は必
 
 - `CameraVolumetrics` は、カメラのフレーム設定のうち該当する 1 項目のみを上書きし、不要になった時点で元に戻す。終了時（`OnDestroy`）にはすべての項目を元に戻す。
 - 太陽は `Units.PhysicalScale` 倍して現実の明るさに合わせている。CarX の太陽は約 π lux であり、ランプ、ヘッドライト、発光は HDRP の現実の単位で扱う。露出の EV は現実の EV である。
-- 独自 BSDF（`OwnBrdf`、既定オフ、実験的機能）は、G バッファを再描画せず、表面トレースの色と HDRP の法線で太陽とランプの照明を計算する。トレース対象外の物体（遠景の森、草、デトリタス）はレイヤー 7 に移し、HDRP に照明させる（`OwnLighting.Untraced`）。
+- 独自 BSDF（`OwnBrdf`、既定オフ、実験的機能）は、G バッファを再描画せず、表面トレースの色と HDRP の法線で太陽とランプの照明を計算する。トレース対象外の物体（遠景の森、草）はレイヤー 7 に移し、HDRP に照明させる（`OwnLighting.Untraced`）。
 
 ---
 
@@ -93,7 +93,7 @@ NatureFX は次の 3 つの成果物で構成される。3 つの成果物は必
   シェーダーにコンパイルエラーがあると、そのシェーダーはエラー表示なしにバンドルから除外される。過去には、合成で `NFX_COAT_ROUGHNESS` が未定義だったために影の合成全体が消えた事例がある。`variant_054 (NatureFX/LitAccumulation) lost keywords: _NORMALMAP` は既知の警告である。
 - フルビルドの所要時間は約 30 分である（変種の絞り込み後）。共通の hlsl（`NFX_Accumulation.hlsl` など）を変更すると、全バリアントの再コンパイルが必要になる。RT の合成シェーダーのみの変更であれば数分で済む。
 - 変種の絞り込みは次の手順で行う。ゲームが `kino/config/NatureFX/game_hdrp/game_variant_profile.txt` を出力する（`Tools/VariantProfileDump.cs`）。このファイルを `unity/variants/` にコピーすると、`VariantProfileStripper` がこれを使用する（`unity/variants/README.md`）。製品ビルドの Unity は変種のログを出力しないため、Unity 側の記録は利用できない。
-- 新しい .ksm は `_NFX_NoiseTex`（`ShaderGlobals.EnsureNoiseTexture`）を生成する。このテクスチャがないとバンドルのノイズが一定値になり、雪、濡れ、落ち葉の模様が表示されない。
+- 新しい .ksm は `_NFX_NoiseTex`（`ShaderGlobals.EnsureNoiseTexture`）を生成する。このテクスチャがないとバンドルのノイズが一定値になり、濡れや水たまりの模様が表示されない。
 - 再起動せずに確認する場合は、デバッグページの developer タブ > Reload shaders を使う（`reload/` の新しいバンドルと `NativeShaders/*.cso` を読み込む）。C#、C++、構造体の配置を変更した場合は再起動が必要である。
 - 作業者はゲームの表示を直接確認できない。変更のたびに、確認する場所と内容（F8 のタブ、デバッグページの行、`kino/output.log` の行）を具体的にユーザーへ伝える。Unity のエラー（カーネルの次元の不一致、UAV のフラグなど）は `kino/output.log` ではなく Unity の `Player.log` に出力される。
 
@@ -104,7 +104,10 @@ NatureFX は次の 3 つの成果物で構成される。3 つの成果物は必
 `Settings.cs` は、`ISettings`（KSL が自動保存する）、`SettingsDefaults`（同じメンバーの既定値を保持する）、`ApplyFirstRun` と `Migrate` で構成される。
 
 - 既定値を変更する場合は、必ず新しい移行処理を追加する（`if (d.ConfigVersion < N) { ...; d.ConfigVersion = N; }`）。`Migrate` はユーザーの設定と `Defaults` の両方に適用されるため、F8 の「既定値に戻す」（`UserPresets.ResetAll`）と右クリックのリセットも移行後の値に従う。ユーザーが変更した値を保持する必要がある場合は、元の既定値のままであることを条件に加える（移行 45 を参照）。
-- 現在の ConfigVersion は 78 である。29 は欠番である。
+- 現在の ConfigVersion は 82 である。29 は欠番である。移行 82 は、廃止した天候プリセットの番号を付け替える（旧 5 Snow・6 Autumn は 1 Clear に、旧 7 Fog は 5 に移す）。
+- 次の機能は廃止した（ユーザー決定）。雪（積雪、雪の厚み、降雪、ブラックアイス、車の雪、雪の轍）、落ち葉（積もる葉、舞い落ちる葉、冬の落葉）、ほこり（路面と車）、時間経過による蓄積、季節の色（`Seasons`、紅葉、ススキの穂）、路面のゴムと摩耗（`_NFX_Road`、タイヤ痕のゴム）、素材の経年変化（`[materials]` の moss / rust / stain / wear / dirt）、接地のなじませ（`groundblend`）、草木の下の地面、塗る汚れ（`[paint]`、`MapPaint`）、デトリタス（`Detritus`）。天候プリセットは Manual / Clear / Overcast / Rain / Storm / Fog である。
+- 廃止した機能の設定（`Snow`、`Leaves`、`Dust`、`SnowDepth`、`AccumulateOverTime`、`AccumulationRate`、`Season`、`RubberAmount`、`RoadWear`、`MapGroundDetail`、`Detritus`）は、古い設定ファイルを読み込めるように `ISettings` に残しているが、どこからも参照しない。デバッグページには表示しない（`DevControls.Retired`）。
+- 雨に関する機能は残している。濡れは `AccumulationController` が管理し、雨の間は雨量に応じて濡れ、雨がやむと約 2 分で天候の値まで乾く（`_NFX_Accumulation.w`。x、y、z は常に 0）。タイヤ跡マップ（`TrackMap`）は、ドライライン（g）、草の押し倒し（b）、車輪の接地情報のために残している（r のゴムは常に 0）。地面マップ（`GroundMap`）は、草木のカードの根元（`NFX_ApplyFoliageFoot`）のために残している。車の泥（`CarDirt`）も残している。
 - `RTOverlay` は現在使用していないが、設定ファイルとの互換性のために残している。計測オーバーレイはデバッグページへ移した。
 
 ### 4.1 主要な既定値（移行適用後）
@@ -120,9 +123,9 @@ NatureFX は次の 3 つの成果物で構成される。3 つの成果物は必
 | DLSS | `Dlaa` オン、`DlssQuality` 0（DLAA）、`DlssRayReconstruction` オフ |
 | レンズ | `MotionBlur` 0.5（180°）、`DofFStop` 2.8、`DepthOfField` オフ、`LensFlare` / `LensStreaks` 0.3、`NightVision` 0.8 |
 | 時刻 | `SunOverride` オフ、`TimeOfDay` 14、`TimePasses` オフ（速さ 60 倍）、`SyncGameNight` オン |
-| 車 | `HeadlightType` 3（LED）、`HeadlightStandard` 0（日本）、`HeadlightAim` 0.6°、`OilFilm` 0（移行 74。設定項目は存続）、タイヤスモーク 1、赤熱・汚れ・クロームのホイール オン |
+| 車 | `HeadlightType` 3（LED）、`HeadlightStandard` 0（日本）、`HeadlightAim` 0.6°、`OilFilm` 0（移行 74。設定項目は存続）、タイヤスモーク 1、赤熱・泥（`CarDirt`）・クロームのホイール オン |
 | シェーダーリビルド | `ReplaceShaders` / `FullReplacement` / `RebuildFoliage` オン、`AntiTiling` 1（マップが `antitiling=` を指定した素材のみ） |
-| マップ | `UseMapProfile` / `MapEffects` / `MapProbes` / `MapGroundDetail` オン、草 1・60 m、藪 1・25 m、デトリタス 1 |
+| マップ | `UseMapProfile` / `MapEffects` / `MapProbes` オン、草 1・60 m、藪 1・25 m |
 | 開発 | `DebugPage` オン（移行 78、`127.0.0.1:8765`）、`WriteMaterialInventory` オフ、`TextureStreamingBudget` 0（ゲームの値） |
 
 ### 4.2 F8 とデバッグページ
@@ -159,12 +162,13 @@ NatureFX は次の 3 つの成果物で構成される。3 つの成果物は必
 | 3D の霧の空の光（空が見える割合に応じる）、GI の空 0.15 | 屋根の下や室内に白いもやが出ないこと | `FogVolume.hlsl`、`GI.hlsl` |
 | ヘッドライトのカットオフの色のにじみ、欧米の配光 | 夜の路面上のカットオフ | `HeadlightController` |
 | 既定値の移行 75〜78 | 既定値に戻したときに DXR 1.1、NRD、デバッグページがオンになること | `Settings.cs` |
+| 雪、落ち葉、ほこり、季節、路面のゴム、経年変化、接地、塗る汚れ、デトリタスの廃止 | ビルドが通ること。雨の濡れ、水たまり、波紋、ドライライン、車の水滴と泥、葉の色の補正、草木の根元が従来どおりであること。古い設定（天候 Snow / Autumn / Fog）が Clear / Fog として読み込まれること | `NFX_Accumulation.hlsl`、`NFX_LitData.hlsl`、`AccumulationController`、`WeatherController`、`Settings.cs`（移行 82） |
 
 ### 5.2 未解決の問題と制限事項
 
 - 33 ms のフレームが散発的に発生する。原因は未調査である。デバッグページの performance > slow frames で該当区間を確認する。
 - DLSS Ray Reconstruction は、アップスケールと併用すると画面の揺れ、光のノイズ、GPU ハング（`DXGI_ERROR_DEVICE_HUNG`）が発生したため、DLAA のときのみ使用する。RR の対象は太陽の影のみである。反射は RR では粗い面に白い粒が出たため、REBLUR を使う。
-- 独自 BSDF は、表面トレースの色にアンチタイリング、積もり、地面へのなじませ、ペイント、ディテールが反映されないため、模様が二重に見える。実験的機能の扱いを継続する。
+- 独自 BSDF は、表面トレースの色にアンチタイリングとディテールが反映されないため、模様が二重に見える。実験的機能の扱いを継続する。
 - ランプの影は 1 画素あたり負荷の大きい 4 灯までであり、5 灯目以降は影を落とさない。ランプマスクは半解像度である。
 - 合成後に HDRP が描画する半透明について、HDRP が透明パスの前に `_AmbientProbeData` を再設定する場合、空の光は黒のままになる。この点は未確認である。
 - 独自ガラスは手前の 1 枚と奥の 2 枚までを扱う。HDRP がガラスに付ける効果は失われる。車の雨粒は `CarRain` が描画するため残る。
@@ -217,7 +221,7 @@ NatureFX は次の 3 つの成果物で構成される。3 つの成果物は必
 | HDRP 機能の置き換え | `Rendering/OwnLighting.cs`、`CameraVolumetrics.cs`、`VolumeOverhaul.cs`、`OwnGlass.cs`、`SceneProbes.cs`、`FakeShadows.cs`、`Units.cs` |
 | 空・霧・雲・時刻 | `Rendering/AtmospherePass.cs`、`CloudController.cs`、`SunController.cs`、`GameDayNight.cs`、`Map/MapFog.cs`、`Map/MapNight.cs` |
 | 後処理・露出・AA | `Rendering/PostProcess.cs`、`Dlaa.cs`、`ExposureProbe.cs`、`LensEffects.cs`、`PhotoMode.cs` |
-| 天候・自然 | `Nature/WeatherController.cs`、`AccumulationController.cs`、`WindController.cs`、`TrackMap.cs`、`Rendering/Precipitation.cs`、`Map/Seasons.cs` |
+| 天候・自然 | `Nature/WeatherController.cs`、`AccumulationController.cs`、`WindController.cs`、`TrackMap.cs`、`Rendering/Precipitation.cs` |
 | 車 | `Rendering/HeadlightController.cs`、`TireSmoke.cs`、`CarRain.cs`、`CarGlow.cs`、`CarFinish.cs`、`GameParticles.cs`、`ParticleLighting.cs` |
 | シェーダーリビルド | `Nature/MaterialReplacer.cs`、`ShaderBundle.cs`、`Rebuild/`、`Map/MaterialProfiles.cs` |
 | マップ拡張 | `Map/`、`Nature/GrassRenderer.cs`、`ForestRenderer.cs`、`ShrubRenderer.cs`（書式は [map-authoring.md](map-authoring.md)） |

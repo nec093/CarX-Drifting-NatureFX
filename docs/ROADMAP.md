@@ -37,7 +37,7 @@
 
 ### 1.3 独自 BSDF（実験的機能）
 
-- 課題：表面トレースの色に NatureFX の材質処理（アンチタイリング、積もり・濡れ、地面へのなじませ、ペイント、ディテール）が反映されず、路面の模様が二重になる。トレース対象外の物体（森、草、Detritus の板、除外した小物）は灰色 0.3 になる。
+- 課題：表面トレースの色に NatureFX の材質処理（アンチタイリング、濡れ、ディテール）が反映されず、路面の模様が二重になる。トレース対象外の物体（森、草、除外した小物）は灰色 0.3 になる。
 - 残作業：独自エンジンのヒットシェーダーにも hex tiling を組み込む。これにより反射と GI の色も正しくなる。
 - 関連ファイル：`Shaders/NFX_LampsOwn.shader`、`ShaderLibrary/NFX_LampsExact.hlsl`、`ShaderLibrary/NFX_AntiTiling.hlsl`、`native/NFXNative/shaders/NFXCommon.hlsli`・`Surface.hlsl`
 
@@ -131,7 +131,7 @@
 
 ### 4.5 両面材質の裏面の法線
 
-- 課題：両面材質の裏面で `geomNormalWS` を反転していないため、葉の裏に雪、埃、水たまりが表示される（B32）。
+- 課題：両面材質の裏面で `geomNormalWS` を反転していないため、葉の裏に水たまりが表示される（B32）。
 - 残作業：修正。
 - 関連ファイル：`ShaderLibrary/NFX_LitData.hlsl`
 
@@ -139,9 +139,9 @@
 
 - 課題：次の 3 点である。
   - 天候がすべて 0 でも、毎画素 fbm ×2 とトラックマップを処理している（P11）。
-  - 地面マップを 1 画素あたり 3 回読み込んでいる（11-02 P13）。
+  - 地面マップの読み込み（11-02 P13。接地と草木の下の地面は廃止したため、現在は草木のカードの根元の 1 回のみ）。
   - `[loop]` 内で暗黙勾配の `SAMPLE_TEXTURE2D_ARRAY` を使用している（P20）。
-- 残作業：早期 return の追加と `NFX_SnowBank` の `snow > 0` による囲い込み、地面マップの読み込み回数の削減、`SAMPLE_TEXTURE2D_ARRAY` の `_GRAD` への置き換え。
+- 残作業：早期 return の追加（雪の処理は廃止済み）、`SAMPLE_TEXTURE2D_ARRAY` の `_GRAD` への置き換え。
 - 関連ファイル：`NFX_Accumulation.hlsl`、`NFX_Ground.hlsl`、`NFX_MaterialProfile.hlsl`
 
 ---
