@@ -12,7 +12,7 @@
 
 ### 1.1 HDRP のアトラスのメモリ
 
-- 課題：クッキーアトラス、反射プローブのアトラス、シャドウアトラスは HDRP のパイプラインアセットで設定されている。実行中に縮小するにはパイプラインの再生成が必要であり、ゲーム全体の描画を作り直すため危険を伴う。独自 BSDF のランプも、HDRP の `EvaluateLight_Punctual` を経由してクッキーを使用している。
+- 課題：クッキーアトラス、反射プローブのアトラス、シャドウアトラスは HDRP のパイプラインアセットで設定されている。実行中に縮小するにはパイプラインの再生成が必要であり、ゲーム全体の描画を作り直すため危険を伴う。ランプの正確な光も、HDRP の `EvaluateLight_Punctual` を経由してクッキーを使用している。
 - 残作業：対応方針の検討。
 - 関連ファイル：`Rendering/OwnLighting.cs`、`Rendering/VolumeOverhaul.cs`、`Rendering/Capabilities.cs`
 
@@ -34,12 +34,6 @@
 - マップのデータとして残るもの：マップのライト、霧の設定と霧ボリューム、マテリアル。独自のマップ形式を作るまでは入力データとして使う。
 - 対応済み（2026-11）：霧の箱は `MapVolumes.Boxes` で NatureFX 自身の値を直接渡す。マップの街灯・ブレーキ・アフターファイアの明るさは NatureFX がカンデラで計算して HDRP と独自エンジンに渡す。HDRP のプローブ・雲・霧の状態表示の読み取りを廃止。ランプの影の判定は NatureFX の記録（`lampShadowsBefore_`）とランプ自身の設定で行う。DLSS の HDRP TAAU 経由の経路を削除。
 - 関連ファイル：`Rendering/PostProcess.cs`、`Rendering/AtmospherePass.cs`、`Rendering/RTReflectionPass.cs`、`Map/MapVolumes.cs`、`Map/MapLights.cs`、`Rendering/CarGlow.cs`、`Rendering/LocalLights.cs`、`Rendering/Dlaa.cs`
-
-### 1.3 独自 BSDF（実験的機能）
-
-- 課題：表面トレースの色に NatureFX の材質処理（アンチタイリング、濡れ、ディテール）が反映されず、路面の模様が二重になる。トレース対象外の物体（森、草、除外した小物）は灰色 0.3 になる。
-- 残作業：独自エンジンのヒットシェーダーにも hex tiling を組み込む。これにより反射と GI の色も正しくなる。
-- 関連ファイル：`Shaders/NFX_LampsOwn.shader`、`ShaderLibrary/NFX_LampsExact.hlsl`、`ShaderLibrary/NFX_AntiTiling.hlsl`、`native/NFXNative/shaders/NFXCommon.hlsli`・`Surface.hlsl`
 
 ### 1.4 DXR 1.2 側（試験機能 `RTDxr12Sun`）
 
@@ -300,7 +294,7 @@
 
 ### 7.10 共有プリセットに含まれる設定
 
-- 課題：共有プリセットに `RTBackend`、`RTDxr12Sun`、`RTOverlay`、`ShowMarkers`、`UseMapProfile` が含まれる（B37）。
+- 課題：共有プリセットに `RTDxr12Sun`、`RTOverlay`、`ShowMarkers`、`UseMapProfile`、および使わなくなった設定（`RTBackend`、独自エンジンの各部のスイッチなど。読み込み後に固定値へ戻る）が含まれる（B37）。
 - 残作業：`Excluded` への追加。
 - 関連ファイル：`UserPresets.cs` の `Excluded`
 
@@ -346,6 +340,6 @@
    - 夜の月の影がちらつかないこと（R7）。
    - 雲なしのセッションで霧の箱と煙が表示されること（R10）。
 4. 曇りの天候で Sun override をオフにすると、太陽の影が戻ること（B4）。Tire marks をオフにして車を替えても、例外が発生しないこと（B5）。
-5. 3D 霧のランプのリスト。Developer の「3D fog lamps」のオン/オフで表示が同じであり、20×12 の継ぎ目や 4.4 / 38.7 / 341 m の輪が出ないこと。この GPU では F8 の「fog volume」の ms が表示されないため、fps で比較する。
+5. 3D 霧のランプのリスト。20×12 の継ぎ目や 4.4 / 38.7 / 341 m の輪が出ないこと（比較用のスイッチは削除済み）。
 6. `MapNight.Stars()` の `Cubemap.SetPixels` が `RGB9e5Float` で動作すること（B39）。動作しない場合は最初の夜に例外が発生する。
 7. マップ拡張の段階 1.5〜5（天候ゾーン、光源マーカー、葉の色、立体の草、デカール・水・局所の霧・舞う物体）の表示。NatureFX を無効にして同じマップを読み込んだとき、何も表示されないこと。負荷の上限（光源 64・影 8、プローブ 16、草 60 m、デカール 512）が十分であること。

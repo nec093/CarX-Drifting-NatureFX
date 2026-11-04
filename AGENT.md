@@ -103,10 +103,9 @@
 ### 8.2 レイトレーシングの方式
 
 - レイトレーシングはすべて独自エンジンで行う。Unity のレイトレーシング（`NFX_RTGI.raytrace`、Unity の加速構造、`DispatchRays`）は削除済みである。
-- `Settings.RTBackend` は独自エンジンの方式を指定する。
-  - 0 = DXR 1.0。`NFX_PIPELINE` でトレースを lib_6_6 としてビルドし、状態オブジェクトとシェーダーテーブルを使って `DispatchRays` を実行する。
-  - 1 = DXR 1.1。インラインのコンピュートで実行する。こちらが既定である。
-- トレースのシェーダーは、`NFXCommon.hlsli` の `Blocked` / `FirstBlocker` / `Closest` / `ClosestGlass` と入口 `NFX_ENTRY` のみを使用すれば、両方式でコンパイルできる。
+- 独自エンジンは DXR 1.1（インラインのレイクエリ、コンピュートシェーダー）のみでトレースする。DXR 1.0（パイプライン方式）は削除した。
+- トレースのシェーダーは、`NFXCommon.hlsli` の `Blocked` / `FirstBlocker` / `Closest` / `ClosestGlass` と入口 `NFX_ENTRY` を使用する。
+- NatureFX は DX12 と DXR 1.1 対応の GPU が前提であり、使えない環境では全体が動作しない（docs/HANDOFF.md 2 章）。独自エンジンの各部を HDRP に戻す設定は追加しない。
 - `NFX_RTProxy.shader` はマテリアル値の格納用であり、描画には使われない。
 
 ### 8.3 揺れる葉
@@ -163,5 +162,5 @@
 - DLSS に渡す動きは、ジッターを含まない行列（現在と前フレーム）から `PrepareDlss` が算出する。
 - DLSS に渡すジッターは、HDRP の DLSS と同様に、射影のずらし量の符号を反転した値とする。
 - 独自の後処理を使用している間は、HDRP の TAA を使用しない。DLSS が動作しない場合は、PostPass の独自 TAA を使用する。
-- アップスケール（品質 1〜4）では、HDRP の動的解像度で低い解像度に描画させる。PostPass が DLSS で表示解像度に拡大し、HDRP の最終パスのマテリアルを `NFX_UpscaledFinal` に差し替えて表示する。旧来の HDRP の TAAU 経路は、デバッグページのスイッチで引き続き使用できる。
+- アップスケール（品質 1〜4）では、HDRP の動的解像度で低い解像度に描画させる。PostPass が DLSS で表示解像度に拡大し、HDRP の最終パスのマテリアルを `NFX_UpscaledFinal` に差し替えて表示する。旧来の HDRP の TAAU 経路は削除した。
 - `DlssEventData` は 192 バイトである。
