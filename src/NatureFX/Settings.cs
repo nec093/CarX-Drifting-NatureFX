@@ -942,6 +942,11 @@ namespace NatureFX {
 				}
 				d.ConfigVersion = 82;
 			}
+			if (d.ConfigVersion < 83) {
+				// the stars as the night adapted eye sees them: at 4x they hardly showed under the eye's night exposure
+				d.StarBrightness = 15.0f;
+				d.ConfigVersion = 83;
+			}
 			FixOwnEngine(d);
 		}
 
