@@ -77,15 +77,6 @@ namespace NatureFX.Rendering {
 		public bool ExactSun = true;
 		public bool LampMasks = true; // roadmap A4 (DrawExactLamps)
 		public bool FullRelight = true; // roadmap A4: the composite takes HDRP's pixel apart and lights it again
-		// HDRP hand-over C1: the sun and the lamps lit by the own BSDF (the surface trace's colour, HDRP's normal buffer)
-		// with no G-buffer drawn again: the sun by the composite's OwnSunLight, the lamps by NFX_LampsOwn. Only while the
-		// own engine lights both (OwnLighting.Sun and Lamps wanted) and DLSS Ray Reconstruction (its guides come from
-		// the G-buffer) is off.
-		public bool OwnBrdf;
-		public bool OwnBrdfWanted; // the sun and lamps the own engine's (Settings.OwnSunLight, OwnLampLight)
-		public Material LampsOwnMaterial;
-		private bool ownBrdf_;
-		public bool OwnBrdfActive => ownBrdf_;
 		public bool RelightActive { get; private set; }
 		private bool exactUsed_;
 		private RTHandle lampsExact_;
@@ -316,7 +307,7 @@ namespace NatureFX.Rendering {
 			EnsureLampTargets();
 		}
 
-		// the lamps' light: from the G-buffer (LampsExact) or the own BSDF (LampsOwn). The lamp mask histories (32 B a
+		// the lamps' light from the G-buffer (LampsExact). The lamp mask histories (32 B a
 		// pixel) and DLSS Ray Reconstruction's guides are made when first used (EnsureLampHistory / EnsureGuides):
 		// always there, they were 400 MB at 4K whether or not either ran
 		private void EnsureLampTargets() {
@@ -386,10 +377,7 @@ namespace NatureFX.Rendering {
 			sunExact_ = null;
 			ReleaseGuides();
 			gbuffer_ = null;
-			// the lamps' targets stay for the own BSDF's lamps
-			if (!ownBrdf_) {
-				ReleaseLampTargets();
-			}
+			ReleaseLampTargets();
 		}
 
 		// HDRP's G-buffer is gone by now (its memory reused), so the opaque renderers' GBuffer pass draws it again into
@@ -469,14 +457,8 @@ namespace NatureFX.Rendering {
 			var historyOut = lampFlip_ ? lampHistoryA_ : lampHistoryB_;
 			lampFlip_ = !lampFlip_;
 			lampProps_.Clear();
-			if (ownBrdf_) {
-				EnsureLampTargets();
-				lampProps_.SetTexture(RTSurfaceTrace.AlbedoTex, Surfaces.Albedo);
-				lampProps_.SetTexture(RTSurfaceTrace.NormalTex, Surfaces.Normal);
-			} else {
-				for (int i = 0; i < gbuffer_.Length; ++i) {
-					lampProps_.SetTexture(GBufferTextures[i], gbuffer_[i]);
-				}
+			for (int i = 0; i < gbuffer_.Length; ++i) {
+				lampProps_.SetTexture(GBufferTextures[i], gbuffer_[i]);
 			}
 			lampProps_.SetTexture(LampMaskId, lampMask_);
 			lampProps_.SetTexture(LampMaskHistoryId, historyIn);
@@ -492,11 +474,7 @@ namespace NatureFX.Rendering {
 			lampTargets_[1] = historyOut;
 			lampTargets_[2] = lampsTotal_;
 			CoreUtils.SetRenderTarget(cmd, lampTargets_, ctx.cameraDepthBuffer);
-			if (ownBrdf_) {
-				CoreUtils.DrawFullScreen(cmd, LampsOwnMaterial, lampProps_, 0);
-			} else {
-				CoreUtils.DrawFullScreen(cmd, SunExactMaterial, lampProps_, 1);
-			}
+			CoreUtils.DrawFullScreen(cmd, SunExactMaterial, lampProps_, 1);
 			lampHistoryValid_ = true;
 		}
 
@@ -580,9 +558,8 @@ namespace NatureFX.Rendering {
 			Surfaces.EnsureTraced(ctx);
 			bool skyUsed = false; // the sky is the atmosphere pass's (AtmospherePass), drawn after this one
 			float cameraHeight = 1.0f;
-			ownBrdf_ = OwnBrdf && OwnBrdfWanted && TraceShadows && LampsOwnMaterial != null && LampMasks && localShadows && !Dlaa.RayReconstruction;
-			exactUsed_ = ExactSun && TraceShadows && SunExactMaterial != null && !ownBrdf_;
-			maskUsed_ = (exactUsed_ || ownBrdf_) && localShadows && LampMasks;
+			exactUsed_ = ExactSun && TraceShadows && SunExactMaterial != null;
+			maskUsed_ = exactUsed_ && localShadows && LampMasks;
 			NativeEngine.LampMask = maskUsed_;
 			if (exactUsed_) {
 				RTTimings.ShadowFilter.Begin(cmd);
@@ -590,9 +567,7 @@ namespace NatureFX.Rendering {
 				RTTimings.ShadowFilter.End(cmd);
 			} else {
 				ReleaseExactTargets();
-				if (!ownBrdf_) {
-					ReleaseLampTargets();
-				}
+				ReleaseLampTargets();
 			}
 
 			// 1. trace: one point of the sun's disc per pixel, one ambient ray per half resolution pixel
@@ -724,17 +699,13 @@ namespace NatureFX.Rendering {
 			props_.SetFloat(OwnAmbientId, OwnLighting.Ambient ? 1.0f : 0.0f);
 			props_.SetFloat(OwnSkyStrengthId, OwnLighting.SkyStrength);
 			// OwnLighting.Sun: HDRP's sun is off; only with the exact sun light worked out (it is the sun's light then)
-			// (or the own BSDF's: the composite's OwnSunLight on every pixel)
-			props_.SetFloat(OwnSunId, OwnLighting.Sun && (exactUsed_ || ownBrdf_) ? 1.0f : 0.0f);
-			if ((exactUsed_ || ownBrdf_) && TraceShadows) {
+			props_.SetFloat(OwnSunId, OwnLighting.Sun && exactUsed_ ? 1.0f : 0.0f);
+			if (exactUsed_ && TraceShadows) {
 				OwnLighting.SunComposed();
 			}
 			// OwnLighting.Lamps: HDRP's lamps are off; with the lamp masks' exact light (lit share added)
 			props_.SetFloat(OwnLampsId, OwnLighting.Lamps && maskUsed_ ? 1.0f : 0.0f);
-			props_.SetFloat(OwnBrdfId, ownBrdf_ && OwnLighting.UntracedLit ? 1.0f : 0.0f);
-			if (ownBrdf_) {
-				OwnLighting.OwnBrdfComposed();
-			}
+			props_.SetFloat(OwnBrdfId, 0.0f);
 			if (maskUsed_) {
 				OwnLighting.LampsComposed();
 			}
@@ -749,7 +720,7 @@ namespace NatureFX.Rendering {
 
 			++frame_;
 			string ambientWhat = giUsed_ ? "global illumination (every bounce)" : Bounce ? "ambient light with bounce" : "AO";
-			string sunWhat = $"sun shadows {sunSize.x}x{sunSize.y}" + (exactUsed_ ? " (exact sun light)" : ownBrdf_ ? " (own BSDF, no G-buffer)" : "");
+			string sunWhat = $"sun shadows {sunSize.x}x{sunSize.y}" + (exactUsed_ ? " (exact sun light)" : "");
 			string what = TraceShadows && TraceAO ? $"{sunWhat}, {ambientWhat} {ambientSize.x}x{ambientSize.y}"
 				: TraceShadows ? sunWhat : $"{ambientWhat} {ambientSize.x}x{ambientSize.y}";
 			Status = $"own engine ({NativeEngine.ModeName}): " + what + (Lights != null && Lights.Count > 0 ? $", {Lights.Count} local lights ({Lights.ShadowCount} ray traced shadows)" : "");

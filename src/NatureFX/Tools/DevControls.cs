@@ -183,7 +183,13 @@ namespace NatureFX.Tools {
 			                  Set = v => set(Mathf.Clamp(Mathf.RoundToInt(v), 0, options.Length - 1)), Default = () => def(), Saved = true, Tab = "settings" });
 		}
 
-		private static readonly HashSet<string> Retired = new() { "ReplaceGameSmoke", "RTBackend" };
+		private static readonly HashSet<string> Retired = new() {
+			"ReplaceGameSmoke", "RTBackend",
+			// fixed on (Settings.FixOwnEngine), or HDRP's only
+			"NativeSky", "OwnSkyLighting", "OwnSunLight", "OwnLampLight", "OwnBrdf", "OwnTransparentLight", "NativeFog", "NativeLighting",
+			"NativeParticles", "NativeGlass", "NativePost", "RTShadows", "RTAO", "RTReflections", "RTLocalLights", "RTLampShadows",
+			"RTGlassReflections", "RTGIBounce", "RTGIMultiBounce", "LightShafts", "RealisticShadows", "SunTemperature",
+		};
 
 		private static void BuildSettings() {
 			BuildWindowSettings();

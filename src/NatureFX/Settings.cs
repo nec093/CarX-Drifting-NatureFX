@@ -930,6 +930,34 @@ namespace NatureFX {
 				d.CalibrateAlbedo = true;
 				d.ConfigVersion = 80;
 			}
+			FixOwnEngine(d);
+		}
+
+		// The own engine draws all of it: its parts are fixed on (their switches are gone: every combination of them
+		// was another picture to get right, and some fell back to HDRP's own). Kept in the settings file only so old
+		// files load; set again every frame (NatureFXMod), so presets and the debug page cannot turn a part back to
+		// HDRP's. The own BSDF (experimental) is gone, HDRP-only settings (its fog's sun, soft shadow maps, the sun's
+		// colour temperature for HDRP's sky) no longer used.
+		internal static void FixOwnEngine(ISettings d) {
+			if (!d.NativeSky) d.NativeSky = true;
+			if (!d.OwnSkyLighting) d.OwnSkyLighting = true;
+			if (!d.OwnSunLight) d.OwnSunLight = true;
+			if (!d.OwnLampLight) d.OwnLampLight = true;
+			if (!d.OwnTransparentLight) d.OwnTransparentLight = true;
+			if (!d.NativeFog) d.NativeFog = true;
+			if (!d.NativeLighting) d.NativeLighting = true;
+			if (!d.NativeParticles) d.NativeParticles = true;
+			if (!d.NativeGlass) d.NativeGlass = true;
+			if (!d.NativePost) d.NativePost = true;
+			if (d.OwnBrdf) d.OwnBrdf = false;
+			if (!d.RTShadows) d.RTShadows = true;
+			if (!d.RTAO) d.RTAO = true;
+			if (!d.RTReflections) d.RTReflections = true;
+			if (!d.RTLocalLights) d.RTLocalLights = true;
+			if (!d.RTLampShadows) d.RTLampShadows = true;
+			if (!d.RTGlassReflections) d.RTGlassReflections = true;
+			if (!d.RTGIBounce) d.RTGIBounce = true;
+			if (!d.RTGIMultiBounce) d.RTGIMultiBounce = true;
 		}
 
 		public static void Save() {

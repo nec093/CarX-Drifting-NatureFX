@@ -331,6 +331,7 @@ namespace NatureFX {
 			if (s == null || needsDx12_ || offReason_ != null) {
 				return;
 			}
+			Settings.FixOwnEngine(s);
 			WatchEngine(s);
 			// the debug page (a browser on this PC): whether NatureFX is on or not
 			// the page's own work timed too (its snapshot once a second: a hitch there shows in the slow frames as

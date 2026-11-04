@@ -1,6 +1,5 @@
-// The lamp masks' pass (NFX_SunExact LampsExact, and NFX_LampsOwn with NFX_OWN_BRDF defined): each of HDRP's lamps
-// shadowed by its own traced mask. LampsExact shades from the G-buffer drawn again with HDRP's BSDF; the own variant
-// needs no G-buffer (the surface trace and HDRP's normal buffer, the own BSDF) and keeps HDRP's attenuation and cookies.
+// The lamp masks' pass (NFX_SunExact LampsExact): each of HDRP's lamps shadowed by its own traced mask, shaded from
+// the G-buffer drawn again with HDRP's BSDF, with HDRP's attenuation and cookies.
 // Included after HDRP's light loop and NFX_FogCommon.hlsl.
 #ifndef NFX_LAMPS_EXACT_INCLUDED
 #define NFX_LAMPS_EXACT_INCLUDED
@@ -36,50 +35,6 @@ float4 _NFX_LampMaskParams;        // x the new frame's share, y 1 = lamp masks 
 float4 _NFX_LampPos[128];          // the engine's lamps (LocalLights): xyz absolute position
 float _NFX_LampCount;
 float _NFX_OwnLamps;   // 1: HDRP's lamps light nothing for HDRP (OwnLighting.Lamps); worked out at full strength here
-#ifdef NFX_OWN_BRDF
-TEXTURE2D_X(_NFX_SurfaceAlbedo); // RTSurfaceTrace: rgb albedo, a metallic and clear coat (0.5 + metal)
-TEXTURE2D_X(_NFX_SurfaceNormal); // RTSurfaceTrace: w != 0 where the albedo is the pixel's own
-
-// the own BSDF (as NFX_RTShadow's OwnSunLight): Lambert and GGX, a clear coat lobe over coated paint; n.l included
-void NFX_OwnBrdf(float3 n, float3 V, float3 L, float perceptualRoughness, float4 surface, bool known, out float3 diffuse, out float3 specular)
-{
-    diffuse = 0.0;
-    specular = 0.0;
-    float ndl = saturate(dot(n, L));
-    if (ndl <= 0.0)
-        return;
-    float nv = max(saturate(dot(n, V)), 1e-3);
-    float3 H = normalize(L + V);
-    float nh = saturate(dot(n, H));
-    float vh = saturate(dot(V, H));
-    bool coated = known && surface.a > 0.495;
-    float metal = known ? saturate((surface.a - (coated ? 0.5 : 0.0)) / 0.49) : 0.0;
-    float3 albedo = known ? surface.rgb : 0.3;
-    float3 f0 = lerp(0.04, albedo, metal);
-    diffuse = albedo * (1.0 - metal) * INV_PI * ndl;
-    [unroll]
-    for (int layer = 0; layer < 2; ++layer)
-    {
-        if (layer == 1 && !coated)
-            break;
-        // a lamp is a point: the lobe kept from a needle (HDRP clamps a punctual light's roughness the same way)
-        float r = layer == 0 ? max(perceptualRoughness, 0.05) : 0.07;
-        float a = r * r;
-        float a2 = a * a;
-        float d = nh * nh * (a2 - 1.0) + 1.0;
-        float D = a2 / (PI * d * d);
-        float visTerm = 0.5 / max(ndl * sqrt(nv * nv * (1.0 - a2) + a2) + nv * sqrt(ndl * ndl * (1.0 - a2) + a2), 1e-4);
-        float3 F = layer == 0 ? f0 + (1.0 - f0) * pow(1.0 - vh, 5.0) : 0.04 + 0.96 * pow(1.0 - vh, 5.0);
-        if (layer == 1)
-        {
-            float fc = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
-            specular *= 1.0 - fc;
-            diffuse *= 1.0 - fc;
-        }
-        specular += F * min(D * visTerm, 100.0) * ndl;
-    }
-}
-#endif
 
 struct LampsOut
 {
@@ -109,15 +64,9 @@ LampsOut FragLamps(Varyings input)
     float depth = LoadCameraDepth(pixel);
     if (depth == UNITY_RAW_FAR_CLIP_VALUE || _NFX_LampMaskParams.y < 0.5)
         return o;
-#ifdef NFX_OWN_BRDF
-    // no G-buffer: the surface trace's colour and metal, HDRP's normal buffer's normal and roughness
-    float4 surface = LOAD_TEXTURE2D_X(_NFX_SurfaceAlbedo, pixel);
-    bool known = LOAD_TEXTURE2D_X(_NFX_SurfaceNormal, pixel).w != 0.0;
-#else
     float4 g0 = LOAD_TEXTURE2D_X(_GBufferTexture0, pixel);
     if (g0.r > 0.999 && g0.g < 0.001 && g0.b > 0.999 && g0.a < 0.001)
         return o;
-#endif
 
     // this frame's masks, and the history where the pixel was
     float2 uv = (pixel + 0.5) * _ScreenSize.zw;
@@ -222,63 +171,6 @@ LampsOut FragLamps(Varyings input)
 
     PositionInputs posInput = GetPositionInput(input.positionCS.xy, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V, pixel / GetTileSize());
     float3 V = GetWorldSpaceNormalizeViewDir(posInput.positionWS);
-#ifdef NFX_OWN_BRDF
-    NormalData nd;
-    DecodeFromNormalBuffer(pixel, nd);
-    float3 n = nd.normalWS;
-    LightLoopContext context;
-    context.shadowContext = InitShadowContext();
-    context.shadowValue = 1;
-    context.sampleReflection = 0;
-#ifdef APPLY_FOG_ON_SKY_REFLECTIONS
-    context.positionWS = posInput.positionWS;
-#endif
-    context.contactShadow = 0;
-    context.contactShadowFade = 0.0;
-    float3 blockedLight = 0.0;
-    float3 allLight = 0.0;
-    int engineLamps = min((int)_NFX_LampCount, 128);
-    for (uint i = 0; i < _PunctualLightCount; ++i)
-    {
-        LightData light = _LightDatas[i];
-        float3 toLight = light.positionRWS - posInput.positionWS;
-        if (dot(toLight, toLight) > light.range * light.range)
-            continue;
-        float3 at = GetAbsolutePositionWS(light.positionRWS);
-        float visible = 1.0;
-        [unroll]
-        for (int s = 0; s < 4; ++s)
-        {
-            if (lamp[s] != 255u && (int)lamp[s] < engineLamps)
-            {
-                float3 d = _NFX_LampPos[lamp[s]].xyz - at;
-                if (dot(d, d) < 0.04)
-                    visible = vis[s];
-            }
-        }
-        visible *= NFX_SmokeLampTransmittance(GetAbsolutePositionWS(posInput.positionWS), at);
-        // HDRP's own attenuation, spot cone and cookie (the headlights' beam pattern), the own BSDF on the surface
-        float3 L;
-        float4 distances;
-        GetPunctualLightVectors(posInput.positionWS, light, L, distances);
-        float4 lightColor = EvaluateLight_Punctual(context, posInput, light, L, distances);
-        float3 radiance = lightColor.rgb * lightColor.a;
-        if (all(radiance <= 0.0))
-            continue;
-        float3 brdfDiffuse, brdfSpecular;
-        NFX_OwnBrdf(n, V, L, nd.perceptualRoughness, surface, known, brdfDiffuse, brdfSpecular);
-        float dimDiffuse = _NFX_OwnLamps > 0.5 ? 1.0 : light.diffuseDimmer;
-        float dimSpecular = _NFX_OwnLamps > 0.5 ? 1.0 : light.specularDimmer;
-        float3 lit = radiance * (brdfDiffuse * dimDiffuse + brdfSpecular * dimSpecular);
-        allLight += lit;
-        blockedLight += lit * (1.0 - visible);
-    }
-    float exposure = GetCurrentExposureMultiplier();
-    o.blocked = float4(blockedLight * exposure, 1.0);
-    o.total = float4(allLight * exposure, 1.0);
-    return o;
-}
-#else
     BSDFData bsdfData;
     BuiltinData builtinData;
     DECODE_FROM_GBUFFER(posInput.positionSS, UINT_MAX, bsdfData, builtinData);
@@ -341,6 +233,5 @@ LampsOut FragLamps(Varyings input)
     o.total = float4((allDiffuse * diffuseColor + allSpecular * energy) * exposure, 1.0);
     return o;
 }
-#endif
 
 #endif
