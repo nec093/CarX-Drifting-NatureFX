@@ -46,7 +46,7 @@ NatureFX は次の 3 つの成果物で構成される。3 つの成果物は必
 - C# から DLL へは `CommandBuffer.IssuePluginEvent(AndData)` の描画イベントで呼び出す。イベント番号は、1 キューのテスト、3 トレース（`TraceEventData`、種類は `kTraceKinds` = 22）、5 NRD SIGMA、6 NRD REBLUR 拡散（モード 2 はランプ）、7 REBLUR 鏡面、8 シェーダーの再読み込み、9 DLSS である。
 - 受け渡すデータは、`NrdEventData` 328 バイト、`DlssEventData` 192 バイト（`static_assert` あり）、フレーム定数 `Frame` である。`Frame` は `NFXCommon.hlsli` で定義し、ローカルライトを末尾に置く。`NFX_MAX_LOCAL_LIGHTS` は 128（= `LocalLights.Max`）、`kConstantSlot` は 8448 である。C# 側の書き込み位置と必ず一致させる。
 - トレースバッファの詰め方は、`NfxPack.hlsli` と `NFX_NativeBridge.compute` で同じ式を使う。片方だけを変更してはならない。
-- トレースは DXR 1.1（インラインのコンピュート）のみである。DXR 1.0（パイプライン方式）は 2026-11 に削除した（`Settings.RTBackend` は旧設定の読み込み用に残っているが使用しない）。独自エンジンが使えない環境では NatureFX 全体が動作しない（`NatureFXMod.offReason_`）。動作中に独自エンジンが止まった場合は、NatureFX 全体をそのセッションの間だけ無効にする（`WatchEngine`）。DXR 1.2（SM 6.9、SER / OMM）は、Agility SDK 1.619 の独立したデバイス上で太陽の影のみを試験している（`RTDxr12Sun`、既定オフ）。
+- トレースは DXR 1.1（インラインのコンピュート）のみである。DXR 1.0（パイプライン方式）は 2026-11 に削除した（`Settings.RTBackend` は旧設定の読み込み用に残っているが使用しない）。独自エンジンが使えない環境では NatureFX 全体が動作しない（`NatureFXMod.offReason_`）。動作中に独自エンジンが止まった場合は、NatureFX 全体をそのセッションの間だけ無効にする（`WatchEngine`）。独自エンジンの各部（空、霧、天空光、太陽光、ランプ、照明、パーティクル、ガラス、ポストプロセス、レイトレースの影・環境光・GI・反射）は常に有効で、切り替えはない（`Settings.FixOwnEngine` が毎フレーム固定する）。独自 BSDF と、開発者向けの比較用スイッチ（NRD の信号ごとの切り替え、DLSS の試験、HDRP の TAAU との比較など）は削除した。DXR 1.2（SM 6.9、SER / OMM）は、Agility SDK 1.619 の独立したデバイス上で太陽の影のみを試験している（`RTDxr12Sun`、既定オフ）。
 - DLL が持つ機能は、`NFX_Native_Info` の `features:` 文字列（own-glass lamp-mask dlss dlss-rr sun-map ground-map ground-cover）で示す。C# 側は `NativeEngine.Supports(...)` でこれを確認し、古い DLL でも動作するようにする。
 - GPU が停止した場合は、DLL と同じフォルダに `NFXNative-gpu-hang.txt`（ブレッドクラム）が出力される。NGX のログは `NFX_ngx.log` に出力される。
 

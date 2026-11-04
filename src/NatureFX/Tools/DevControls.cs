@@ -241,28 +241,7 @@ namespace NatureFX.Tools {
 				                     "(tools/build_native.ps1 -ShadersOnly). C# and the engine's C++ still need a restart.");
 			Info(reload, "engine shaders", () => NativeEngine.ShaderStatus);
 
-			const string nrd = "NRD parts";
-			Switch(nrd, "nrd-sun", "Sun shadows (SIGMA)", () => NativeEngine.DevNrdSun, v => NativeEngine.DevNrdSun = v,
-				"Each signal off goes back to NatureFX's own filter, to find which part a problem comes from. Not saved.");
-			Switch(nrd, "nrd-ambient", "Ambient light / GI (REBLUR)", () => NativeEngine.DevNrdAmbient, v => NativeEngine.DevNrdAmbient = v);
-			Switch(nrd, "nrd-lamps", "Lamp shadows (REBLUR)", () => NativeEngine.DevNrdLamps, v => NativeEngine.DevNrdLamps = v);
-			Switch(nrd, "nrd-reflections", "Reflections (REBLUR)", () => NativeEngine.DevNrdReflections, v => NativeEngine.DevNrdReflections = v);
-			Switch(nrd, "nrd-fast-refl", "Reflections: cheaper REBLUR", () => NativeEngine.NrdFastReflections, v => NativeEngine.NrdFastReflections = v,
-				"Without REBLUR's pre-pass blur, stabilization and anti-firefly: compare the paint's reflections and 'nrd: REBLUR reflections'.");
-			Switch(nrd, "nrd-fast-diffuse", "Ambient / GI and lamps: cheaper REBLUR", () => NativeEngine.NrdFastDiffuse, v => NativeEngine.NrdFastDiffuse = v,
-				"The same for the ambient light, GI and the lamp shadows.");
-			Switch(nrd, "car-motion", "Cars' motion vector pass", () => NativeEngine.DevCarMotionVectors, v => NativeEngine.DevCarMotionVectors = v,
-				"NRD and DLSS follow a moving car's pixels by its motion vectors; the game draws cars without them.");
-
-			const string dlss = "DLSS tests";
-			Chips(dlss, "dlss-jitter-sign", "Jitter sign", Dlaa.JitterSigns, () => Dlaa.DevJitterSign, v => Dlaa.DevJitterSign = v,
-				"What DLSS is handed, to find what makes the picture worse than TAA. Not saved.");
-			Chips(dlss, "dlss-motion", "Motion", Dlaa.Motions, () => Dlaa.DevMotion, v => Dlaa.DevMotion = v);
-			Slider(dlss, "dlss-jitter", "Jitter", () => Dlaa.DevJitterScale, v => Dlaa.DevJitterScale = v, 0.0f, 1.0f, 0.01f);
-			Switch(dlss, "dlss-rr-upscale", "Ray Reconstruction with upscaling (test)", () => Dlaa.DevRayReconstructionUpscaling, v => Dlaa.DevRayReconstructionUpscaling = v,
-				"Off for now: it shook the picture and once hung the GPU. NVIDIA's own log goes to kino/mods/NatureFX/NFX_ngx.log.");
-			Switch(dlss, "dlss-taau", "Upscale with HDRP's TAAU instead (test)", () => Dlaa.DevHdrpTaau, v => Dlaa.DevHdrpTaau = v,
-				"The same lower resolution upscaled by HDRP's own TAAU: tells DLSS's doing from the resolution's.");
+			const string dlss = "DLSS";
 			Info(dlss, "now", () => Dlaa.Status);
 
 			const string memory = "Video memory";
@@ -270,21 +249,10 @@ namespace NatureFX.Tools {
 				v => S.TextureStreamingBudget = Mathf.Round(v / 64.0f) * 64.0f, 0.0f, 4096.0f, 64.0f,
 				"Unity's texture mip streaming budget: lower, Unity drops the finest mips of the textures seen smallest.", true);
 			Info(memory, "now", () => TextureBudget.Status);
-			Switch(memory, "force-mips", "Load every texture mip (test: blurred textures)", () => Texture.streamingTextureForceLoadAll, v => Texture.streamingTextureForceLoadAll = v);
 			Info(memory, "own sky: track sky textures out of video memory", () => VolumeOverhaul.UnloadedSky);
 
-			const string tests = "Comparisons";
-			Switch(tests, "gi-lamp-ref", "Lamps in the GI's reference", () => LocalLights.UseLampReference, v => LocalLights.UseLampReference = v,
-				"The GI's clamp of single bright rays also goes by the brightest lamp, so a headlight's bounce shows at night. Off: the old reference. Not saved.");
-			Switch(tests, "fog-lists", "3D fog: light lists per tile", () => NativeEngine.FogLightLists, v => NativeEngine.FogLightLists = v,
-				"The same picture: off only to compare the 3D fog's time. Not saved.");
-			Switch(tests, "transparent-fog", "3D fog on see-through objects", () => TransparentFog.Enabled, v => TransparentFog.Enabled = v,
-				"HDRP's transparent materials (fences on cards, signs, blended foliage) get the own engine's fog in front of them. Off: as before, unfogged. Not saved.");
-			Info(tests, "transparent fog", () => TransparentFog.Status);
-			Switch(tests, "rain-collision", "Rain: drops stopped by the world's colliders", () => Precipitation.WorldCollision, v => Precipitation.WorldCollision = v,
-				"Off: the drops fall through roofs and the car. Turned off by itself when no drop lives with it (see Weather's precipitation state).");
-			Slider(tests, "smoke-size", "Tyre smoke: largest puff on screen (x)", () => TireSmoke.MaxScreenSize, v => TireSmoke.MaxScreenSize = v, 0.2f, 4.0f, 0.1f,
-				"Smaller is cheaper close to the smoke; too small and the smoke around the camera looks cut. Not saved.");
+			const string fog = "Fog";
+			Info(fog, "transparent fog", () => TransparentFog.Status);
 
 			const string tools = "Tools";
 			Button(tools, "dump-shaders", "Dump scene shaders", () => lastDump_ = SceneShaderDumper.Dump(mod.Replacer), () => lastDump_);
@@ -292,7 +260,7 @@ namespace NatureFX.Tools {
 			Switch(tools, "record-variants", "Record shader variants", () => S.RecordShaderVariants, v => {
 				S.RecordShaderVariants = v;
 				ShaderVariantRecorder.Recording = v;
-			}, "Records which NatureFX shader variants the game uses: play maps in DX11 and DX12, day and night, rain and snow, then save.", true);
+			}, "Records which NatureFX shader variants the game uses: play maps (DX12) by day and night, rain and snow, then save.", true);
 			Button(tools, "save-variants", "Save recorded variants", () => ShaderVariantRecorder.Save(),
 				() => ShaderVariantRecorder.LastMessage ?? ShaderVariantRecorder.FilePath);
 			Switch(tools, "material-inventory", "Write the material inventory at each map load", () => S.WriteMaterialInventory, v => S.WriteMaterialInventory = v,

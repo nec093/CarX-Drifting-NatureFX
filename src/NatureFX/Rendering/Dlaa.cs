@@ -48,7 +48,6 @@ namespace NatureFX.Rendering {
 		public static bool DevRayReconstructionUpscaling;
 		// the same lower resolution upscaled by HDRP's own TAAU instead of DLSS: what is DLSS's and what the
 		// resolution's
-		public static bool DevHdrpTaau;
 		public static float DevJitterScale = 1.0f;
 		public static readonly string[] JitterSigns = { "-x -y", "+x +y", "-x +y", "+x -y" };
 		public static readonly string[] Motions = { "Camera + moving objects", "Camera only", "None" };
@@ -131,7 +130,7 @@ namespace NatureFX.Rendering {
 		// this frame HDRP renders at the lower resolution and PostPass upscales (Begin)
 		public static bool Upscaling { get; private set; }
 		// PostPass upscales with DLSS this frame (not HDRP's TAAU, Developer)
-		public static bool UpscalingWithDlss => Upscaling && !DevHdrpTaau;
+		public static bool UpscalingWithDlss => Upscaling;
 
 		public static string Status {
 			get {
@@ -308,13 +307,12 @@ namespace NatureFX.Rendering {
 			                    Time.frameCount - RTShadowPass.ExactFrame <= 2;
 			// the own way only (HDRP's final pass swapped, no TAAU, the camera jittered here): the old way through HDRP's
 			// TAAU pass took HDRP's jitter and is gone; without a final pass to swap, DLAA at the full resolution.
-			// HDRP's own TAAU in place of DLSS stays as a Developer comparison (it does not run DLSS)
-			bool viaFinal = quality > 0 && !DevHdrpTaau && finalShader_ != null && FinalMaterialField != null && SwapFinal(true);
+			bool viaFinal = quality > 0 && finalShader_ != null && FinalMaterialField != null && SwapFinal(true);
 			if (!viaFinal) {
 				SwapFinal(false);
 			}
 			viaFinal_ = viaFinal;
-			Upscaling = quality > 0 && (viaFinal || DevHdrpTaau) && SwapTaa(false)
+			Upscaling = quality > 0 && viaFinal && SwapTaa(false)
 			            && SetDynamicResolution(Shares[quality] * 100.0f, viaFinal ? DynamicResUpscaleFilter.CatmullRom : DynamicResUpscaleFilter.TAAU);
 			if (!Upscaling && viaFinal) {
 				SwapFinal(false);
@@ -343,13 +341,6 @@ namespace NatureFX.Rendering {
 				projection.m12 += jitter_.y * 2.0f / Mathf.Max(1.0f, cam.pixelHeight * share);
 				cam.projectionMatrix = projection;
 				jittered_ = cam;
-				return;
-			}
-			if (Upscaling) {
-				// the Developer comparison: HDRP's own TAAU upscales (no DLSS)
-				data.antialiasing = HDAdditionalCameraData.AntialiasingMode.TemporalAntialiasing;
-				data.allowDynamicResolution = true;
-				data.taaAntiFlicker = originalAntiFlicker_;
 				return;
 			}
 			SetDynamicResolution(-1.0f);
@@ -476,7 +467,7 @@ namespace NatureFX.Rendering {
 			if (!Active || cam != camera_ || matricesFrame_ != Time.frameCount || ranFrame_ == Time.frameCount) {
 				return false;
 			}
-			if ((!Upscaling || viaFinal_) && cam != jittered_ || Upscaling && DevHdrpTaau) {
+			if ((!Upscaling || viaFinal_) && cam != jittered_) {
 				return false;
 			}
 			ranFrame_ = Time.frameCount;
