@@ -1,5 +1,5 @@
-// NFXNative: the ground seen from above around the camera (GroundMap.cs): what the map's ground blend, painted dirt
-// and debris read (NFX_Ground.hlsl). Each cell one ray straight down onto the ground only (instances flagged ground:
+// NFXNative: the ground seen from above around the camera (GroundMap.cs): what the foot of the plants' cards reads
+// (NFX_Ground.hlsl NFX_ApplyFoliageFoot). Each cell one ray straight down onto the ground only (instances flagged ground:
 // terrain, wide flat meshes; NFX_GROUND_MASK), its colour, height, normal and kind (road or not: a second ray onto the
 // road instances, NFX_ROAD_MASK, hitting at the same place). Traced a band of rows at a time: the dispatch covers
 // Width (cells per side) x Height (rows this time) from the first row on.

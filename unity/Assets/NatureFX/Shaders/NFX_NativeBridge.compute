@@ -29,7 +29,6 @@
 #pragma kernel PrepareDlss
 #pragma kernel UnpackDlss
 #pragma kernel PrepareMotion
-#pragma kernel ScatterDetritus
 #pragma kernel SkyFade
 
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
@@ -903,99 +902,6 @@ void PrepareMotion(uint3 id : SV_DispatchThreadID)
     }
     _NFX_PostMotionOut[COORD_TEXTURE2D_X(id.xy)] = motion;
 }
-
-// ------------------------------------------------------------------ debris on the road's edges (Detritus.cs)
-// Over the ground map (GroundMap.cs) every _NFX_DetritusParams.x cells: where the road and the ground meet within 2 m
-// (the ground map's kinds), a few pebbles, leaves and twigs, each its place on the ground, its tilt (the ground's
-// normal), turn and size. Two float4 each: position xyz, type * 10 + size; the ground's normal xyz, the turn.
-StructuredBuffer<float4> _NFX_GroundMap;
-float4 _NFX_GroundMapParams;   // x, y the centre (absolute x, z), z the cell size, w cells per side
-float4 _NFX_DetritusParams;    // x cells between samples, y pieces a sample (density), z max pieces, w seed
-struct DetritusPiece
-{
-    float4 place;
-    float4 tilt;
-};
-AppendStructuredBuffer<DetritusPiece> _NFX_Detritus;
-
-float4 GroundCell(int2 c, out float4 b)
-{
-    int n = (int)_NFX_GroundMapParams.w;
-    c = clamp(c, 0, n - 1);
-    uint i = (uint)(c.y * n + c.x) * 2u;
-    b = _NFX_GroundMap[i + 1u];
-    return _NFX_GroundMap[i];
-}
-
-[numthreads(8, 8, 1)]
-void ScatterDetritus(uint3 id : SV_DispatchThreadID)
-{
-    int n = (int)_NFX_GroundMapParams.w;
-    int step = max((int)_NFX_DetritusParams.x, 1);
-    int2 c = int2(id.xy) * step;
-    if (any(c >= n))
-        return;
-    float4 b0;
-    float4 a0 = GroundCell(c, b0);
-    if (a0.w < -1e8 || b0.w < 0.5)
-        return;
-    // the road's edge within 2 m: a cell of the other kind around
-    int reach = (int)round(2.0 / _NFX_GroundMapParams.z);
-    bool edge = false;
-    [unroll]
-    for (int k = 0; k < 8; ++k)
-    {
-        float angle = k * 0.785398;
-        int2 o = int2(round(float2(cos(angle), sin(angle)) * reach));
-        float4 b;
-        float4 a = GroundCell(c + o, b);
-        if (a.w > -1e8 && b.w > 0.5 && abs(b.w - b0.w) > 0.5)
-            edge = true;
-    }
-    if (!edge)
-        return;
-    float2 seed = float2(c) + _NFX_DetritusParams.w;
-    int pieces = (int)floor(_NFX_DetritusParams.y + IGN(seed));
-    float cell = _NFX_GroundMapParams.z;
-    int nearReach = max((int)round(0.6 / cell), 1);
-    for (int p = 0; p < pieces; ++p)
-    {
-        float2 r = Hash22(uint2(c), (uint)_NFX_DetritusParams.w, p);
-        float2 r2 = Hash22(uint2(c.yx) + 31u, (uint)_NFX_DetritusParams.w + 7u, p);
-        // anywhere around the sample, overlapping the next ones: no grid to see
-        float2 atf = float2(c) + 0.5 + (float2(r.x, r2.y) - 0.5) * step * 1.9;
-        int2 at = clamp(int2(floor(atf)), 0, n - 1);
-        float4 b;
-        float4 a = GroundCell(at, b);
-        if (a.w < -1e8 || b.w < 0.5)
-            continue;
-        // on the road only right at its edge, and few (thrown off the verge); the verge keeps the rest
-        if (b.w > 1.5)
-        {
-            bool atEdge = false;
-            [unroll]
-            for (int q = 0; q < 4; ++q)
-            {
-                int2 o = int2(q == 0 ? nearReach : q == 1 ? -nearReach : 0, q == 2 ? nearReach : q == 3 ? -nearReach : 0);
-                float4 bb;
-                float4 aa = GroundCell(clamp(at + o, 0, n - 1), bb);
-                atEdge = atEdge || (aa.w > -1e8 && bb.w > 0.5 && bb.w < 1.5);
-            }
-            if (!atEdge || r2.x > 0.3)
-                continue;
-        }
-        float2 xz = _NFX_GroundMapParams.xy + (atf - n * 0.5) * cell;
-        float pick = frac(r.x * 7.13 + r.y * 3.71);
-        // pebbles most, then leaves, a few twigs
-        float type = pick < 0.6 ? 0.0 : pick < 0.85 ? 1.0 : 2.0;
-        float size = 0.5 + frac(r.y * 11.7) * 1.0;
-        DetritusPiece piece;
-        piece.place = float4(xz.x, a.w, xz.y, type * 10.0 + size);
-        piece.tilt = float4(b.xyz, frac(r.x * 5.31) * 6.2831853);
-        _NFX_Detritus.Append(piece);
-    }
-}
-
 
 // The sky's hand-over (NativeEngine.TraceSky): params x the texels, y < 0 copies the table into the kept one, else the
 // kept (old) table's share mixed into this frame's

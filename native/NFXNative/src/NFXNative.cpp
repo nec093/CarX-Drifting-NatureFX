@@ -49,7 +49,7 @@
 #include "SkyCube.h"          // g_SkyCube: the engine's sky as HDRP's cube map
 #include "LampMask.h"         // g_LampMask: each lamp's own visibility (roadmap A4)
 #include "SunMap.h"           // g_SunMap: the sun's ray traced shadow map for transparent surfaces
-#include "GroundMap.h"        // g_GroundMap: the ground seen from above (ground blend, painted dirt, debris)
+#include "GroundMap.h"        // g_GroundMap: the ground seen from above (where the plants' cards meet the ground)
 #include "SanitizeIndices.h"  // g_SanitizeIndices: shaders/SanitizeIndices.hlsl as DXIL
 #include "ExtractUvs.h"       // g_ExtractUvs: shaders/ExtractUvs.hlsl as DXIL
 #include "CopyRaw.h"          // g_CopyRaw: shaders/CopyRaw.hlsl as DXIL

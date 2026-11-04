@@ -6,25 +6,22 @@
 float4 _NFX_Wind;           // xyz: world direction, w: strength
 float4 _NFX_WindParams;     // x: gust freq, y: gust strength, z: flutter freq, w: flutter strength
 float  _NFX_WindTime;
-float4 _NFX_Accumulation;   // x: snow, y: leaves, z: dust, w: wetness
+float4 _NFX_Accumulation;   // xyz: unused (0), w: wetness
 float4 _NFX_Interactors[8]; // xyz: absolute world pos, w: radius
 float  _NFX_InteractorCount;
 float  _NFX_FoliageBend;     // wind weight used by the Lit-based foliage shader (no per-vertex weight available)
-float4 _NFX_Weather;        // x: rain intensity (ripples, drips), y: snow depth in metres at full snow, z: surface detail
-float4 _NFX_Road;           // x: wear of the driven ground, y: its height (absolute world), z: 1 = height known
+float4 _NFX_Weather;        // x: rain intensity (ripples, drips), y: unused (0), z: surface detail
 float4 _NFX_TrackParams;    // xy: world origin of the track map, z: 1 / world size, w: enabled
-TEXTURE2D(_NFX_TrackMap);   // r: rubber, g: dry line, b: compression
+TEXTURE2D(_NFX_TrackMap);   // r: unused (0), g: dry line, b: compression (grass pressed down)
 float4 _NFX_Lights;         // x: sun elevation (degrees), y: unscaled time (lamp flicker)
 float  _NFX_VertexColors;    // 1: the map's vertex colours drive wind and exposure ([map] vertexColors, docs/map-authoring.md 2)
 float4 _NFX_Headlights[4];   // the headlights nearest the camera: xyz absolute world position, w intensity (cd; 0 = none)
 float4 _NFX_HeadlightDirs[4]; // xyz direction, w cosine of the half cone angle (retroreflection, NFX_MaterialProfile.hlsl)
 float4 _NFX_FoliageTone;     // x: leaves and grass brought to measured colours (0 the textures' own .. 1; Settings.FoliageColor)
-float4 _NFX_Season;          // x: 0 spring, 1 summer, 2 autumn, 3 winter (blends between; < 0: no seasonal colours)
 float4 _NFX_SunDir;          // xyz: towards the sun (world), w: 1 by day .. 0 at night (back lit leaves)
 float4 _NFX_Puddles[16];     // puddle markers: xyz centre (absolute world), w how full (0 dry .. 1 after long rain)
 float4 _NFX_PuddleSizes[16]; // xyz half size (m), w yaw (radians)
 float  _NFX_PuddleCount;
-float4 _NFX_Ice;             // x: how frozen wet roads are (0 .. 1, black ice)
 
 // Noise from a texture the mod makes at start (ShaderGlobals.CreateNoiseTexture): 1024 texels over 256 units, so it
 // repeats every 256 m. r: value noise (NFX_ValueNoise, the 4 lattice hashes and the smooth blend baked, read with
@@ -63,7 +60,7 @@ float NFX_Fbm(float2 p) {
 	return v;
 }
 
-// Tyre marks / dry line / compression at a world position (0 outside the map or when disabled)
+// Dry line / compression at a world position (0 outside the map or when disabled)
 float4 NFX_Track(float2 xz) {
 	if (_NFX_TrackParams.w <= 0.0) {
 		return 0.0;
