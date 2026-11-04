@@ -7,18 +7,12 @@ using UnityEngine.Rendering.HighDefinition;
 
 namespace NatureFX.Map {
 	// The night background (docs/map-authoring.md 6.5):
-	//   stars: a star field NatureFX paints into the physically based sky's space emission, faded in after dusk and
-	//   hidden by clouds (only when the track uses HDRP's physically based sky);
+	//   stars: the star field the own engine's sky draws (Rendering.AtmospherePass), made here;
 	//   skyline: [night] skyline = <azimuth> lays the lights of a town in the valley far away in that direction (spread,
 	//   distance, height and lights keys), on at night (points only: the glow over a town would need a transparent
 	//   material the game's shaders do not have).
 	public class MapNight {
-		private const float Priority = 9002.0f;
-
 		private GameObject root_;
-		private Volume volume_;
-		private VolumeProfile profile_;
-		private PhysicallyBasedSky sky_;
 		private Cubemap stars_;
 		private ParticleSystem skyline_;
 		private Material lightMaterial_;
@@ -37,23 +31,12 @@ namespace NatureFX.Map {
 			}
 			root_ = new GameObject("NatureFX.Night");
 			Object.DontDestroyOnLoad(root_);
-			profile_ = ScriptableObject.CreateInstance<VolumeProfile>();
-			profile_.name = "NatureFX.Night";
-			sky_ = profile_.Add<PhysicallyBasedSky>();
-			volume_ = root_.AddComponent<Volume>();
-			volume_.isGlobal = true;
-			volume_.priority = Priority;
-			volume_.sharedProfile = profile_;
-			volume_.enabled = false;
 		}
 
 		public void Destroy() {
 			ClearSkyline();
 			if (root_ != null) {
 				Object.Destroy(root_);
-			}
-			if (profile_ != null) {
-				Object.Destroy(profile_);
 			}
 			if (stars_ != null) {
 				Object.Destroy(stars_);
@@ -160,24 +143,13 @@ namespace NatureFX.Map {
 				}
 			}
 
-			// stars: only over HDRP's physically based sky, whose space emission they go into
-			var env = NatureFX.Rendering.VolumeOverhaul.Stack()?.GetComponent<VisualEnvironment>();
-			bool pbs = env != null && env.skyType.value == (int)SkyType.PhysicallyBased;
+			// the star field for the own engine's sky: made once, turning slowly
 			StarsWanted = starsWanted_;
 			StarRotation = new Vector3(-35.0f, Time.unscaledTime * 0.0042f, 0.0f);
 			if (starsWanted_ && StarTexture == null) {
 				StarTexture = Stars();
 			}
-			float stars = starsWanted_ && pbs ? night * (1.0f - Mathf.Clamp01(Weather.Current.Cloud * 1.3f)) : 0.0f;
-			volume_.enabled = stars > 0.001f;
-			if (volume_.enabled) {
-				sky_.spaceEmissionTexture.Override(Stars());
-				// the texture is in nits already (Stars)
-				sky_.spaceEmissionMultiplier.Override(stars);
-				sky_.spaceRotation.Override(new Vector3(-35.0f, Time.unscaledTime * 0.0042f, 0.0f)); // the sky turns, slowly
-			}
-			State = (pbs ? (stars > 0.0f ? $"stars {stars:P0}" : "stars off (day or clouds)") : "no stars (the track's sky is not physically based)") +
-			        (skyline_ != null ? ", skyline" : "");
+			State = (starsWanted_ ? "stars by the own sky" : "no stars (the map)") + (skyline_ != null ? ", skyline" : "");
 		}
 
 		// A star field in physical units (nits), as the eye sees a dark country sky: about 9000 stars down to magnitude

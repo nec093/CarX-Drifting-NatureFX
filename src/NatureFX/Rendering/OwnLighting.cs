@@ -304,10 +304,9 @@ namespace NatureFX.Rendering {
 			Reflections = wanted_ && now - reflectionFrame_ <= Grace;
 		}
 
-		// the sky's light as SH9 (HDRP's packing): the own engine's sky probe while the own sky runs (HDRP's is black
-		// once HDRP draws no sky), else HDRP's
+		// the sky's light as SH9 (HDRP's packing): the own engine's sky probe (dark until its first sky; HDRP's is not used)
 		public static GraphicsBuffer Probe(HDCamera camera) {
-			return wanted_ && NativeEngine.SkyProbe != null ? NativeEngine.SkyProbe : HdrpBindings.AmbientProbe(camera);
+			return NativeEngine.EnsureSkyProbe();
 		}
 
 		public static string Status => !wanted_ ? "off (HDRP's own sky light and reflections)"

@@ -520,88 +520,6 @@ namespace NatureFX.Tools {
 			bigMeshes_ = bigMeshes.Count > 20 ? bigMeshes.GetRange(0, 20) : bigMeshes;
 		}
 
-		// HDRP's own features as the game camera runs them now (its frame settings) and the volume values that decide
-		// whether they do any work: where the own engine replaces one, HDRP running it too is wasted time and memory
-		private static void HdrpState(Section sec) {
-			var cam = Camera.main;
-			if (cam == null) {
-				sec.Add("camera", "none");
-				return;
-			}
-			UnityEngine.Rendering.HighDefinition.FrameSettings fs;
-			try {
-				fs = UnityEngine.Rendering.HighDefinition.HDCamera.GetOrCreate(cam).frameSettings;
-			} catch (Exception e) {
-				sec.Add("frame settings", $"({e.GetType().Name})", -1.0, false, 1);
-				return;
-			}
-			string[] fields = {
-				"Volumetrics", "VolumetricClouds", "AtmosphericScattering", "SSR", "SSAO", "SSGI", "ContactShadows", "ScreenSpaceShadows",
-				"ShadowMaps", "Shadowmask", "ReflectionProbe", "PlanarProbe", "SkyReflection", "Bloom", "LensFlareScreenSpace",
-				"LensFlareDataDriven", "MotionBlur", "DepthOfField", "Antialiasing", "Postprocess", "Decals", "LowResTransparent",
-				"Refraction", "Distortion", "Water", "SubsurfaceScattering", "Transmission", "CustomPass"
-			};
-			foreach (string f in fields) {
-				if (Enum.TryParse(f, out UnityEngine.Rendering.HighDefinition.FrameSettingsField field)) {
-					sec.Add($"camera: {f}", fs.IsEnabled(field) ? "on" : "off");
-				}
-			}
-			var stack = VolumeOverhaul.Stack();
-			if (stack == null) {
-				return;
-			}
-			sec.Try("volume: fog", () => {
-				var fog = stack.GetComponent<UnityEngine.Rendering.HighDefinition.Fog>();
-				return fog == null ? "-" : $"{(fog.enabled.value ? "on" : "off")}, volumetric {(fog.enableVolumetricFog.value ? "on" : "off")}, mean free path {fog.meanFreePath.value:0} m";
-			});
-			sec.Try("volume: volumetric clouds", () => {
-				var c = stack.GetComponent<UnityEngine.Rendering.HighDefinition.VolumetricClouds>();
-				return c == null ? "-" : c.enable.value ? "on" : "off";
-			});
-			sec.Try("volume: bloom", () => {
-				var b = stack.GetComponent<UnityEngine.Rendering.HighDefinition.Bloom>();
-				return b == null ? "-" : $"intensity {b.intensity.value:0.###}";
-			});
-			sec.Try("volume: screen space lens flare", () => {
-				var l = stack.GetComponent<UnityEngine.Rendering.HighDefinition.ScreenSpaceLensFlare>();
-				return l == null ? "-" : $"intensity {l.intensity.value:0.###}";
-			});
-			sec.Try("volume: SSR", () => {
-				var r = stack.GetComponent<UnityEngine.Rendering.HighDefinition.ScreenSpaceReflection>();
-				return r == null ? "-" : r.enabled.value ? "on" : "off";
-			});
-			sec.Try("volume: SSAO", () => {
-				var a = stack.GetComponent<UnityEngine.Rendering.HighDefinition.ScreenSpaceAmbientOcclusion>();
-				return a == null ? "-" : $"intensity {a.intensity.value:0.###}";
-			});
-			sec.Try("volume: SSGI", () => {
-				var g = stack.GetComponent<UnityEngine.Rendering.HighDefinition.GlobalIllumination>();
-				return g == null ? "-" : g.enable.value ? "on" : "off";
-			});
-			sec.Try("volume: contact shadows", () => {
-				var c = stack.GetComponent<UnityEngine.Rendering.HighDefinition.ContactShadows>();
-				return c == null ? "-" : c.enable.value ? "on" : "off";
-			});
-			sec.Try("volume: shadow distance", () => {
-				var sh = stack.GetComponent<UnityEngine.Rendering.HighDefinition.HDShadowSettings>();
-				return sh == null ? "-" : $"{sh.maxShadowDistance.value:0} m, {sh.cascadeShadowSplitCount.value} cascades";
-			});
-			// lights that still have HDRP shadow maps (the cascade atlas is there while a directional one casts)
-			try {
-				var shadowed = new List<string>();
-				foreach (var l in UnityEngine.Object.FindObjectsByType<Light>(FindObjectsInactive.Exclude, FindObjectsSortMode.None)) {
-					if (l.isActiveAndEnabled && l.type == LightType.Directional && l.shadows != LightShadows.None) {
-						shadowed.Add($"{l.name} ({l.intensity:0.##})");
-					}
-				}
-				sec.Add("directional lights with shadow maps", shadowed.Count > 0 ? string.Join(", ", shadowed) : "none", -1.0, false, shadowed.Count > 0 ? 1 : 0);
-			} catch (Exception e) {
-				sec.Add("directional lights with shadow maps", $"({e.GetType().Name})");
-			}
-			sec.Try("quality: texture mip limit", () => $"{QualitySettings.globalTextureMipmapLimit} (0 full size)");
-			sec.Try("quality: mip streaming", () => QualitySettings.streamingMipmapsActive ? $"on, budget {QualitySettings.streamingMipmapsMemoryBudget:0} MB" : "off");
-		}
-
 		// ------------------------------------------------------------------ the snapshot: sections of rows
 		// A row: label, value, a bar's value (bytes or ms; < 0 none), indented, level (0 plain, 1 warning, 2 bad)
 		private sealed class Section {
@@ -927,8 +845,6 @@ namespace NatureFX.Tools {
 			foreach (var (name, bytes) in bigMeshes_) {
 				meshes.Bytes(name, bytes, true);
 			}
-			var hdrp = new Section("hdrp", "HDRP features now (the game camera)");
-			HdrpState(hdrp);
 
 			sections.Add(perf);
 			sections.Add(load);
@@ -943,7 +859,6 @@ namespace NatureFX.Tools {
 			sections.Add(gameTex);
 			sections.Add(switched);
 			sections.Add(meshes);
-			sections.Add(hdrp);
 			sections.Add(scene);
 			sections.Add(features);
 			sections.Add(denoisers);
