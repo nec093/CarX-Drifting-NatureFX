@@ -432,7 +432,7 @@ namespace NatureFX.Rendering {
 			if (root_ == null) {
 				return;
 			}
-			bool active = on && s.NativePost && pass_ != null;
+			bool active = on && pass_ != null;
 			// the own post-processing off: its eye adaptation still runs (only the meter), HDRP's post-processing draws
 			// the picture at the exposure worked out here
 			bool meterOnly = on && !active && pass_ != null && s.ExposureMode == 1;

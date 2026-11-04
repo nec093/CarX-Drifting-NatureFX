@@ -477,15 +477,15 @@ namespace NatureFX.Rendering {
 			// the scene (BLAS, TLAS, their memory, the per frame wind upload) only while a ray traced effect runs; with
 			// all of them off the engine stays idle (RayTracingScene.PushNative uploads it again when one comes on)
 			// the sky, clouds and fog run on the own engine too, whatever the ray traced effects are set to
-			NativeEngine.Enabled = s.Enabled && (EngineLighting.Shadows(s) || EngineLighting.Ambient(s) || s.RTShafts || EngineLighting.Reflections(s) || s.NativeSky);
+			NativeEngine.Enabled = s.Enabled;
 			if (atmosphereTrace_ != null) {
-				bool atmosphere = s.Enabled && s.NativeSky;
+				bool atmosphere = s.Enabled;
 				if (atmosphereTrace_.enabled && !atmosphere) {
 					atmosphereTrace_.Disable(); // a pass that no longer runs cannot clear what it shared
 				}
 				atmosphereTrace_.enabled = atmosphereComposite_.enabled = atmosphere;
-				atmosphereTrace_.NativeSky = s.Enabled && s.NativeSky;
-				atmosphereTrace_.NativeFog = s.NativeFog;
+				atmosphereTrace_.NativeSky = s.Enabled;
+				atmosphereTrace_.NativeFog = true;
 				atmosphereTrace_.Clouds = s.Clouds;
 				atmosphereTrace_.CloudShadows = s.CloudShadows > 0.0f;
 				atmosphereTrace_.Anisotropy = s.RTShaftAnisotropy;
@@ -496,7 +496,7 @@ namespace NatureFX.Rendering {
 			NativeEngine.Dxr12SunPaused = (benchmarkOff_ & RTStage.Dxr12Sun) != 0;
 			NativeEngine.OmmPaused = (benchmarkOff_ & RTStage.Omm) != 0;
 			if (reflection_ != null) {
-				reflection_.enabled = s.Enabled && EngineLighting.Reflections(s);
+				reflection_.enabled = s.Enabled;
 				reflection_.Intensity = s.RTReflectionIntensity;
 				reflection_.RoughnessCutoff = Mathf.Clamp(s.RTReflectionRoughness, 0.05f, 1.0f);
 				reflection_.MaxDistance = Mathf.Max(5.0f, s.RTReflectionDistance);
@@ -506,16 +506,16 @@ namespace NatureFX.Rendering {
 				reflection_.WetStreaks = s.RTWetReflections;
 			}
 			if (glass_ != null) {
-				glass_.enabled = s.Enabled && EngineLighting.Reflections(s) && EngineLighting.GlassReflections(s);
+				glass_.enabled = s.Enabled;
 				glass_.Refraction = Mathf.Clamp01(s.RTGlassRefraction);
 				glass_.Intensity = s.RTReflectionIntensity;
 				glass_.MaxDistance = Mathf.Max(5.0f, s.RTReflectionDistance);
 			}
 			// roadmap E: the own engine draws the glass whole while its pass runs (HDRP's glass hidden meanwhile)
-			OwnGlass.Update(glass_ != null && glass_.enabled && s.NativeGlass && NativeEngine.Supports("own-glass") && Time.frameCount - glass_.LastRun < 30);
+			OwnGlass.Update(glass_ != null && glass_.enabled && NativeEngine.Supports("own-glass") && Time.frameCount - glass_.LastRun < 30);
 			NativeEngine.OwnGlass = OwnGlass.Active;
 			if (shadows_ != null) {
-				shadows_.enabled = s.Enabled && (EngineLighting.Shadows(s) || EngineLighting.Ambient(s) || s.RTShafts);
+				shadows_.enabled = s.Enabled;
 				shadows_.NativeSky = false; // AtmospherePass
 				if (!shadows_.enabled) {
 					CloudController.NativeShadowsActive = false; // the pass that sets it no longer runs
@@ -524,14 +524,14 @@ namespace NatureFX.Rendering {
 				shadows_.SkySunLux = SunController.TopOfAtmosphereLux;
 				// haze: more aerosols as it clouds over and rains (the air near the ground turns milky)
 				shadows_.SkyAerosols = 1.0f + 2.0f * Nature.Weather.Current.Cloud + 2.0f * Nature.Weather.Current.Rain;
-				shadows_.TraceShadows = EngineLighting.Shadows(s);
-				shadows_.TraceAO = EngineLighting.Ambient(s);
+				shadows_.TraceShadows = true;
+				shadows_.TraceAO = true;
 				shadows_.AOStrength = s.RTAOStrength;
 				shadows_.AODistance = s.RTAODistance;
 				shadows_.SkyOcclusionDistance = s.RTSkyOcclusion;
 				shadows_.ContactShadows = s.RTContactShadows;
-				shadows_.Bounce = s.RTGIBounce || s.NativeLighting;
-				shadows_.MultiBounceGI = s.RTGIMultiBounce || s.NativeLighting || PhotoMode.Active;
+				shadows_.Bounce = true;
+				shadows_.MultiBounceGI = true;
 				shadows_.GIDistance = Mathf.Max(1.0f, s.RTGIDistance);
 				shadows_.GIIntensity = Mathf.Max(0.0f, s.RTGIIntensity);
 				shadows_.Strength = s.RTShadowStrength;
@@ -544,8 +544,8 @@ namespace NatureFX.Rendering {
 				shadows_.GroundBlend = NatureFX.Map.MapDefaults.Value(NatureFX.Map.MapKey.GroundBlend, 0.35f);
 				shadows_.LeafTranslucency = s.RTLeafTranslucency;
 				shadows_.Shafts = s.RTShafts;
-				lights_.Enabled = EngineLighting.LocalLights(s);
-				LampShadows = EngineLighting.LampShadows(s);
+				lights_.Enabled = true;
+				LampShadows = true;
 				lights_.Emissive = s.RTEmissiveLights;
 				NativeEngine.GlassShadows = s.RTGlassShadows;
 				// photo mode: half resolution traces at least (the denoisers stay: PhotoMode averages their frames)

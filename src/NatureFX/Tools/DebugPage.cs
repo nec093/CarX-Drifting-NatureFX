@@ -853,8 +853,6 @@ namespace NatureFX.Tools {
 			sky.Try("clouds", () => mod.Clouds.State);
 			sky.Try("night", () => mod.Night.State);
 			sky.Try("game day / night", () => mod.GameNight.Status);
-			sky.Try("volumetric fog (HDRP)", () => mod.CameraFog.State);
-			sky.Try("volumetric clouds (HDRP)", () => mod.CameraClouds.State);
 
 			var light = new Section("lighting", "Shadows, reflections, post");
 			light.Try("shadows", () => rt.ShadowStatus);

@@ -98,7 +98,6 @@ namespace NatureFX.Tools {
 			SettingSwitch("Developer / Debug page", "DebugPage", "Debug page", () => S.DebugPage, v => S.DebugPage = v, () => D.DebugPage);
 			SettingSwitch("Map / Map profile", "UseMapProfile", "Use map profiles", () => S.UseMapProfile, v => S.UseMapProfile = v, () => D.UseMapProfile);
 			SettingSwitch("Map / Map profile", "ShowMarkers", "Show markers", () => S.ShowMarkers, v => S.ShowMarkers = v, () => D.ShowMarkers);
-			SettingSwitch("Map / Lights and reflections", "MapProbes", "Map reflection probes", () => S.MapProbes, v => S.MapProbes = v, () => D.MapProbes);
 			Setting("Map / Grass and forest", "GrassDensity", "3D grass density", () => S.GrassDensity, v => S.GrassDensity = v, () => D.GrassDensity, 0.0f, 2.0f, 0.01f);
 			Setting("Map / Grass and forest", "GrassDistance", "3D grass distance", () => S.GrassDistance, v => S.GrassDistance = v, () => D.GrassDistance, 10.0f, 120.0f, 0.55f);
 			Setting("Map / Grass and forest", "ShrubDensity", "Thicket density", () => S.ShrubDensity, v => S.ShrubDensity = v, () => D.ShrubDensity, 0.0f, 2.0f, 0.01f);

@@ -165,13 +165,13 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			volume_.enabled = true;
-			ssr_.active = EngineLighting.Reflections(s);
+			ssr_.active = true;
 			ssr_.enabled.Override(false);
-			gi_.active = EngineLighting.Ambient(s);
+			gi_.active = true;
 			gi_.enable.Override(false);
-			ao_.active = EngineLighting.Ambient(s);
+			ao_.active = true;
 			ao_.intensity.Override(0.0f);
-			contact_.active = EngineLighting.Shadows(s);
+			contact_.active = true;
 			contact_.enable.Override(false);
 
 			tonemapping_.active = s.AcesTonemapping;

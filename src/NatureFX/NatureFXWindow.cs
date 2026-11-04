@@ -1092,8 +1092,6 @@ namespace NatureFX {
 			// --- light
 			Widgets.BeginCard("Lights and reflections", "Light markers switch on at dusk or night (Sun > time of day to check).");
 			Widgets.Info(mod_.Lights.Count > 0 ? $"Lights:  {mod_.Lights.Describe()}" : "Lights:  no light markers");
-			Widgets.Switch("Map reflection probes", S.MapProbes, v => S.MapProbes = v, "Reflection probes at the map's markers and along the road (redrawn when the time or the weather changes).");
-			Widgets.Info(mod_.Probes.Count > 0 ? $"Reflection probes:  {mod_.Probes.Describe()}" : "Reflection probes:  none");
 			Widgets.EndCard();
 
 			// --- plants
@@ -1120,8 +1118,6 @@ namespace NatureFX {
 			Widgets.BeginCard("Effects", "Decals, puddles and water, local fog and floating particles. Each shows what it is doing or what it waits for.");
 			Widgets.Switch("Map effects", S.MapEffects, v => S.MapEffects = v);
 			Widgets.Info($"Decals {mod_.Decals.Count}  ·  puddles {mod_.Water.PuddleCount} (water {mod_.Water.Level:P0})  ·  water surfaces {mod_.Water.SurfaceCount}");
-			Widgets.Info($"Volumetric fog:  {mod_.CameraFog.State}");
-			Widgets.Info($"Volumetric clouds:  {mod_.CameraClouds.State}");
 			var fog = mod_.Volumes.Status(camPos);
 			if (fog.Count > 0) {
 				Widgets.Info("Local fog:");

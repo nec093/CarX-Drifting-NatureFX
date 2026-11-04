@@ -188,7 +188,7 @@ namespace NatureFX.Tools {
 			// fixed on (Settings.FixOwnEngine), or HDRP's only
 			"NativeSky", "OwnSkyLighting", "OwnSunLight", "OwnLampLight", "OwnBrdf", "OwnTransparentLight", "NativeFog", "NativeLighting",
 			"NativeParticles", "NativeGlass", "NativePost", "RTShadows", "RTAO", "RTReflections", "RTLocalLights", "RTLampShadows",
-			"RTGlassReflections", "RTGIBounce", "RTGIMultiBounce", "LightShafts", "RealisticShadows", "SunTemperature",
+			"RTGlassReflections", "RTGIBounce", "RTGIMultiBounce", "LightShafts", "RealisticShadows", "SunTemperature", "MapProbes",
 		};
 
 		private static void BuildSettings() {

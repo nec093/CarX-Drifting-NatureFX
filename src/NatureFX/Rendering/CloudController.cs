@@ -88,7 +88,7 @@ namespace NatureFX.Rendering {
 			}
 			var w = Weather.Current;
 			changeTime_ = s.WeatherChangeTime > 0.0f ? s.WeatherChangeTime : 30.0f;
-			if (on && s.Clouds && s.NativeSky) {
+			if (on && s.Clouds) {
 				volume_.enabled = false;
 				UpdateNative(w);
 				return;

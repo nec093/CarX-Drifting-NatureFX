@@ -67,16 +67,15 @@ namespace NatureFX.Map {
 			profile_ = null;
 		}
 
-		// volumetric: the map's local fog shows (MapVolumes), which HDRP draws only with volumetric fog on.
-		// haze (0..1, F8 Distant haze): without map fog, a thin layer of air that blues the far mountains (aerial
-		// perspective) without touching the near road.
-		public void Update(bool on, Vector3 camera, bool volumetric, float haze, bool native = false) {
+		// The own engine draws the fog (NativeParams): the map's fog, else the haze (0..1, F8 Distant haze: a thin layer
+		// of air that blues the far mountains without touching the near road), else the track's own, else the rain's.
+		// This volume only switches HDRP's own fog off; the track's fog is read once without it (resampleFrames_).
+		public void Update(bool on, Vector3 camera, bool volumetric, float haze, bool native = true) {
 			if (volume_ == null) {
 				return;
 			}
 			float distance = MapDefaults.Value(MapKey.FogDistance, 0.0f);
 			float weight = on && distance > 0.0f ? MapDefaults.FogWeight : 0.0f;
-			volumetric &= on;
 			haze = on ? Mathf.Clamp01(haze) : 0.0f;
 			if (resampleFrames_ > 0) {
 				// a new map: this volume off for a rendered frame, so the camera's stack shows the track's own fog
@@ -94,75 +93,13 @@ namespace NatureFX.Map {
 				gameFogOn_ = stack != null && stack.enabled.value;
 				gameFogDistance_ = gameFogOn_ ? stack.meanFreePath.value : float.PositiveInfinity;
 			}
-			native &= on;
-			volume_.enabled = weight > 0.0f || volumetric || haze > 0.0f || native;
-			if (!native) {
+			volume_.enabled = on;
+			if (!on) {
 				NativeParams = Vector4.zero;
-			}
-			if (volumetric) {
-				// local fog and smoke further away than HDRP's default 64 m of volumetric fog show too
-				fog_.enableVolumetricFog.Override(true);
-				fog_.depthExtent.Override(150.0f);
-				// spread over 150 m the fog's light came out in blocks (lamp cones, headlight beams): HDRP's high
-				// quality tier, more of its slices close to the camera, and its denoising in space and time
-				fog_.quality.Override(2);
-				fog_.sliceDistributionUniformity.Override(0.55f);
-				fog_.denoisingMode.Override(FogDenoisingMode.Both);
-			} else {
-				fog_.enableVolumetricFog.overrideState = false;
-				fog_.depthExtent.overrideState = false;
-				fog_.quality.overrideState = false;
-				fog_.sliceDistributionUniformity.overrideState = false;
-				fog_.denoisingMode.overrideState = false;
-			}
-			if (!volume_.enabled) {
 				baseHeight_ = float.NaN;
 				return;
 			}
-			if (native) {
-				UpdateNative(camera, weight, distance, haze);
-				return;
-			}
-			fog_.enabled.Override(true);
-			// follows the camera's height slowly, so jumps and crests do not pump the fog
-			baseHeight_ = float.IsNaN(baseHeight_) ? camera.y : Mathf.Lerp(baseHeight_, camera.y, 1.0f - Mathf.Exp(-Time.unscaledDeltaTime * 0.5f));
-			float scale = Weather.Current.FogScale > 0.0f ? Weather.Current.FogScale : 1.0f;
-
-			if (weight > 0.0f) {
-				// the map's fog, faded in by its zones
-				volume_.weight = weight;
-				float height = MapDefaults.Value(MapKey.FogHeight, DefaultHeight);
-				fog_.meanFreePath.Override(Mathf.Max(1.0f, distance * scale));
-				fog_.baseHeight.Override(baseHeight_ - 5.0f);
-				fog_.maximumHeight.Override(baseHeight_ - 5.0f + height);
-				fog_.maxFogDistance.Override(Mathf.Max(5000.0f, distance * 4.0f));
-			} else if (haze > 0.0f) {
-				// a long attenuation distance through a deep layer: the road stays clear, kilometres away turn blue.
-				// A track with denser fog of its own keeps it (the haze replaced a 300 m fog with a 25 km one), and
-				// the weather thickens that too
-				volume_.weight = 1.0f;
-				float hazeDistance = Mathf.Lerp(40000.0f, 3500.0f, haze);
-				fog_.meanFreePath.Override(Mathf.Max(1.0f, Mathf.Min(hazeDistance, gameFogDistance_) * scale));
-				fog_.baseHeight.Override(baseHeight_ - 300.0f);
-				fog_.maximumHeight.Override(baseHeight_ + 1500.0f);
-				fog_.maxFogDistance.Override(20000.0f);
-			} else {
-				// only volumetric fog for the local volumes: the track's fog as it was, none if it had none
-				volume_.weight = 1.0f;
-				fog_.baseHeight.overrideState = false;
-				fog_.maximumHeight.overrideState = false;
-				fog_.maxFogDistance.overrideState = false;
-				if (RainExtinction > 0.0f) {
-					fog_.meanFreePath.Override(1.0f / RainExtinction);
-					fog_.baseHeight.Override(baseHeight_ - 5.0f);
-					fog_.maximumHeight.Override(baseHeight_ + 600.0f);
-					fog_.maxFogDistance.Override(5000.0f);
-				} else if (gameFogOn_) {
-					fog_.meanFreePath.overrideState = false;
-				} else {
-					fog_.meanFreePath.Override(100000.0f);
-				}
-			}
+			UpdateNative(camera, weight, distance, haze);
 		}
 
 		// Rain's own haze: falling drops and the mist around them. Rain rate (mm/h) from the weather's rain, 1 to 50; the
@@ -179,7 +116,7 @@ namespace NatureFX.Map {
 			}
 		}
 
-		// the same fog as below, for the own engine: the map's fog, else the haze, else the track's own
+		// the fog for the own engine: the map's fog, else the haze, else the track's own
 		private void UpdateNative(Vector3 camera, float weight, float distance, float haze) {
 			baseHeight_ = float.IsNaN(baseHeight_) ? camera.y : Mathf.Lerp(baseHeight_, camera.y, 1.0f - Mathf.Exp(-Time.unscaledDeltaTime * 0.5f));
 			float scale = Weather.Current.FogScale > 0.0f ? Weather.Current.FogScale : 1.0f;

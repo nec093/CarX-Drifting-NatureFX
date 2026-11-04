@@ -62,13 +62,9 @@ namespace NatureFX.Rendering {
 			if (sun_ == null) {
 				return;
 			}
-			moonShadowsTraced_ = EngineLighting.Shadows(s);
-			if (hdSun_ != null && s.Enabled && s.RealisticShadows) {
-				// soft shadow penumbra grows with distance from the caster (PCSS, High shadow filtering only)
-				// overcast sky: the whole sky is the light source, so shadows get very soft
-				hdSun_.angularDiameter = s.SunSize + Weather.Current.Cloud * 12.0f;
-				sizeApplied_ = true;
-			} else if (sizeApplied_ && hdSun_ != null) {
+			moonShadowsTraced_ = true;
+			// (HDRP's soft shadow maps are gone: the traced shadows have their own softness)
+			if (sizeApplied_ && hdSun_ != null) {
 				hdSun_.angularDiameter = original_.AngularDiameter;
 				sizeApplied_ = false;
 			}
@@ -118,9 +114,7 @@ namespace NatureFX.Rendering {
 			// below the horizon the sun gives no light (a directional light ignores the horizon and lit the scene from
 			// under the ground at night)
 			sun_.intensity = original_.Intensity * physical_ * s.SunIntensityScale * daylight * cloudDim;
-			sun_.useColorTemperature = true;
-			sun_.colorTemperature = Mathf.Lerp(2200.0f, s.SunTemperature, Mathf.InverseLerp(0.0f, 30.0f, elevation));
-			if (s.NativeSky) {
+			{
 				// phase 3: the sun light as the own engine's atmosphere lets it through (Sky.hlsli): the same air that
 				// colours the sky reddens and dims the sun, instead of a colour temperature by elevation
 				var cam = Camera.main;
@@ -131,8 +125,6 @@ namespace NatureFX.Rendering {
 				sun_.useColorTemperature = false;
 				sun_.color = peak > 1e-6f ? new Color(t.x / peak, t.y / peak, t.z / peak) : Color.black;
 				sun_.intensity = TopOfAtmosphereLux * peak * disc * cloudDim;
-			} else {
-				sun_.color = original_.Color;
 			}
 
 			// Night: a separate moon light high on the opposite side. The sun stays below the horizon so the
@@ -140,13 +132,12 @@ namespace NatureFX.Rendering {
 			float night = s.Moonlight ? Mathf.InverseLerp(-2.0f, -12.0f, elevation) : 0.0f;
 			// moonlight in the air is faint: the eye's adaptation would otherwise turn a night sky into a bright haze
 			// the moon's strength: physical at 1, brighter for those who want to see more at night
-			UpdateMoon(night, Mathf.Clamp(-elevation * 0.8f, 20.0f, 65.0f), heading + 180.0f, s.SunIntensityScale * cloudDim * Mathf.Clamp(s.MoonBrightness, 0.001f, 0.1f), s.LightShafts * 0.15f);
+			UpdateMoon(night, Mathf.Clamp(-elevation * 0.8f, 20.0f, 65.0f), heading + 180.0f, s.SunIntensityScale * cloudDim * Mathf.Clamp(s.MoonBrightness, 0.001f, 0.1f), 0.0f);
 			SetSunShadows(night < 0.5f);
 
 			if (hdSun_ != null) {
-				// a sun below the horizon lights no air: volumetric fog does not know the horizon, and the faint light
-				// the sun keeps at night lit the whole sky white once the camera's volumetrics were on
-				hdSun_.volumetricDimmer = s.LightShafts * Mathf.SmoothStep(0.0f, 1.0f, Mathf.InverseLerp(-2.0f, 2.0f, elevation));
+				// HDRP's volumetric fog is off: its sun lights none
+				hdSun_.volumetricDimmer = 0.0f;
 			}
 			applied_ = true;
 			UpdateSkyLight(cloud);

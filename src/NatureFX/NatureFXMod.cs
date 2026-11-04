@@ -350,26 +350,19 @@ namespace NatureFX {
 			MapWeather.Update(s, Zones, camPos, s.UseMapProfile && Map.Loaded);
 			WeatherCtl.Update(s);
 			Seasons.Update(s, WeatherCtl.ActivePreset, s.UseMapProfile && Map.Loaded ? MapWeather.Season : null, s.Enabled);
-			// roadmap C: with the own engine's fog the local fog and the tyre smoke are its boxes (AtmospherePass), not
-			// HDRP's volumetric fog
-			bool nativeFog = s.NativeFog && s.NativeSky;
-			bool hdrpVolumetric = !nativeFog && (Volumes.AnyVisible || Smoke.AnyVisible);
+			// the own engine draws the fog: the local fog and the tyre smoke are its boxes (AtmospherePass)
 			NatureFX.Tools.CpuTimings.Section("fog and clouds");
-			Fog.Update(s.Enabled, camPos, hdrpVolumetric, s.AerialHaze, nativeFog);
-			CameraFog.Update(cam, s.Enabled && hdrpVolumetric);
-			CameraClouds.Update(cam, s.Enabled && s.Clouds && !s.NativeSky);
-			OwnLighting.Update(s.Enabled && s.NativeSky && s.OwnSkyLighting && NativeEngine.Active, s.Enabled && s.OwnSunLight && NativeEngine.Active,
-				s.Enabled && s.OwnLampLight && NativeEngine.Active);
+			Fog.Update(s.Enabled, camPos, false, s.AerialHaze, true);
+			bool engine = s.Enabled && NativeEngine.Active;
+			OwnLighting.Update(engine, engine, engine);
 			OwnLighting.SkyStrength = Mathf.Max(0.0f, s.SkyLightStrength);
 			NativeEngine.SkyLightSaturation = s.SkyLightSaturation;
-			OwnLighting.TransparentsWanted = s.Enabled && s.OwnTransparentLight;
-			bool own = s.Enabled && s.OwnSkyLighting && NativeEngine.Active;
-			// HDRP's fog and its volumetric light off whenever the own engine draws the fog (not only with the own sky
-			// light: with it off HDRP's volumetric fog still lit a haze round the headlights)
-			bool ownFog = s.Enabled && NativeEngine.Active && nativeFog;
-			HdrpFogOff.Update(cam, ownFog && !hdrpVolumetric);
-			HdrpCloudsOff.Update(cam, own && s.NativeSky);
-			HdrpScatterOff.Update(cam, ownFog);
+			OwnLighting.TransparentsWanted = s.Enabled;
+			bool own = engine;
+			// HDRP's fog, its volumetric light, clouds and scattering off: the own engine draws them
+			HdrpFogOff.Update(cam, own);
+			HdrpCloudsOff.Update(cam, own);
+			HdrpScatterOff.Update(cam, own);
 			HdrpSsrOff.Update(cam, OwnLighting.Reflections);
 			HdrpProbesOff.Update(cam, OwnLighting.Reflections);
 			HdrpPlanarOff.Update(cam, OwnLighting.Reflections);
@@ -385,7 +378,7 @@ namespace NatureFX {
 			foreach (var off in HdrpPostOff) {
 				off.Update(cam, s.Enabled && PostProcess.Active);
 			}
-			Volume.UpdateSky(Sun.Sun, s.Enabled && s.SunOverride, s.Enabled && s.NativeSky);
+			Volume.UpdateSky(Sun.Sun, s.Enabled && s.SunOverride, s.Enabled);
 			Weather.UpdateIce(s.Enabled && s.Accumulation, Sun.Sun);
 			PhotoMode.Update(cam);
 			Clouds.Update(s.Enabled, s, Sun.Sun, s.UseMapProfile && Map.Loaded && MapValues.TryFloat(Map.Get("clouds", "sea"), out float sea) ? sea : float.NaN);
@@ -426,12 +419,10 @@ namespace NatureFX {
 			Headlights.Update(s, s.Enabled && s.UseMapProfile);
 			bool mapOn = s.Enabled && s.UseMapProfile;
 			Lights.Update(mapOn, Sun.Sun, camPos, s.HeadlightShafts, RT.LampShadowsTraced);
-			// with the own engine's sky HDRP's sky reflection is that sky (A3) and the traced reflections show what is near:
-			// the probes, rendered by HDRP without the engine's sky, fog and light, kept a stale day sky into the night
+			// HDRP's sky reflection is the own sky (A3) and the traced reflections show what is near: the track's own
+			// probes, rendered once at load under whatever sky HDRP had then, are off (the map's probes are not made)
 			NatureFX.Tools.CpuTimings.Section("probes");
-			Probes.Update(mapOn && s.MapProbes && !s.NativeSky, Sun.Sun, camPos);
-			// and the track's own probes, rendered once at load under whatever sky HDRP had then
-			TrackProbes.Update(s.Enabled && s.NativeSky);
+			TrackProbes.Update(s.Enabled);
 			// the 3D grass belongs to the shader rebuild (it draws with NatureFX/Foliage), the rest to map effects
 			NatureFX.Tools.CpuTimings.Section("grass, forest, shrubs");
 			Grass.Update(mapOn && rebuiltSurface, s, camPos);
@@ -470,13 +461,13 @@ namespace NatureFX {
 			Lens.Update(s.Enabled, s, Sun.Sun, camPos);
 			Post.Update(s.Enabled, s);
 			NatureFX.Tools.CpuTimings.Section("game particles, painted shadows, finish, ray tracing");
-			GameFx.Update(s.Enabled && s.NativeParticles);
+			GameFx.Update(s.Enabled);
 			MaterialProfiles.UpdateGlobals(Sun.Sun);
 			MaterialProfiles.CalibrateAlbedo = s.Enabled && s.CalibrateAlbedo;
 			MaterialLooks.UpdateCalibration();
 			RT.UpdateRayTracing(Sun.Sun);
 			// the game's painted shadow planes go while the ray traced sun shadows run
-			PaintedShadows.Update(s.Enabled && Rendering.EngineLighting.Shadows(s) && s.RTHideFakeShadows && RT.SunShadowsRunning);
+			PaintedShadows.Update(s.Enabled && s.RTHideFakeShadows && RT.SunShadowsRunning);
 			Finish.ChromeRims = s.CarChromeRims;
 			// the ray tracing scene takes the rims' new finish (renderer blocks are read when instances are added)
 			if (Finish.Update(s.Enabled) && Time.unscaledTime >= nextFinishRebuild_) {
@@ -599,7 +590,7 @@ namespace NatureFX {
 			Shader.SetGlobalFloat(VertexColorsId, Map.Loaded && Map.VertexColors ? 1.0f : 0.0f);
 			Zones.Load(Map, Markers);
 			Lights.Load(Markers);
-			Probes.Load(Map, Markers);
+			// (the map's reflection probes are not made: the traced reflections and the own sky stand in for them)
 			Grass.Load(Map, Markers, Bundle, Settings.Data.GrassDensity);
 			Decals.Load(Markers);
 			Paint.Load(Map);
