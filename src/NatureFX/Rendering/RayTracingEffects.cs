@@ -50,6 +50,7 @@ namespace NatureFX.Rendering {
 		public bool ShadowDebugView;                // F8: show only the traced shadows (not saved)
 		public bool GIDebugView;                    // F8: show only the ambient light / GI (not saved)
 		public bool ExactSunDebugView;              // F8: show the exact sun light the shadows take away (not saved)
+		public bool AlbedoDebugView;                // debug page: the albedo check (not saved)
 
 		public bool RayTracingSupported => dxrScene_ != null;
 		public int RayTracingInstances => dxrScene_?.InstanceCount ?? 0;
@@ -560,6 +561,7 @@ namespace NatureFX.Rendering {
 				shadows_.DebugView = ShadowDebugView;
 				shadows_.DebugGI = GIDebugView;
 				shadows_.DebugExactSun = ExactSunDebugView;
+				shadows_.DebugAlbedo = AlbedoDebugView;
 			}
 
 			if (reflection_ != null && (benchmarkOff_ & RTStage.Reflections) != 0) {

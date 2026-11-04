@@ -186,6 +186,7 @@ namespace NatureFX.Rendering {
 		public bool DebugView; // grey image of the traced shadows alone
 		public bool DebugGI;   // the ambient light / GI alone, relative to HDRP's (mid grey: unchanged)
 		public bool DebugExactSun; // the exact sun light alone (dark magenta: not known, the estimate is used)
+		public bool DebugAlbedo;   // the surfaces' albedo against real materials' (red too bright, blue too dark, magenta too vivid)
 
 		public string Status { get; private set; } = "not run yet";
 
@@ -673,7 +674,7 @@ namespace NatureFX.Rendering {
 			props_.SetTexture(ShaftTex, shaftResult ?? color_);
 			props_.SetVector(LocalSize, ambientSize);
 			props_.SetTexture(LocalTex, localResult ?? color_);
-			props_.SetVector(ShadowCompose, new Vector4(TraceShadows ? Strength : 0.0f, DebugExactSun ? 3.0f : DebugGI ? 2.0f : DebugView ? 1.0f : 0.0f, blend, TraceAO ? AOStrength : 0.0f));
+			props_.SetVector(ShadowCompose, new Vector4(TraceShadows ? Strength : 0.0f, DebugAlbedo ? 4.0f : DebugExactSun ? 3.0f : DebugGI ? 2.0f : DebugView ? 1.0f : 0.0f, blend, TraceAO ? AOStrength : 0.0f));
 			props_.SetTexture(ColorTex, color_);
 			props_.SetTexture(SunTex, sunResult ?? color_);
 			props_.SetTexture(AmbientTex, ambientResult ?? color_);

@@ -367,6 +367,8 @@ namespace NatureFX {
 			NatureFX.Tools.CpuTimings.Section("game particles, painted shadows, finish, ray tracing");
 			GameFx.Update(s.Enabled && s.NativeParticles);
 			MaterialProfiles.UpdateGlobals(Sun.Sun);
+			MaterialProfiles.CalibrateAlbedo = s.Enabled && s.CalibrateAlbedo;
+			MaterialLooks.UpdateCalibration();
 			RT.UpdateRayTracing(Sun.Sun);
 			// the game's painted shadow planes go while the ray traced sun shadows run
 			PaintedShadows.Update(s.Enabled && Rendering.EngineLighting.Shadows(s) && s.RTHideFakeShadows && RT.SunShadowsRunning);

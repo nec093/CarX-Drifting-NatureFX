@@ -110,6 +110,7 @@ namespace NatureFX.Tools {
 			Setting("Ambient light & GI / Ray traced ambient light", "RTContactShadows", "Contact shadows", () => S.RTContactShadows, v => S.RTContactShadows = v, () => D.RTContactShadows, 0.0f, 1.0f, 0.005f, () => (NatureFX.Rendering.EngineLighting.Ambient(S)));
 			Setting("Shader rebuild / Shader rebuild", "AntiTiling", "Anti-tiling", () => S.AntiTiling, v => S.AntiTiling = v, () => D.AntiTiling, 0.0f, 1.0f, 0.005f, () => (S.ReplaceShaders));
 			SettingSwitch("Shader rebuild / Shader rebuild", "WetGameMaterials", "Wet look on unreplaced HDRP/Lit", () => S.WetGameMaterials, v => S.WetGameMaterials = v, () => D.WetGameMaterials);
+			SettingSwitch("Shader rebuild / Shader rebuild", "CalibrateAlbedo", "Real albedo for the map's materials", () => S.CalibrateAlbedo, v => S.CalibrateAlbedo = v, () => D.CalibrateAlbedo);
 			SettingChips("Ray tracing / Ray tracing engine", "RTBackend", "Ray tracing engine", new[] { "DXR 1.0", "DXR 1.1" }, () => S.RTBackend, v => S.RTBackend = v, () => D.RTBackend);
 			SettingChips("Ray tracing / Ray tracing engine", "RTTraceScale", "Ray tracing engine", new[] { "Half resolution", "Quarter (upscaled)" }, () => S.RTTraceScale, v => S.RTTraceScale = v, () => D.RTTraceScale);
 			SettingChips("Ray tracing / Ray tracing engine", "RTDenoiser", "Ray tracing engine", new[] { "Simple blur", "Variance guided", "NVIDIA NRD" }, () => S.RTDenoiser, v => S.RTDenoiser = v, () => D.RTDenoiser);

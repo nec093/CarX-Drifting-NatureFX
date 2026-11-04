@@ -1033,6 +1033,9 @@ namespace NatureFX {
 			Widgets.EndDependent();
 			Other(Widgets.Switch("Wet look on unreplaced HDRP/Lit", S.WetGameMaterials, v => S.WetGameMaterials = v,
 				"Materials left with the game's shaders still get wet in the rain."));
+			Other(Widgets.Switch("Real albedo for the map's materials", S.CalibrateAlbedo, v => S.CalibrateAlbedo = v,
+				"The materials the map's profile names (asphalt, concrete, stone, wood, soil) brought on average to the brightness the real material has; the texture's own detail kept. albedo= in [materials] sets a material's own."));
+			Widgets.Info($"Albedo: {mod_.MaterialLooks.AlbedoStatus}");
 			var replacer = mod_.Replacer;
 			Widgets.Info($"Replaced: {replacer.ReplacedCount} materials");
 			foreach (var kv in replacer.Deferred) {

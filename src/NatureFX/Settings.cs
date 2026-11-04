@@ -29,6 +29,7 @@ namespace NatureFX {
 		public float Dust { get; set; }
 		public float Wetness { get; set; }
 		public bool WetGameMaterials { get; set; }
+		public bool CalibrateAlbedo { get; set; }     // the map's materials brought to their real material's albedo ([materials], MaterialProfiles)
 
 		// shader replacement (needs naturefx.bundle)
 		public bool ReplaceShaders { get; set; }
@@ -259,6 +260,7 @@ namespace NatureFX {
 		public float Dust { get; set; }
 		public float Wetness { get; set; }
 		public bool WetGameMaterials { get; set; }
+		public bool CalibrateAlbedo { get; set; }     // the map's materials brought to their real material's albedo ([materials], MaterialProfiles)
 
 		// shader replacement (needs naturefx.bundle)
 		public bool ReplaceShaders { get; set; }
@@ -922,6 +924,11 @@ namespace NatureFX {
 				d.Contrast = 8.0f;
 				d.FoliageColor = 1.0f;
 				d.ConfigVersion = 79;
+			}
+			if (d.ConfigVersion < 80) {
+				// the map's asphalt, concrete, stone, wood and soil at the albedo the real ones have
+				d.CalibrateAlbedo = true;
+				d.ConfigVersion = 80;
 			}
 		}
 

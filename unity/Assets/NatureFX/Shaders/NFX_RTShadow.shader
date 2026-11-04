@@ -686,6 +686,21 @@ Shader "Hidden/NatureFX/RTShadow"
         // the sun light HDRP added here, worked out from the G-buffer as HDRP does (a = 0 where it is not known)
         float4 exact = _NFX_SunExact.x > 0.5 ? LOAD_TEXTURE2D_X(_NFX_SunExactTex, pixel) : 0.0;
         bool exactKnown = exact.a > 0.5;
+        if (_NFX_ShadowCompose.y > 3.5)
+        {
+            // check: the albedo (the G-buffer's base colour) as flat grey-scaled colour, lit evenly, against what real
+            // materials reflect: red over 0.8 (only fresh snow and white paint), blue under 0.03 (charcoal, fresh
+            // asphalt at most), magenta where a bright colour is more saturated than nature's (leaves, soil and stone
+            // keep well under it); the rest as it is
+            float3 a = pixelAlbedo;
+            float y = dot(a, float3(0.2126, 0.7152, 0.0722));
+            float hi = max(a.r, max(a.g, a.b)), lo = min(a.r, min(a.g, a.b));
+            float chroma = hi > 1e-4 ? (hi - lo) / hi : 0.0;
+            float3 flag = y > 0.8 ? float3(1.0, 0.1, 0.1) : y < 0.03 ? float3(0.1, 0.3, 1.0) : chroma > 0.85 && y > 0.05 ? float3(1.0, 0.1, 1.0) : -1.0;
+            float3 shown = flag.x >= 0.0 ? lerp(a, flag, 0.7) : a;
+            // the picture is pre-exposed: the albedo itself shows about as it is (0.18 as mid grey)
+            return float4(shown, 1.0);
+        }
         if (_NFX_ShadowCompose.y > 2.5)
         {
             // check: the exact sun light alone, dark magenta where it is not known (the estimate is used there)
