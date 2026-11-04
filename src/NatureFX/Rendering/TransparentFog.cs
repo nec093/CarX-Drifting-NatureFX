@@ -34,8 +34,13 @@ namespace NatureFX.Rendering {
 			BackFrame = -1;
 		}
 
+		// The second drawing of the see-through objects (their coverage) and the picture kept before them only where the
+		// fog shows on them: not in clear air (under 2 % of fog over a kilometre, rain included, and no local fog box
+		// near), which is most of the time by day; there the objects keep HDRP's picture, as the fog would not change it
+		internal static bool Thin => NatureFX.Map.MapFog.NativeParams.x * 1000.0f < 0.02f && AtmospherePass.BoxCount == 0;
+
 		internal static bool Wanted(CustomPassContext ctx) {
-			return Enabled && AtmospherePass.FogFrame == Time.frameCount && RTSurfaceTrace.IsScreenCamera(ctx.hdCamera);
+			return Enabled && AtmospherePass.FogFrame == Time.frameCount && !Thin && RTSurfaceTrace.IsScreenCamera(ctx.hdCamera);
 		}
 	}
 
@@ -80,6 +85,8 @@ namespace NatureFX.Rendering {
 			if (!TransparentFog.Wanted(ctx)) {
 				if (!TransparentFog.Enabled) {
 					TransparentFog.Status = "off";
+				} else if (TransparentFog.Thin) {
+					TransparentFog.Status = "not drawn: the air is too clear to show on them (under 2 % of fog over 1 km)";
 				} else if (AtmospherePass.FogFrame != Time.frameCount) {
 					TransparentFog.Status = "waiting for the own 3D fog";
 				}
