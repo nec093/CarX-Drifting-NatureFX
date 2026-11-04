@@ -161,7 +161,7 @@ NatureFX のシェーダー（`NatureFX/Foliage`、`NatureFX/LitAccumulation`）
 | | Map | マップのプロファイルと読み込んだ内容、マーカーの表示、各効果の状態 |
 | ADVANCED | Ray tracing | DXR 1.0 / 1.1、トレースの解像度、ノイズ除去、DXR 1.2 のテスト、RT のコスト計測 |
 | | Shader rebuild | 置き換え（全マテリアル・草木）、アンチタイリング、置き換えなかったマテリアル |
-| | Settings | ウィンドウの外観、Graphics API（DX11 / DX12） |
+| | Settings | ウィンドウの外観、Graphics API（DX12 必須） |
 | | Developer | デバッグページのオン / オフと URL のみ（開発用のツールはデバッグページへ移行済み） |
 
 ### 5.3 設定ファイル
@@ -224,7 +224,7 @@ NatureFX のシェーダー（`NatureFX/Foliage`、`NatureFX/LitAccumulation`）
 
 ## 7. 既知の制限
 
-- レイトレーシング、独自エンジン（空、霧、照明）、DLSS は DX12 でのみ動作します。DX11 で動作するのは、風、蓄積、シェーダーリビルドなど、独自エンジンを使用しない機能です。
+- NatureFX は DirectX 12 専用です。DX11 で起動した場合は何も変更せず、DX12 での再起動を案内する表示だけを出します。Steam の起動オプションに `-force-d3d12` を指定してください。
 - DLSS は RTX の GPU でのみ動作します。その他の GPU では独自の TAA を使用します。
 - ゲームのアップデートでシェーダー名が変更された場合は、差し替えルールの更新が必要です。
 - 未解決の項目と、ゲーム内で未確認の項目は [docs/HANDOFF.md](docs/HANDOFF.md) に記載しています。

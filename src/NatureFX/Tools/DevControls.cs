@@ -183,11 +183,14 @@ namespace NatureFX.Tools {
 			                  Set = v => set(Mathf.Clamp(Mathf.RoundToInt(v), 0, options.Length - 1)), Default = () => def(), Saved = true, Tab = "settings" });
 		}
 
+		private static readonly HashSet<string> Retired = new() { "ReplaceGameSmoke" };
+
 		private static void BuildSettings() {
 			BuildWindowSettings();
 			const string other = "Other";
 			foreach (var p in typeof(ISettings).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)) {
-				if (!p.CanRead || !p.CanWrite || byId_.ContainsKey("set-" + p.Name) || p.Name == "ConfigVersion") {
+				// settings kept only so old settings files still load (no longer used)
+				if (!p.CanRead || !p.CanWrite || byId_.ContainsKey("set-" + p.Name) || p.Name == "ConfigVersion" || Retired.Contains(p.Name)) {
 					continue;
 				}
 				var prop = p;

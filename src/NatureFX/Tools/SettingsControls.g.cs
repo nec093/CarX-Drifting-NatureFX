@@ -63,7 +63,6 @@ namespace NatureFX.Tools {
 			Setting("Cars / Cars in the rain", "CarRainDrops", "Drops", () => S.CarRainDrops, v => S.CarRainDrops = v, () => D.CarRainDrops, 0.0f, 1.0f, 0.005f, () => (S.CarRain));
 			Setting("Cars / Cars in the rain", "OilFilm", "Oil film", () => S.OilFilm, v => S.OilFilm = v, () => D.OilFilm, 0.0f, 1.0f, 0.005f, () => (S.CarRain));
 			Setting("Cars / Smoke, glow and dirt", "TireSmoke", "Tyre smoke and spray", () => S.TireSmoke, v => S.TireSmoke = v, () => D.TireSmoke, 0.0f, 2.0f, 0.01f);
-			SettingSwitch("Cars / Smoke, glow and dirt", "ReplaceGameSmoke", "Replace the game's smoke (DX11)", () => S.ReplaceGameSmoke, v => S.ReplaceGameSmoke = v, () => D.ReplaceGameSmoke, () => (S.TireSmoke > 0.0f));
 			SettingSwitch("Cars / Smoke, glow and dirt", "CarGlow", "Glowing brakes, afterfire", () => S.CarGlow, v => S.CarGlow = v, () => D.CarGlow);
 			SettingSwitch("Cars / Smoke, glow and dirt", "CarDirt", "Dirt, dust and snow on the car", () => S.CarDirt, v => S.CarDirt = v, () => D.CarDirt);
 			Setting("Cars / Smoke, glow and dirt", "CarDirtAmount", "Most dirt", () => S.CarDirtAmount, v => S.CarDirtAmount = v, () => D.CarDirtAmount, 0.0f, 1.0f, 0.005f, () => (S.CarDirt));

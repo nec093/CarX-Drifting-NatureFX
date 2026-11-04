@@ -40,7 +40,6 @@ namespace NatureFX {
 		private float uiScaleDraft_;
 		private float fps_;
 		private string mapMessage_;
-		private bool pendingRestart_;
 		private string presetName_ = "";
 		private string presetStatus_;
 		private string pendingDelete_;
@@ -436,32 +435,9 @@ namespace NatureFX {
 		}
 
 		private void DrawGraphicsApi() {
-			bool dx12 = GraphicsApiSwitcher.IsD3D12;
-			Widgets.BeginCard("Graphics API", dx12
-				? "Running on DirectX 12: NatureFX ray tracing is available on RTX / RDNA2+ GPUs."
-				: "Running on DirectX 11. DirectX 12 enables NatureFX ray tracing.", true);
+			Widgets.BeginCard("Graphics API", "NatureFX needs DirectX 12 (its own engine traces on DX12; DX11 is no longer supported).", true);
 			Widgets.Info($"Current: {GraphicsApiSwitcher.Current}");
-
-			bool target = !dx12;
-			string action = target ? "Restart in DirectX 12" : "Restart in DirectX 11";
-			if (pendingRestart_) {
-				Widgets.Info("<color=#F5B14C>The game will close and Steam will start it again (Steam may ask to confirm the launch option).</color>");
-				GUILayout.BeginHorizontal();
-				if (Widgets.Button("Confirm restart", 160)) {
-					Settings.Save();
-					pendingRestart_ = false;
-					GraphicsApiSwitcher.RestartWith(target);
-				}
-				if (Widgets.Button("Cancel", 100)) {
-					pendingRestart_ = false;
-				}
-				GUILayout.FlexibleSpace();
-				GUILayout.EndHorizontal();
-			} else if (Widgets.Button(action, 200)) {
-				pendingRestart_ = true;
-			}
-
-			Widgets.Info($"To always start in DX12: Steam > CarX Drift Racing Online > Properties > Launch options: {GraphicsApiSwitcher.LaunchOption(true)}");
+			Widgets.Info($"To always start in DX12: Steam > CarX Drift Racing Online > Properties > Launch options: {GraphicsApiSwitcher.LaunchOption}");
 			Widgets.EndCard();
 		}
 
@@ -754,7 +730,6 @@ namespace NatureFX {
 			                                                    "(needs Tyre marks on: it starts where the tyres slide). Brake discs that glow after hard braking, afterfire.");
 			Widgets.Slider("Tyre smoke and spray", S.TireSmoke, 0, 2, v => S.TireSmoke = v);
 			Widgets.BeginDependent(S.TireSmoke > 0.0f);
-			Widgets.Switch("Replace the game's smoke (DX11)", S.ReplaceGameSmoke, v => S.ReplaceGameSmoke = v, "On DX12 the game has no tyre smoke, so this one is always used there.");
 			Widgets.EndDependent();
 			Widgets.Switch("Glowing brakes, afterfire", S.CarGlow, v => S.CarGlow = v);
 			Widgets.Switch("Dirt, dust and snow on the car", S.CarDirt, v => S.CarDirt = v, "Builds up as you drive: mud on wet roads, dust on dusty ones, snow on top while it snows. Rain washes it off.");

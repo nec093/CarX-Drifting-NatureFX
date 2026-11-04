@@ -47,11 +47,11 @@ namespace NatureFX.Editor {
 			}
 		}
 
-		// The game runs on DX11 by default and on DX12 with -force-d3d12 (needed for ray traced GI),
-		// so the bundle carries both shader binaries.
+		// NatureFX runs on DX12 only (-force-d3d12): the bundle carries DX12's shader binaries alone (half the size and
+		// build time of both)
 		private static void EnsureGraphicsApis() {
 			PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.StandaloneWindows64, false);
-			PlayerSettings.SetGraphicsAPIs(BuildTarget.StandaloneWindows64, new[] { GraphicsDeviceType.Direct3D11, GraphicsDeviceType.Direct3D12 });
+			PlayerSettings.SetGraphicsAPIs(BuildTarget.StandaloneWindows64, new[] { GraphicsDeviceType.Direct3D12 });
 		}
 
 		// HDRP strips shader variants by the HDRP assets in the build, so enable everything the game may use.

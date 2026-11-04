@@ -102,6 +102,29 @@ namespace NatureFX {
 		private float nextVolumeRefresh_;
 		private float pendingShrubDensity_ = float.NaN, shrubReloadAt_;
 
+		private bool needsDx12_;
+		private bool dx12NoticeHidden_;
+
+		// on DX11: what NatureFX shows instead of itself
+		private void DrawDx12Notice() {
+			if (dx12NoticeHidden_) {
+				return;
+			}
+			GUILayout.BeginArea(new Rect(20, 20, 460, 130), GUI.skin.box);
+			GUILayout.Label("NatureFX needs DirectX 12. It is off while the game runs on " + GraphicsApiSwitcher.Current + ".");
+			GUILayout.Label("Steam launch options: " + GraphicsApiSwitcher.LaunchOption);
+			GUILayout.BeginHorizontal();
+			if (GUILayout.Button("Restart in DirectX 12", GUILayout.Width(200))) {
+				Settings.Save();
+				GraphicsApiSwitcher.RestartInDx12();
+			}
+			if (GUILayout.Button("Hide", GUILayout.Width(80))) {
+				dx12NoticeHidden_ = true;
+			}
+			GUILayout.EndHorizontal();
+			GUILayout.EndArea();
+		}
+
 		private void Start() {
 			if (!Settings.Init()) {
 				Kino.Log.Error("[NatureFX] Config registration failed");
@@ -110,6 +133,12 @@ namespace NatureFX {
 
 			Capabilities.Refresh();
 			Kino.Log.Info($"[NatureFX] {Capabilities.Describe()}");
+			// DX12 only: on DX11 NatureFX does nothing but say so (a notice with a restart in DX12)
+			if (!GraphicsApiSwitcher.IsD3D12) {
+				needsDx12_ = true;
+				Kino.Log.Error($"[NatureFX] NatureFX needs DirectX 12 (running on {GraphicsApiSwitcher.Current}): start the game with {GraphicsApiSwitcher.LaunchOption}");
+				return;
+			}
 			if (!Capabilities.IsHdrp) {
 				Kino.Log.Error("[NatureFX] HDRP not detected, lighting overhaul disabled");
 			}
@@ -165,6 +194,9 @@ namespace NatureFX {
 		}
 
 		private void OnDestroy() {
+			if (needsDx12_) {
+				return;
+			}
 			if (Settings.Data != null && Settings.Data.RecordShaderVariants) {
 				NatureFX.Tools.ShaderVariantRecorder.Save();
 			}
@@ -224,7 +256,7 @@ namespace NatureFX {
 
 		private void Update() {
 			var s = Settings.Data;
-			if (s == null) {
+			if (s == null || needsDx12_) {
 				return;
 			}
 			// the debug page (a browser on this PC): whether NatureFX is on or not
@@ -355,7 +387,6 @@ namespace NatureFX {
 			Night.Update(s.Enabled, Sun.Sun);
 			Tracks.Update(s);
 			CarRainFx.Update(s, Sun.Sun);
-			TireSmokeDx12.ReplaceGameSmoke = s.Enabled && s.TireSmoke > 0.0f && s.ReplaceGameSmoke;
 			NatureFX.Tools.CpuTimings.Section("tyre smoke");
 			Smoke.Update(s.Enabled, s.TireSmoke);
 			NatureFX.Tools.CpuTimings.Section("particle lighting, rain, glow, lens, post");
@@ -397,6 +428,10 @@ namespace NatureFX {
 		}
 
 		private void OnGUI() {
+			if (needsDx12_) {
+				DrawDx12Notice();
+				return;
+			}
 			if (Settings.Data == null) {
 				return;
 			}
