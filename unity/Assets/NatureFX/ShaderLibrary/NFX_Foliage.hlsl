@@ -113,13 +113,14 @@ float NFX_ApplyFoliage(inout float3 baseColor, inout float3 normalWS, float3 pos
 		baseColor = NFX_HueShift(baseColor, _NFX_Foliage2.y);
 	}
 
-	// back lit: the sun through the leaf. The normal leans towards the sun, so HDRP lights the far side too
-	// (with its shadows), and the light that comes through is warmer and more saturated
+	// back lit: the sun through the leaf. The normal leans a little towards the sun, so the far side catches some of
+	// it (with its shadows); the light that comes through is the shadow composite's (LeafGlow), not brighter colour
+	// here: with both, and the normal turned fully, back lit crowns went pale white (a real leaf lets some 5 to 15 %
+	// of the sun through, needles less)
 	float translucency = _NFX_Foliage.y;
 	if (translucency > 0.0 && _NFX_SunDir.w > 0.0) {
 		float backlit = Sq(saturate(dot(-V, _NFX_SunDir.xyz))) * _NFX_SunDir.w;
-		normalWS = normalize(normalWS + _NFX_SunDir.xyz * translucency * backlit * 2.0);
-		baseColor *= 1.0 + translucency * backlit * float3(0.7, 0.8, 0.3);
+		normalWS = normalize(normalWS + _NFX_SunDir.xyz * translucency * backlit * 0.5);
 	}
 	return keep;
 }

@@ -847,7 +847,9 @@ Shader "Hidden/NatureFX/RTShadow"
         float3 lv = GetWorldSpaceNormalizeViewDir(lp.positionWS);
         float forward = pow(saturate(dot(lv, -L)), 6.0);
         float3 tint = surface.rgb * saturate(surface.rgb * 2.0);
-        float3 through = tint * _NFX_RTSunColor.rgb * INV_PI * (0.3 + 1.7 * forward) * saturate(-ndl * 0.7 + 0.3);
+        // a leaf lets some 5 to 15 % of the sun through (the tint, its colour twice), a little brighter straight
+        // towards the sun; at 2x towards the sun the crowns glowed pale white against it
+        float3 through = tint * _NFX_RTSunColor.rgb * INV_PI * (0.25 + 0.75 * forward) * saturate(-ndl * 0.7 + 0.3);
         return through * sunVisible * _NFX_LeafParams.x * GetCurrentExposureMultiplier();
     }
 

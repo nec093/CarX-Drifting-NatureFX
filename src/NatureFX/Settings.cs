@@ -930,6 +930,11 @@ namespace NatureFX {
 				d.CalibrateAlbedo = true;
 				d.ConfigVersion = 80;
 			}
+			if (d.ConfigVersion < 81) {
+				// back lit leaves as real ones: a share of the sun through them, not a glow
+				d.RTLeafTranslucency = 0.35f;
+				d.ConfigVersion = 81;
+			}
 			FixOwnEngine(d);
 		}
 
