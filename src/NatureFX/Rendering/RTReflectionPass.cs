@@ -190,11 +190,9 @@ namespace NatureFX.Rendering {
 			props_.SetTexture(ColorTex, color_);
 			props_.SetTexture(SourceTex, trace_);
 			props_.SetVector(ReflCompose, new Vector4(Intensity, RoughnessCutoff, 0.0f, 0.0f));
-			// HDRP mirrors the own engine's sky (VolumeOverhaul A3): the composite takes that mirrored sky away
-			var hdri = VolumeOverhaul.Stack()?.GetComponent<UnityEngine.Rendering.HighDefinition.HDRISky>();
-			var env = VolumeOverhaul.Stack()?.GetComponent<UnityEngine.Rendering.HighDefinition.VisualEnvironment>();
-			bool hdrpSky = AtmospherePass.SkyCube != null && hdri != null && hdri.hdriSky.value == AtmospherePass.SkyCube
-			               && env != null && env.skyType.value == (int)UnityEngine.Rendering.HighDefinition.SkyType.HDRI;
+			// the sky HDRP mirrored (the own sky's cube, VolumeOverhaul A3) is taken away only before the own reflections
+			// run (OwnLighting.Reflections off): HDRP's sky settings are not read, the own cube is what HDRP has
+			bool hdrpSky = AtmospherePass.SkyCube != null;
 			if (hdrpSky) {
 				props_.SetTexture(HdrpSkyCubeId, AtmospherePass.SkyCube);
 			}
