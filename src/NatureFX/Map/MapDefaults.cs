@@ -6,37 +6,27 @@ using UnityEngine;
 
 namespace NatureFX.Map {
 	// The weather and wind values a map profile can set ([defaults] and [zone.<id>], docs/map-authoring.md 1 and 3)
-	public enum MapKey { Snow, Leaves, Dust, Wetness, WindStrength, WindGust, WindDirection, FogDistance, FogHeight, GroundBlend }
+	public enum MapKey { Wetness, WindStrength, WindGust, WindDirection, FogDistance, FogHeight }
 
 	// One section's values; NaN = not set there
 	public class MapValues {
-		public const int Count = 10;
+		public const int Count = 6;
 		private readonly float[] v_ = new float[Count];
 
 		private static readonly (string Name, MapKey Key, float Min, float Max)[] Keys = {
-			("snow", MapKey.Snow, 0.0f, 1.0f),
-			("leaves", MapKey.Leaves, 0.0f, 1.0f),
-			("dust", MapKey.Dust, 0.0f, 1.0f),
 			("wetness", MapKey.Wetness, 0.0f, 1.0f),
 			("wind.strength", MapKey.WindStrength, 0.0f, 2.0f),
 			("wind.gust", MapKey.WindGust, 0.0f, 1.0f),
 			("wind.direction", MapKey.WindDirection, -720.0f, 720.0f),
 			("fog.distance", MapKey.FogDistance, 0.0f, 100000.0f),
-			("fog.height", MapKey.FogHeight, 1.0f, 10000.0f),
-			// how high objects take the ground's colour where they stand in it (m; NFX_Ground.hlsl), 0 off
-			("groundblend", MapKey.GroundBlend, 0.0f, 3.0f)
+			("fog.height", MapKey.FogHeight, 1.0f, 10000.0f)
 		};
 
-		// season = a shortcut for the accumulation values not written out: snow, leaves, dust, wetness
-		private static readonly Dictionary<string, float[]> Seasons = new(StringComparer.OrdinalIgnoreCase) {
-			["spring"] = new[] { 0.0f, 0.1f, 0.1f, 0.2f },
-			["summer"] = new[] { 0.0f, 0.0f, 0.3f, 0.0f },
-			["autumn"] = new[] { 0.0f, 0.5f, 0.15f, 0.1f },
-			["winter"] = new[] { 0.5f, 0.1f, 0.0f, 0.3f }
+		// keys a zone section has on top of the values (WeatherZones), and keys of features that were removed (snow,
+		// fallen leaves, dust, the season, the ground blend): still read without a warning, so older profiles load quietly
+		private static readonly HashSet<string> OtherKeys = new(StringComparer.OrdinalIgnoreCase) {
+			"blend", "priority", "season", "snow", "leaves", "dust", "groundblend"
 		};
-
-		// keys a zone section has on top of the values (WeatherZones)
-		private static readonly HashSet<string> OtherKeys = new(StringComparer.OrdinalIgnoreCase) { "season", "blend", "priority" };
 
 		public MapValues() {
 			Clear();
@@ -82,16 +72,6 @@ namespace NatureFX.Map {
 					values[key.Key] = Mathf.Clamp(f, key.Min, key.Max);
 				}
 			}
-			string season = profile.Get(section, "season");
-			if (season != null && Seasons.TryGetValue(season, out var table)) {
-				for (int i = 0; i < table.Length; ++i) {
-					if (!values.Has((MapKey)i)) {
-						values[(MapKey)i] = table[i];
-					}
-				}
-			} else if (season != null && !string.Equals(season, "none", StringComparison.OrdinalIgnoreCase)) {
-				Kino.Log.Warning($"[NatureFX] [{section}] season = {season}: not one of none, spring, summer, autumn, winter");
-			}
 			foreach (string line in profile.Section(section)) {
 				int eq = line.IndexOf('=');
 				string name = eq > 0 ? line.Substring(0, eq).Trim() : line;
@@ -118,15 +98,13 @@ namespace NatureFX.Map {
 		// how much of the map's fog is used (1 with fog in [defaults], else how far the camera is inside a fog zone)
 		public static float FogWeight { get; private set; }
 
-		private static readonly MapKey[] UserKeys = { MapKey.Snow, MapKey.Leaves, MapKey.Dust, MapKey.Wetness, MapKey.WindStrength, MapKey.WindGust, MapKey.WindDirection };
+		private static readonly MapKey[] UserKeys = { MapKey.Wetness, MapKey.WindStrength, MapKey.WindGust, MapKey.WindDirection };
 
 		private MapValues defaults_ = new();
 		private readonly float[] baseline_ = new float[MapValues.Count];
 		private readonly bool[] taken_ = new bool[MapValues.Count];
 
 		public MapValues Defaults => defaults_;
-		// [defaults] season (Seasons: the foliage colours follow it unless the menu or the weather says otherwise)
-		public string Season { get; private set; }
 
 		public static float Value(MapKey k, float user) {
 			float v = Effective[k];
@@ -140,7 +118,6 @@ namespace NatureFX.Map {
 		// A new map: its defaults, and the user's values as they are now (moving a slider away from these takes it over)
 		public void Load(MapProfile profile, ISettings user) {
 			defaults_ = MapValues.Parse(profile, "defaults");
-			Season = profile.Loaded ? profile.Get("defaults", "season") : null;
 			foreach (var k in UserKeys) {
 				baseline_[(int)k] = UserValue(k, user);
 				taken_[(int)k] = false;
@@ -208,9 +185,6 @@ namespace NatureFX.Map {
 
 		private static float UserValue(MapKey k, ISettings s) {
 			return k switch {
-				MapKey.Snow => s.Snow,
-				MapKey.Leaves => s.Leaves,
-				MapKey.Dust => s.Dust,
 				MapKey.Wetness => s.Wetness,
 				MapKey.WindStrength => s.WindStrength,
 				MapKey.WindGust => s.WindGust,

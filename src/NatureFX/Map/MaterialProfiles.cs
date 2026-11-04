@@ -7,20 +7,21 @@ using UnityEngine;
 
 namespace NatureFX.Map {
 	// [materials] and [emissive] of the map profile (docs/map-authoring.md, 6.2 / 7.1):
-	//   <name regex> => <preset>[, key=value ...]       e.g.  (?i)guardrail => metal_galvanized, rust=0.2
+	//   <name regex> => <preset>[, key=value ...]       e.g.  (?i)guardrail => metal_galvanized, beading=0.6
 	//   <name regex> => nits=800, k=6500, when=night    (emissive)
 	// The regex is tested against the material name and the object path, like the replacement rules.
 	// Values end up in _NFX_Material* of the generated Lit copies (ShaderLibrary/NFX_MaterialProfile.hlsl).
 	public class MaterialProfiles {
 		private class Look {
 			public float Porosity = -1.0f;
-			public float Moss, Rust, Stain, Wear, Dirt, Beading, Retro;
+			public float Beading, Retro;
 			public bool Mirror; // curve mirrors: a perfect metal mirror (the ray traced reflections draw the picture)
 			// anti-tiling (NFX_AntiTiling.hlsl): hex tiles against a texture's visible repeat, 0 .. 1; a large scale
 			// variation of brightness and roughness over Size metres against the same ground going on and on
 			public float AntiTiling, Variation, VariationSize = 20.0f;
-			// the ground blend's height (m; NFX_Ground.hlsl): 0 the map's ([defaults] groundblend), < 0 off
-			public float GroundBlend;
+			// the measured albedo of the real material (linear luminance of its colour, min .. max; 0 .. 0: not checked):
+			// the material's colour map on average brought into it (CalibrateAlbedo)
+			public float AlbedoMin, AlbedoMax;
 
 			public Look Clone() {
 				return (Look)MemberwiseClone();
@@ -41,22 +42,25 @@ namespace NatureFX.Map {
 		}
 
 		private static readonly Dictionary<string, Look> Presets = new(StringComparer.OrdinalIgnoreCase) {
-			["asphalt_old"] = new Look { Porosity = 1.0f, Wear = 0.4f, Variation = 0.35f },
-			["asphalt_new"] = new Look { Porosity = 0.9f, Variation = 0.25f },
-			["asphalt_paint"] = new Look { Porosity = 0.3f, Beading = 0.3f, Wear = 0.2f },
-			["concrete"] = new Look { Porosity = 0.8f, Stain = 0.3f, Variation = 0.3f },
-			["masonry"] = new Look { Porosity = 0.9f, Moss = 0.3f, Variation = 0.3f },
-			["rock"] = new Look { Porosity = 0.7f, Moss = 0.15f, Variation = 0.4f },
-			["metal_galvanized"] = new Look { Porosity = 0.0f, Beading = 0.8f, Dirt = 0.1f },
+			// albedo ranges: measured reflectances of the real materials (asphalt 0.04 fresh to 0.12-0.15 worn grey, road
+			// paint 0.5-0.75, concrete 0.2-0.45, stone and brick 0.12-0.35, wood 0.1-0.35, soil 0.07-0.25)
+			["asphalt_old"] = new Look { Porosity = 1.0f, Variation = 0.35f, AlbedoMin = 0.07f, AlbedoMax = 0.15f },
+			["asphalt_new"] = new Look { Porosity = 0.9f, Variation = 0.25f, AlbedoMin = 0.03f, AlbedoMax = 0.07f },
+			["asphalt_paint"] = new Look { Porosity = 0.3f, Beading = 0.3f, AlbedoMin = 0.45f, AlbedoMax = 0.75f },
+			["concrete"] = new Look { Porosity = 0.8f, Variation = 0.3f, AlbedoMin = 0.2f, AlbedoMax = 0.45f },
+			["masonry"] = new Look { Porosity = 0.9f, Variation = 0.3f, AlbedoMin = 0.12f, AlbedoMax = 0.35f },
+			["rock"] = new Look { Porosity = 0.7f, Variation = 0.4f, AlbedoMin = 0.1f, AlbedoMax = 0.35f },
+			["metal_galvanized"] = new Look { Porosity = 0.0f, Beading = 0.8f },
 			["metal_painted"] = new Look { Porosity = 0.05f, Beading = 0.6f },
 			["glass"] = new Look { Porosity = 0.0f, Beading = 1.0f },
 			["plastic"] = new Look { Porosity = 0.05f, Beading = 0.5f },
-			["wood"] = new Look { Porosity = 0.8f, Dirt = 0.1f },
-			["soil"] = new Look { Porosity = 1.0f, Variation = 0.4f },
+			["wood"] = new Look { Porosity = 0.8f, AlbedoMin = 0.1f, AlbedoMax = 0.35f },
+			["soil"] = new Look { Porosity = 1.0f, Variation = 0.4f, AlbedoMin = 0.07f, AlbedoMax = 0.25f },
 			["mirror"] = new Look { Porosity = 0.0f, Beading = 0.4f, Mirror = true }
 		};
 
 		private static readonly int MaterialId = Shader.PropertyToID("_NFX_Material");
+		private static readonly int SelfFogId = Shader.PropertyToID("_NFX_SelfFog");
 		private static readonly int Material2Id = Shader.PropertyToID("_NFX_Material2");
 		private static readonly int SurfaceId = Shader.PropertyToID("_NFX_Surface");
 		private static readonly int Surface2Id = Shader.PropertyToID("_NFX_Surface2");
@@ -72,7 +76,6 @@ namespace NatureFX.Map {
 
 		// [foliage] type names in the order of _NFX_Foliage.x (NFX_Foliage.hlsl)
 		private static readonly string[] FoliageTypes = { "", "conifer", "deciduous", "bamboo", "grass" };
-		private static readonly string[] AutumnColours = { "mixed", "red", "yellow", "brown" };
 
 		private readonly List<Entry> materials_ = new();
 		private readonly List<Entry> emissive_ = new();
@@ -93,6 +96,18 @@ namespace NatureFX.Map {
 			foliage_.Clear();
 			terrain_.Clear();
 			mapTextures_.Clear();
+			// the base colours as the map made them stay known (a profile loaded again must not scale them twice);
+			// materials that are gone are forgotten
+			var gone = new List<Material>();
+			foreach (var kv in calibrated_) {
+				if (kv.Key == null) {
+					gone.Add(kv.Key);
+				}
+			}
+			foreach (var g in gone) {
+				calibrated_.Remove(g);
+			}
+			means_.Clear();
 			if (!profile.Loaded) {
 				return;
 			}
@@ -143,13 +158,18 @@ namespace NatureFX.Map {
 				return;
 			}
 			var look = Find(materials_, m, objectPath)?.Look ?? new Look();
+			// the NatureFX/* shaders' forward pass puts the own engine's fog on their transparent surfaces itself: the
+			// see-through objects' second drawing (TransparentFog) leaves them out
+			m.SetFloat(SelfFogId, 1.0f);
 			var emissive = Find(emissive_, m, objectPath);
-			m.SetVector(MaterialId, new Vector4(look.Porosity, look.Moss, look.Rust, look.Stain));
-			m.SetVector(Material2Id, new Vector4(look.Wear, look.Dirt, look.Beading, look.Retro));
+			// yzw of _NFX_Material and xy of _NFX_Material2 were the removed ageing (moss, rust, stain, wear, dirt), w of
+			// _NFX_Surface the removed ground blend: 0
+			m.SetVector(MaterialId, new Vector4(look.Porosity, 0.0f, 0.0f, 0.0f));
+			m.SetVector(Material2Id, new Vector4(0.0f, 0.0f, look.Beading, look.Retro));
 			if (m.HasProperty(SurfaceId)) {
-				m.SetVector(SurfaceId, new Vector4(look.AntiTiling, look.Variation, look.VariationSize, look.GroundBlend));
+				m.SetVector(SurfaceId, new Vector4(look.AntiTiling, look.Variation, look.VariationSize, 0.0f));
 			}
-			// the height fill from the material's height map when it has one
+			// the surface's relief for the water film from the material's height map when it has one
 			if (m.HasProperty(Surface2Id)) {
 				bool height = m.HasProperty("_HeightMap") && m.GetTexture("_HeightMap") != null;
 				m.SetVector(Surface2Id, new Vector4(height ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f));
@@ -161,6 +181,7 @@ namespace NatureFX.Map {
 				m.SetFloat("_SmoothnessRemapMin", 1.0f);
 				m.SetFloat("_SmoothnessRemapMax", 1.0f);
 			}
+			Calibrate(m, look);
 			m.SetVector(EmissionId, emissive?.Emission ?? Vector4.zero);
 			m.SetVector(EmissionParamsId, emissive?.EmissionParams ?? new Vector4(0.0f, 1.0f, 0.0f, 0.0f));
 			if (m.HasProperty(FoliageId)) {
@@ -180,6 +201,112 @@ namespace NatureFX.Map {
 				m.SetTexture(SteepMapId, steep);
 				m.SetTexture(FlatMapId, flat);
 			}
+		}
+
+		// ---- the colour brought to the real material's measured albedo (CalibrateAlbedo): the colour map's mean (its
+		// small mips, linear) times the base colour, its luminance moved into the material's range by scaling the base
+		// colour (the texture's own detail kept), within 0.4 .. 2.5 times. The traced scene takes the same base colour.
+		public static bool CalibrateAlbedo = true;
+		private readonly Dictionary<Material, (Color Original, float Factor, string Note)> calibrated_ = new();
+		private static readonly Dictionary<Texture, Color> means_ = new();
+		private static Texture2D readback_;
+		private bool calibrationOn_ = true;
+
+		public string AlbedoStatus {
+			get {
+				int changed = 0;
+				foreach (var kv in calibrated_) {
+					if (kv.Key != null && Mathf.Abs(kv.Value.Factor - 1.0f) > 0.01f) {
+						++changed;
+					}
+				}
+				return !CalibrateAlbedo ? "off" : $"{calibrated_.Count} materials checked, {changed} brought to their real albedo (the log has each)";
+			}
+		}
+
+		private void Calibrate(Material m, Look look) {
+			if (!m.HasProperty("_BaseColor")) {
+				return;
+			}
+			if (!calibrated_.TryGetValue(m, out var entry)) {
+				entry = (m.GetColor("_BaseColor"), 1.0f, null);
+			}
+			float factor = 1.0f;
+			string note = null;
+			if (look.AlbedoMax > 0.0f && m.GetFloat("_Metallic") < 0.5f) {
+				var map = m.HasProperty("_BaseColorMap") ? m.GetTexture("_BaseColorMap") : null;
+				var mean = map != null ? Mean(map) : Color.white;
+				var c = entry.Original.linear;
+				float y = 0.2126f * mean.r * c.r + 0.7152f * mean.g * c.g + 0.0722f * mean.b * c.b;
+				if (y > 1e-4f) {
+					float target = Mathf.Clamp(y, look.AlbedoMin, look.AlbedoMax);
+					factor = Mathf.Clamp(target / y, 0.4f, 2.5f);
+					note = FormattableString.Invariant($"albedo {y:0.000} -> {y * factor:0.000} (x{factor:0.00}, real {look.AlbedoMin:0.00}-{look.AlbedoMax:0.00})");
+					if (Mathf.Abs(factor - 1.0f) > 0.01f) {
+						Kino.Log.Info($"[NatureFX] Albedo: '{m.name}' {note}");
+					}
+				}
+			}
+			calibrated_[m] = (entry.Original, factor, note);
+			SetBase(m, entry.Original, CalibrateAlbedo ? factor : 1.0f);
+		}
+
+		private static void SetBase(Material m, Color original, float factor) {
+			var lin = original.linear;
+			var scaled = new Color(lin.r * factor, lin.g * factor, lin.b * factor, 1.0f).gamma;
+			m.SetColor("_BaseColor", new Color(scaled.r, scaled.g, scaled.b, original.a));
+		}
+
+		// the setting switched: every calibrated material again (main thread, once a frame)
+		public void UpdateCalibration() {
+			if (calibrationOn_ == CalibrateAlbedo) {
+				return;
+			}
+			calibrationOn_ = CalibrateAlbedo;
+			foreach (var kv in calibrated_) {
+				if (kv.Key != null) {
+					SetBase(kv.Key, kv.Value.Original, CalibrateAlbedo ? kv.Value.Factor : 1.0f);
+				}
+			}
+		}
+
+		// a texture's mean colour (linear): drawn down to 64 x 64 (the GPU takes its small mips), read back once
+		private static Color Mean(Texture tex) {
+			if (means_.TryGetValue(tex, out var known)) {
+				return known;
+			}
+			var mean = Color.white;
+			RenderTexture rt = null;
+			var active = RenderTexture.active;
+			try {
+				rt = RenderTexture.GetTemporary(64, 64, 0, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
+				Graphics.Blit(tex, rt);
+				RenderTexture.active = rt;
+				readback_ ??= new Texture2D(64, 64, TextureFormat.RGBAFloat, false, true) { hideFlags = HideFlags.DontSave };
+				readback_.ReadPixels(new Rect(0, 0, 64, 64), 0, 0, false);
+				var px = readback_.GetPixels();
+				double r = 0, g = 0, b = 0, w = 0;
+				foreach (var p in px) {
+					// cut-out parts do not count (a card's empty corners)
+					float a = Mathf.Clamp01(p.a);
+					r += p.r * a;
+					g += p.g * a;
+					b += p.b * a;
+					w += a;
+				}
+				if (w > 1e-3) {
+					mean = new Color((float)(r / w), (float)(g / w), (float)(b / w), 1.0f);
+				}
+			} catch (Exception e) {
+				Kino.Log.Warning($"[NatureFX] Albedo: '{tex.name}' not measured ({e.GetType().Name}: {e.Message})");
+			} finally {
+				RenderTexture.active = active;
+				if (rt != null) {
+					RenderTexture.ReleaseTemporary(rt);
+				}
+			}
+			means_[tex] = mean;
+			return mean;
 		}
 
 		// [terrain]: <name regex> => triplanar, tile=4, steep=<material>, flat=<material>, slope=0.55, blend=0.15, noise=0.5
@@ -237,7 +364,7 @@ namespace NatureFX.Map {
 			return found;
 		}
 
-		// x: type, y: translucency, z: variation, w: autumn colour (docs/map-authoring.md 5.2)
+		// x: type, y: translucency, z: variation, w: unused (0; the autumn colour was removed) (docs/map-authoring.md 5.2)
 		private static Vector4 ParseFoliage(List<string> values, string line) {
 			var f = new Vector4(2.0f, 0.5f, 0.2f, 0.0f); // a broadleaf tree unless told otherwise
 			bool translucencySet = false;
@@ -257,14 +384,7 @@ namespace NatureFX.Map {
 						break;
 					case "translucency": f.y = Mathf.Clamp01(ParseFloat(value)); translucencySet = true; break;
 					case "variation": f.z = Mathf.Clamp01(ParseFloat(value)); break;
-					case "autumn":
-						int colour = System.Array.IndexOf(AutumnColours, value);
-						if (colour < 0) {
-							Kino.Log.Warning($"[NatureFX] Map profile: unknown autumn colour '{value}' in '{line}' (red, yellow, mixed, brown)");
-						} else {
-							f.w = colour;
-						}
-						break;
+					case "autumn": break; // the seasonal colours were removed: still read without a warning
 					default: Kino.Log.Warning($"[NatureFX] Map profile: unknown key '{key}' in '{line}'"); break;
 				}
 			}
@@ -331,17 +451,32 @@ namespace NatureFX.Map {
 				float f = ParseFloat(value);
 				switch (key.ToLowerInvariant()) {
 					case "porosity": look.Porosity = Mathf.Clamp01(f); break;
-					case "moss": look.Moss = Mathf.Clamp01(f); break;
-					case "rust": look.Rust = Mathf.Clamp01(f); break;
-					case "stain": look.Stain = Mathf.Clamp01(f); break;
-					case "wear": look.Wear = Mathf.Clamp01(f); break;
-					case "dirt": look.Dirt = Mathf.Clamp01(f); break;
+					// the ageing and the ground blend were removed: still read without a warning, so older profiles load quietly
+					case "moss":
+					case "rust":
+					case "stain":
+					case "wear":
+					case "dirt":
+					case "groundblend":
+						break;
 					case "beading": look.Beading = Mathf.Clamp01(f); break;
 					case "retro": look.Retro = Mathf.Clamp01(f); break;
 					case "antitiling": look.AntiTiling = Mathf.Clamp01(f); break;
 					case "variation": look.Variation = Mathf.Clamp01(f); break;
 					case "variation_size": look.VariationSize = Mathf.Max(1.0f, f); break;
-					case "groundblend": look.GroundBlend = f > 0.0f ? Mathf.Min(f, 3.0f) : -1.0f; break;
+					// albedo=off, albedo=0.12 (that luminance), albedo=0.08-0.14 (a range)
+					case "albedo": {
+						if (value == "off") {
+							look.AlbedoMin = look.AlbedoMax = 0.0f;
+						} else if (value.Contains("-")) {
+							var parts = value.Split('-');
+							look.AlbedoMin = Mathf.Clamp(ParseFloat(parts[0]), 0.01f, 0.95f);
+							look.AlbedoMax = Mathf.Clamp(ParseFloat(parts[1]), look.AlbedoMin, 0.95f);
+						} else {
+							look.AlbedoMin = look.AlbedoMax = Mathf.Clamp(f, 0.01f, 0.95f);
+						}
+						break;
+					}
 					default: Kino.Log.Warning($"[NatureFX] Map profile: unknown key '{key}' in '{line}'"); break;
 				}
 			}

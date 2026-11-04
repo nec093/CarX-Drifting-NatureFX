@@ -5,12 +5,13 @@ namespace NatureFX.Rendering {
 	// The sun's ray traced shadow map for transparent surfaces (NFX_TransparentShadow.hlsl): transparent surfaces have no
 	// depth on screen, so the screen space traced shadows cannot reach them. A grid across the sun's direction around the
 	// camera (Cells x Cells of CellSize m), each cell the distance from far up the sun's direction down to the first thing
-	// the sun meets (NFXNative SunMap.hlsl). Traced a band of rows a frame into the back map; when it is whole the maps
-	// swap and the next one starts where the camera and the sun are then (cars' shadows lag a fraction of a second).
+	// the sun meets (NFXNative SunMap.hlsl). The whole map is traced each frame into the back map and used that same
+	// frame (about 0.1 ms). It was a band of 64 rows a frame, a new map every 16: a moving car's shadow on the road's
+	// white lines and other see-through surfaces jumped along a few times a second.
 	public static class SunShadowMap {
 		private const int Cells = 1024;
 		private const float CellSize = 0.2f;        // m: the map covers about 200 m
-		private const int RowsPerFrame = 64;        // a whole map in 16 frames
+		private const int RowsPerFrame = Cells;     // the whole map every frame (cars' shadows move with them)
 		private const float Start = 300.0f;         // m up the sun's direction the rays start
 		private const float Bias = 0.2f;            // m
 
@@ -65,7 +66,7 @@ namespace NatureFX.Rendering {
 			cmd.SetGlobalVector(DirId, frontDir_);
 			cmd.SetGlobalVector(ParamsId, new Vector4(Start, Bias, 0.0f, 0.0f));
 			Status = frontOrigin_.w > 0.0f
-				? $"{Cells}x{Cells} cells of {CellSize * 100.0f:0} cm ({Cells * CellSize:0} m) around the camera, a new map every {Cells / RowsPerFrame} frames"
+				? $"{Cells}x{Cells} cells of {CellSize * 100.0f:0} cm ({Cells * CellSize:0} m) around the camera, {(RowsPerFrame >= Cells ? "a new map every frame" : $"a new map every {Cells / RowsPerFrame} frames")}"
 				: "tracing the first map";
 		}
 

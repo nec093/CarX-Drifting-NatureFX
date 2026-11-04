@@ -162,9 +162,9 @@ namespace NatureFX.Map {
 			"[materials]\n" +
 			"# <material or object name regex> => <material>[, key=value ...]\n" +
 			"# materials: asphalt_old asphalt_new asphalt_paint concrete masonry rock metal_galvanized metal_painted glass plastic wood soil\n" +
-			"# keys (0..1): porosity moss rust stain wear dirt beading retro\n" +
-			"# (?i)guardrail => metal_galvanized, rust=0.2\n" +
-			"# (?i)masonry => masonry, moss=0.6\n" +
+			"# keys (0..1): porosity beading retro antitiling variation\n" +
+			"# (?i)guardrail => metal_galvanized, beading=0.6\n" +
+			"# (?i)masonry => masonry, variation=0.4\n" +
 			"\n" +
 			"[emissive]\n" +
 			"# <material or object name regex> => nits=<cd/m2>, k=<kelvin>, when=night|dusk|always, mask=bright|alpha|full, random=<0..1>, flicker=<0..1>\n" +

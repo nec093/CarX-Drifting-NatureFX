@@ -18,6 +18,7 @@ namespace NatureFX.Rendering {
 		public static readonly ProfilingSampler ShadowFilter = Create("NFX RT shadow filter");
 		public static readonly ProfilingSampler ReflectionTrace = Create("NFX RT reflection rays");
 		public static readonly ProfilingSampler ReflectionFilter = Create("NFX RT reflection filter");
+		public static readonly ProfilingSampler FogVolume = Create("NFX RT fog volume");
 
 		private static readonly (string Label, ProfilingSampler Sampler)[] Stages = {
 			("scene build", Scene),
@@ -30,7 +31,8 @@ namespace NatureFX.Rendering {
 			("shadow filter", ShadowFilter),
 			("reflection rays", ReflectionTrace),
 			("reflection filter", ReflectionFilter),
-			("glass", Glass)
+			("glass", Glass),
+			("fog volume", FogVolume)
 		};
 
 		// CPU time moving the cars' instances (RayTracingScene.Update), smoothed

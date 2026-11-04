@@ -54,7 +54,16 @@ namespace NatureFX.Nature {
 
 		private readonly Dictionary<Material, MaterialSnapshot> originals_ = new();
 
-		// Shader rebuild (docs/shader-rebuild-plan.md): every game material the rules leave alone becomes a NatureFX
+		// Textures a translator moved from the game's property names to HDRP/Lit's (game shader _MainTex -> _BaseColorMap):
+		// the game may assign its finished textures after the switch (a map reload: a small stand-in first, the full
+		// texture later) under its own names, which the NFX shader does not read. Resync follows them.
+		private readonly Dictionary<Material, List<(string From, string To)>> links_ = new();
+		private static readonly string[] LinkedTargets = { "_BaseColorMap", "_NormalMap", "_MaskMap", "_EmissiveColorMap" };
+		private float nextResync_;
+		public int Resynced { get; private set; }
+		public int Unreadable { get; private set; }
+
+		// Shader rebuild: every game material the rules leave alone becomes a NatureFX
 		// material too (GenericTranslator), except what later stages rebuild or what is not a surface
 		public bool Full { get; set; }
 
@@ -162,10 +171,17 @@ namespace NatureFX.Nature {
 			int replaced = 0;
 			var samples = new List<string>();
 			Deferred.Clear();
+			var replacedNow = new HashSet<Material>();
 			foreach (var r in Object.FindObjectsByType<Renderer>(FindObjectsInactive.Include, FindObjectsSortMode.None)) {
 				string path = null;
-				foreach (var m in r.sharedMaterials) {
-					if (m == null || originals_.ContainsKey(m)) {
+				bool touched = false;
+				var materials = r.sharedMaterials;
+				foreach (var m in materials) {
+					if (m == null) {
+						continue;
+					}
+					if (originals_.ContainsKey(m)) {
+						touched |= replacedNow.Contains(m); // switched for an earlier renderer that shares it
 						continue;
 					}
 					path ??= ObjectPath(r.transform);
@@ -180,11 +196,20 @@ namespace NatureFX.Nature {
 					}
 					if (TryReplace(m, path, bundle, target)) {
 						++replaced;
+						touched = true;
+						replacedNow.Add(m);
 						if (samples.Count < 5) {
 							samples.Add($"{m.name}#{m.GetInstanceID()} ({from} -> {m.shader.name}) @ {path}");
 						}
 						Diagnose(m, r, path);
 					}
+				}
+				// the shader was switched on the material itself, which the renderer is not told of: Unity's texture
+				// mip streaming kept the texture list it read from the old shader and dropped the swapped material's
+				// textures to their smallest allowed mips (blurred windows and walls once the budget is short).
+				// Assigning the same materials again makes the renderer read them anew.
+				if (touched) {
+					r.sharedMaterials = materials;
 				}
 			}
 
@@ -200,6 +225,153 @@ namespace NatureFX.Nature {
 			if (replaced > 0) {
 				Kino.Log.Info($"[NatureFX] Replaced shaders on {replaced} materials (total {originals_.Count}), e.g.\n  {string.Join("\n  ", samples)}");
 			}
+		}
+
+		// Debug page: the textures of the switched materials as the GPU holds them now (blurred textures with the full
+		// replacement after a map reload): how many sit below their full size mip by Unity's mip streaming, and the
+		// colour maps a translator picked smaller than the largest texture of the game's material
+		public List<(string Label, string Value)> TextureReport(int worst = 12) {
+			var rows = new List<(string, string)>();
+			int alive = 0, stale = 0, textures = 0, streamed = 0, reduced = 0, wantReduced = 0, requested = 0, smallerBase = 0;
+			var seen = new HashSet<Texture>();
+			var bad = new List<(int Level, string Text)>();
+			var smaller = new List<string>();
+			foreach (var kv in originals_) {
+				var m = kv.Key;
+				if (m == null) {
+					++stale;
+					continue;
+				}
+				++alive;
+				var shader = m.shader;
+				if (shader == null) {
+					continue;
+				}
+				for (int i = 0; i < shader.GetPropertyCount(); ++i) {
+					if (shader.GetPropertyType(i) != UnityEngine.Rendering.ShaderPropertyType.Texture) {
+						continue;
+					}
+					string prop = shader.GetPropertyName(i);
+					var t = m.GetTexture(prop);
+					if (t == null || !seen.Add(t)) {
+						continue;
+					}
+					++textures;
+					if (t is Texture2D t2 && t2.streamingMipmaps) {
+						++streamed;
+						int loaded = t2.loadedMipmapLevel, desired = t2.desiredMipmapLevel;
+						if (t2.requestedMipmapLevel > 0) {
+							++requested;
+						}
+						if (desired > 0) {
+							++wantReduced;
+						}
+						if (loaded > 0) {
+							++reduced;
+							bad.Add((loaded, $"{m.name} {prop} = {t.name} {t.width}x{t.height}: mip {loaded} loaded, {desired} wanted ({kv.Value.Shader?.name} -> {shader.name})"));
+						}
+					}
+				}
+				// the colour map now, against the largest texture the game's material had
+				var baseNow = m.HasProperty("_BaseColorMap") ? m.GetTexture("_BaseColorMap") : null;
+				if (baseNow != null) {
+					Texture largest = null;
+					string largestName = null;
+					foreach (var t in kv.Value.Textures) {
+						if (t.Value.Texture != null && (largest == null || t.Value.Texture.width * t.Value.Texture.height > largest.width * largest.height)) {
+							largest = t.Value.Texture;
+							largestName = t.Key;
+						}
+					}
+					if (largest != null && largest.width * largest.height > baseNow.width * baseNow.height * 2) {
+						++smallerBase;
+						if (smaller.Count < worst) {
+							smaller.Add($"{m.name}: colour map {baseNow.name} {baseNow.width}x{baseNow.height}, the game's {largestName} = {largest.name} {largest.width}x{largest.height} ({kv.Value.Shader?.name})");
+						}
+					}
+				}
+			}
+			rows.Add(("switched materials", $"{alive} (and {stale} of an earlier scene, gone)"));
+			rows.Add(("their textures", $"{textures}, {streamed} mip streamed"));
+			rows.Add(("below full size now", $"{reduced} loaded smaller, {wantReduced} wanted smaller by Unity, {requested} with a requested mip"));
+			bad.Sort((a, b) => b.Level.CompareTo(a.Level));
+			for (int i = 0; i < bad.Count && i < worst; ++i) {
+				rows.Add(("  smaller", bad[i].Text));
+			}
+			rows.Add(("textures moved from the game's names", $"{links_.Count} materials; {Resynced} set again by the game after the switch and followed, {Unreadable} names unreadable"));
+			int blocks = 0, blockTextures = 0;
+			var block = new MaterialPropertyBlock();
+			foreach (var r in Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None)) {
+				if (r == null || !r.HasPropertyBlock()) {
+					continue;
+				}
+				bool ours = false;
+				foreach (var m in r.sharedMaterials) {
+					if (m != null && originals_.ContainsKey(m)) {
+						ours = true;
+						break;
+					}
+				}
+				if (!ours) {
+					continue;
+				}
+				++blocks;
+				r.GetPropertyBlock(block);
+				foreach (string name in new[] { "_MainTex", "_BaseMap", "_BaseColorMap", "_Albedo", "_AlbedoMap", "_Diffuse" }) {
+					if (block.HasTexture(name)) {
+						++blockTextures;
+						if (rows.Count < 60) {
+							var bt = block.GetTexture(name);
+							rows.Add(("  block", $"{ObjectPath(r.transform)}: {name} = {(bt != null ? $"{bt.name} {bt.width}x{bt.height}" : "none")}"));
+						}
+					}
+				}
+			}
+			rows.Add(("renderers of switched materials with a property block", $"{blocks}, {blockTextures} colour textures set there"));
+			// every material the scene draws now, by shader: NatureFX shaders this replacer no longer tracks (switched by
+			// an earlier load, their snapshot lost) would show here as untracked
+			var byShader = new Dictionary<string, int>();
+			var counted = new HashSet<Material>();
+			int untracked = 0;
+			var untrackedRows = new List<string>();
+			foreach (var r in Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None)) {
+				if (r == null) {
+					continue;
+				}
+				foreach (var m in r.sharedMaterials) {
+					if (m == null || !counted.Add(m)) {
+						continue;
+					}
+					string sn = m.shader != null ? m.shader.name : "(none)";
+					byShader.TryGetValue(sn, out int c);
+					byShader[sn] = c + 1;
+					if (sn.StartsWith("NatureFX/", StringComparison.Ordinal) && !originals_.ContainsKey(m)) {
+						++untracked;
+						if (untrackedRows.Count < worst) {
+							var bt = m.HasProperty("_BaseColorMap") ? m.GetTexture("_BaseColorMap") : null;
+							string mip = bt is Texture2D b2 && b2.streamingMipmaps ? $", mip {b2.loadedMipmapLevel} loaded / {b2.desiredMipmapLevel} wanted" : "";
+							untrackedRows.Add($"{m.name} ({sn}) @ {ObjectPath(r.transform)}: colour {(bt != null ? $"{bt.name} {bt.width}x{bt.height}{mip}" : "none")}");
+						}
+					}
+				}
+			}
+			rows.Add(("materials drawn now", $"{counted.Count}; NatureFX shaders not tracked (switched earlier, no snapshot): {untracked}"));
+			foreach (string line in untrackedRows) {
+				rows.Add(("  untracked", line));
+			}
+			var shaders = new List<KeyValuePair<string, int>>(byShader);
+			shaders.Sort((a, b) => b.Value.CompareTo(a.Value));
+			for (int i = 0; i < shaders.Count && i < 15; ++i) {
+				rows.Add(("  shader", $"{shaders[i].Key}: {shaders[i].Value}"));
+			}
+			foreach (var kv in Deferred) {
+				rows.Add(("  left as it is", $"{kv.Value}: {kv.Key}"));
+			}
+			rows.Add(("colour map smaller than the game's largest texture", $"{smallerBase} materials"));
+			foreach (string line in smaller) {
+				rows.Add(("  picked", line));
+			}
+			return rows;
 		}
 
 		// Parking map investigation: spectators, road markings and road surfaces went missing once switched. Logs
@@ -252,6 +424,72 @@ namespace NatureFX.Nature {
 				}
 			}
 			originals_.Clear();
+			links_.Clear();
+		}
+
+		// which game property each translated texture came from (same texture object, another name)
+		private void Link(Material m, MaterialSnapshot snapshot) {
+			List<(string, string)> list = null;
+			foreach (string to in LinkedTargets) {
+				if (!m.HasProperty(to)) {
+					continue;
+				}
+				var t = m.GetTexture(to);
+				if (t == null) {
+					continue;
+				}
+				if (snapshot.Textures.TryGetValue(to, out var same) && same.Texture == t) {
+					continue; // the game's own name: its later changes land in the NFX shader as they are
+				}
+				foreach (var kv in snapshot.Textures) {
+					if (kv.Value.Texture == t && kv.Key != to) {
+						(list ??= new List<(string, string)>()).Add((kv.Key, to));
+						break;
+					}
+				}
+			}
+			if (list != null) {
+				links_[m] = list;
+			}
+		}
+
+		// Once a second: a texture the game set after the switch under its own name goes where the NFX shader reads it
+		public void Resync() {
+			if (Time.unscaledTime < nextResync_ || links_.Count == 0) {
+				return;
+			}
+			nextResync_ = Time.unscaledTime + 1.0f;
+			int unreadable = 0;
+			List<Material> gone = null;
+			foreach (var kv in links_) {
+				var m = kv.Key;
+				if (m == null || !originals_.TryGetValue(m, out var snapshot)) {
+					(gone ??= new List<Material>()).Add(m);
+					continue;
+				}
+				foreach (var (from, to) in kv.Value) {
+					if (!m.HasTexture(from)) {
+						++unreadable;
+						continue;
+					}
+					var now = m.GetTexture(from);
+					if (now == null || now == m.GetTexture(to)) {
+						continue;
+					}
+					snapshot.Textures.TryGetValue(from, out var before);
+					Kino.Log.Info($"[NatureFX] Shader rebuild: '{m.name}' {from} became {now.name} {now.width}x{now.height} after the switch " +
+					              $"(was {(before.Texture != null ? $"{before.Texture.name} {before.Texture.width}x{before.Texture.height}" : "none")}); now its {to}");
+					m.SetTexture(to, now);
+					snapshot.Textures[from] = (now, before.Scale, before.Offset); // switching off restores the game's latest
+					++Resynced;
+				}
+			}
+			if (gone != null) {
+				foreach (var m in gone) {
+					links_.Remove(m);
+				}
+			}
+			Unreadable = unreadable;
 		}
 
 		// The NFX shader this material becomes, or null with the reason it stays (null reason: nothing to say,
@@ -389,6 +627,7 @@ namespace NatureFX.Nature {
 			m.renderQueue = queue;
 			// the game's values under HDRP/Lit names (HDRP/Lit sources keep theirs), then the keywords they imply
 			GenericTranslator.Apply(m, snapshot);
+			Link(m, snapshot);
 			foreach (string k in DerivedLitKeywords(m)) {
 				wanted.Add(k);
 			}
@@ -457,7 +696,7 @@ namespace NatureFX.Nature {
 				}
 			}
 			if (shaderName == "HDRP/Lit" && Profiles != null && Profiles.MatchesFoliage(m, objectPath)) {
-				return FoliageShader; // [foliage]: season colours and back lit leaves need the foliage shader
+				return FoliageShader; // [foliage]: colour variation and back lit leaves need the foliage shader
 			}
 			if (shaderName == "HDRP/Lit" && Profiles != null && Profiles.Matches(m, objectPath)) {
 				return ProfileShader;

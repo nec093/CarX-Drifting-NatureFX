@@ -3,7 +3,7 @@
 // drops gather, slide down as teardrops weaving a little, leave a trail of droplets and wipe the small ones off their
 // path; the way down is gravity along the panel plus the air the car drives through (its square: at speed the drops
 // on a windscreen run up and back). Each drop is a lens: the scene behind it seen bent and upside down, a dark rim
-// where the light is reflected inside it, the sky and the sun's glint on its dome. Oily sheen and dirt as before.
+// where the light is reflected inside it, the sky and the sun's glint on its dome. Oily sheen and mud as before.
 Shader "Hidden/NatureFX/CarRain"
 {
     HLSLINCLUDE
@@ -17,8 +17,20 @@ Shader "Hidden/NatureFX/CarRain"
     TEXTURE2D_X(_NFX_ColorTex);
     float4 _NFX_CarRain;    // x: drops, y: oil film, z: wetness (0..1), w: time
     float4 _NFX_SunDirWS;   // xyz: direction towards the sun
-    float4 _NFX_CarDirt;    // x: mud on the lower body, y: dust, z: snow on top, w: the car's ground height (absolute world)
-    float4 _NFX_CarLight;   // x: sun illuminance on a facing panel (lux), y: sky illuminance (lux); for the dirt's own shading
+    float4 _NFX_CarDirt;    // x: mud on the lower body, yz: unused (0), w: the car's ground height (absolute world)
+    float4 _NFX_CarLight;   // x: sun illuminance on a facing panel (lux), y: sky illuminance (lux); for the mud's own shading
+    StructuredBuffer<float4> _NFX_CarSkyProbe; // the own engine's sky as SH9 (HDRP's packing): what a drop mirrors
+    float _NFX_CarSkyProbeOn;
+
+    float3 CarSkySH9(float3 n)
+    {
+        float4 vA = float4(n, 1.0);
+        float3 x1 = float3(dot(_NFX_CarSkyProbe[0], vA), dot(_NFX_CarSkyProbe[1], vA), dot(_NFX_CarSkyProbe[2], vA));
+        float4 vB = n.xyzz * n.yzzx;
+        float3 x2 = float3(dot(_NFX_CarSkyProbe[3], vB), dot(_NFX_CarSkyProbe[4], vB), dot(_NFX_CarSkyProbe[5], vB));
+        float vC = n.x * n.x - n.y * n.y;
+        return max(x1 + x2 + _NFX_CarSkyProbe[6].rgb * vC, 0.0);
+    }
     float4 _NFX_CarAir;     // xyz: the car's velocity (m/s, world): the air it drives through blows the drops (set per car)
 
     struct Attributes
@@ -241,10 +253,15 @@ Shader "Hidden/NatureFX/CarRain"
         float glint = pow(saturate(dot(r, _NFX_SunDirWS.xyz)), 600.0) * beads;
         float fresnel = 0.02 + 0.98 * pow(1.0 - saturate(dot(dn, V)), 5.0);
         float luma = dot(behind, float3(0.2126, 0.7152, 0.0722));
-        // what it mirrors: the sky above brighter than the ground below (the scene's own level as the scale)
-        float sky = luma * (0.4 + 0.8 * saturate(r.y * 0.5 + 0.5)) + 0.01;
+        float exposure = GetCurrentExposureMultiplier();
+        // what it mirrors: the sky as it is (the own engine's sky probe in the mirrored direction; the ground below
+        // the horizon dim), else a guess from the scene's own level
+        float3 sky = _NFX_CarSkyProbeOn > 0.5
+            ? CarSkySH9(r) * exposure * lerp(0.2, 1.0, saturate(r.y * 4.0 + 0.5))
+            : (float3)(luma * (0.4 + 0.8 * saturate(r.y * 0.5 + 0.5)) + 0.01);
         float edgeDark = lerp(1.0, 0.35, smoothstep(0.75, 1.0, rim) * saturate(beads * 2.0));
-        float3 water = behind * (1.0 - fresnel) * edgeDark + sky * fresnel + glint * (luma * 25.0 + 0.5);
+        // the sun's glint as bright as the sun is now (none under thick cloud or at night)
+        float3 water = behind * (1.0 - fresnel) * edgeDark + sky * fresnel + glint * _NFX_CarLight.x * exposure * 0.5;
 
         // oily thin film on wet horizontal panels: interference colours shift with view angle and thickness
         float3 color = water;
@@ -260,40 +277,20 @@ Shader "Hidden/NatureFX/CarRain"
             alpha = max(alpha, filmMask * 0.6);
         }
 
-        // dirt: drawn over the lit car, so it is shaded here from the sun and the sky (it is matte), in the colour
-        // buffer's exposure. Mud splashed up from the wheels on the lower body, dust settling everywhere (more on top),
-        // snow lying on the roof and the bonnet.
-        float dirtAmount = _NFX_CarDirt.x + _NFX_CarDirt.y + _NFX_CarDirt.z;
-        if (dirtAmount > 0.001)
+        // mud: drawn over the lit car, so it is shaded here from the sun and the sky (it is matte), in the colour
+        // buffer's exposure. Splashed up from the wheels on the lower body.
+        if (_NFX_CarDirt.x > 0.001)
         {
             float h = i.positionAWS.y - _NFX_CarDirt.w;
             float splat = Noise(plane * 6.0) * 0.6 + Noise(plane * 25.0) * 0.4;
             float mud = _NFX_CarDirt.x * smoothstep(0.8, 0.2, h + (splat - 0.5) * 0.35) * (1.0 - up * 0.6);
-            float dust = _NFX_CarDirt.y * (0.35 + 0.65 * up) * smoothstep(0.25, 0.75, splat * 0.6 + Noise(plane * 3.0) * 0.4);
-            float snow = _NFX_CarDirt.z * smoothstep(0.55, 0.85, up) * smoothstep(0.3, 0.5, Noise(plane * 1.5) * 0.7 + splat * 0.3);
-            float lit = (_NFX_CarLight.x * saturate(dot(n, _NFX_SunDirWS.xyz)) + _NFX_CarLight.y * (0.6 + 0.4 * n.y)) * INV_PI * GetCurrentExposureMultiplier();
-            float3 dirtColor = float3(0.0, 0.0, 0.0);
-            float dirtMask = 0.0;
             if (mud > 0.001)
             {
-                dirtColor = float3(0.16, 0.12, 0.08) * lit;
-                dirtMask = saturate(mud * 1.2);
+                float lit = (_NFX_CarLight.x * saturate(dot(n, _NFX_SunDirWS.xyz)) + _NFX_CarLight.y * (0.6 + 0.4 * n.y)) * INV_PI * GetCurrentExposureMultiplier();
+                float dirtMask = saturate(mud * 1.2);
+                color = lerp(color, float3(0.16, 0.12, 0.08) * lit, dirtMask * (1.0 - coverage * 0.5));
+                alpha = max(alpha, dirtMask);
             }
-            if (dust > 0.001)
-            {
-                float3 d = float3(0.42, 0.37, 0.3) * lit;
-                float m = saturate(dust);
-                dirtColor = lerp(dirtColor, d, m * (1.0 - dirtMask * 0.5));
-                dirtMask = max(dirtMask, m * 0.85);
-            }
-            if (snow > 0.001)
-            {
-                float m = saturate(snow * 1.5);
-                dirtColor = lerp(dirtColor, float3(0.85, 0.87, 0.9) * lit, m);
-                dirtMask = max(dirtMask, m);
-            }
-            color = lerp(color, dirtColor, dirtMask * (1.0 - coverage * 0.5));
-            alpha = max(alpha, dirtMask);
         }
 
         return float4(color, saturate(alpha));

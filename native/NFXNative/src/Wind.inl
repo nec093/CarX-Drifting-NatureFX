@@ -5,11 +5,18 @@
 // render thread before the TLAS, WindDisplace.hlsl moves its vertices with the same wind and the BLAS is updated.
 namespace {
 
+// The swayed copies live in g_windPool (chunks kept in unordered access; RecordWind moves the whole chunk to be read
+// by the updates and back), the BLAS in g_blasPool, compacted after their first build (an updatable BLAS can be
+// compacted and stays updatable). One committed buffer each had taken at least 64 KB per instance for both.
+BufferPool g_windPool(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+constexpr D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS kWindFlags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE |
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_COMPACTION;
+
 struct WindBlas {
 	int geometry = -1;
 	float transform[12] = {};
-	ComPtr<ID3D12Resource> positions;  // swayed, object space float3 (unordered access)
-	ComPtr<ID3D12Resource> blas;
+	PoolSpan positions;  // swayed, object space float3 (g_windPool)
+	PoolSpan blas;       // g_blasPool
 	UINT64 updateScratch = 0;
 	D3D12_RAYTRACING_GEOMETRY_DESC desc = {};  // its geometry, with the swayed positions
 	bool used = false;
@@ -28,15 +35,32 @@ constexpr size_t kWindBudget = 64;  // wind BLAS swayed and updated a frame (Rec
 size_t g_windCursor = 0;
 std::mutex g_windMutex;
 
-// The per frame updates' scratch, for the largest wind BLAS: only here, while the render thread's work is waited for
-// (NFX_Native_BuildScene did before this)
+// The per frame updates' scratch: a ring the frame's updates take their own parts of, so they run side by side with
+// one barrier at the end (one shared scratch serialised them, a barrier after each of 64). At least the largest
+// update, up to all of them, at most 32 MB. Only here, while the render thread's work is waited for
+// (NFX_Native_BuildScene did before this).
+constexpr UINT64 kWindScratchAlign = 256;
+constexpr UINT64 kWindScratchMax = 32ull << 20;
+UINT64 g_windScratchRing = 0;  // the part of g_windScratch the ring uses
+
 bool EnsureWindScratch() {
-	UINT64 size = 0;
+	UINT64 largest = 0, sum = 0;
 	for (const auto& w : g_windBlas) {
-		size = w.updateScratch > size ? w.updateScratch : size;
+		UINT64 size = (w.updateScratch + kWindScratchAlign - 1) & ~(kWindScratchAlign - 1);
+		largest = size > largest ? size : largest;
+		sum += size;
 	}
-	return size == 0 || EnsureBuffer(g_windScratch, g_windScratchCapacity, size, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-	                                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	UINT64 ring = sum < kWindScratchMax ? sum : kWindScratchMax;
+	ring = ring > largest ? ring : largest;
+	if (ring == 0) {
+		return true;
+	}
+	if (!EnsureBuffer(g_windScratch, g_windScratchCapacity, ring, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+	                  D3D12_RESOURCE_STATE_UNORDERED_ACCESS)) {
+		return false;
+	}
+	g_windScratchRing = ring;
+	return true;
 }
 
 // The BLAS of the swaying instances, after NFX_Native_BuildScene built the still ones. Reuses those of the instances
@@ -51,6 +75,11 @@ bool BuildWindBlas() {
 		any = any || (i < g_instanceSways.size() && g_instanceSways[i]);
 	}
 	if (!any) {
+		// (BuildScene waited for the render thread's work before this)
+		for (auto& w : g_windBlas) {
+			g_blasPool.Free(w.blas);
+			g_windPool.Free(w.positions);
+		}
 		g_windBlas.clear();
 		return true;
 	}
@@ -92,6 +121,9 @@ bool BuildWindBlas() {
 		if (g_windBlas[k].used) {
 			remap[k] = static_cast<int>(kept.size());
 			kept.push_back(g_windBlas[k]);
+		} else {
+			g_blasPool.Free(g_windBlas[k].blas);
+			g_windPool.Free(g_windBlas[k].positions);
 		}
 	}
 	for (auto& v : g_instanceWind) {
@@ -113,25 +145,28 @@ bool BuildWindBlas() {
 		const auto& g = g_geometries[w.geometry];
 		w.desc = g.desc;
 		w.desc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
-		w.desc.Triangles.VertexBuffer.StartAddress = g.ownPositions->GetGPUVirtualAddress();
+		w.desc.Triangles.VertexBuffer.StartAddress = g.ownPositions.Address();
 		w.desc.Triangles.VertexBuffer.StrideInBytes = 12;
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
 		inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
-		inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+		inputs.Flags = kWindFlags;
 		inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
 		inputs.NumDescs = 1;
 		inputs.pGeometryDescs = &w.desc;
 		g_device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &info[n]);
 		scratchSize = info[n].ScratchDataSizeInBytes > scratchSize ? info[n].ScratchDataSizeInBytes : scratchSize;
 		w.updateScratch = info[n].UpdateScratchDataSizeInBytes;
-		w.positions = CreateBuffer(static_cast<UINT64>(g.desc.Triangles.VertexCount) * 12, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-		                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-		w.blas = CreateBuffer(info[n].ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-		                      D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+		w.positions = g_windPool.Allocate(static_cast<UINT64>(g.desc.Triangles.VertexCount) * 12);
+		w.blas = g_blasBuildPool.Allocate(info[n].ResultDataMaxSizeInBytes);  // moved to g_blasPool compacted below
 		if (!w.positions || !w.blas) {
 			return false;
 		}
 	}
+	// each new BLAS reports its compacted size (as BuildScene's do)
+	bool compact = EnsureBuffer(g_compactSizes, g_compactSizesCapacity, static_cast<UINT64>(toBuild.size()) * 8, D3D12_HEAP_TYPE_DEFAULT,
+	                            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS) &&
+	               EnsureBuffer(g_compactReadback, g_compactReadbackCapacity, static_cast<UINT64>(toBuild.size()) * 8, D3D12_HEAP_TYPE_READBACK,
+	                            D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
 	ComPtr<ID3D12Resource> scratch = CreateBuffer(scratchSize, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	if (!scratch) {
 		return false;
@@ -141,19 +176,76 @@ bool BuildWindBlas() {
 		auto& w = g_windBlas[toBuild[n]];
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build = {};
 		build.Inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
-		build.Inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+		build.Inputs.Flags = kWindFlags;
 		build.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
 		build.Inputs.NumDescs = 1;
 		build.Inputs.pGeometryDescs = &w.desc;
-		build.DestAccelerationStructureData = w.blas->GetGPUVirtualAddress();
+		build.DestAccelerationStructureData = w.blas.Address();
 		build.ScratchAccelerationStructureData = scratch->GetGPUVirtualAddress();
-		g_gpu.list->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
+		if (compact) {
+			D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC post = {};
+			post.InfoType = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE;
+			post.DestBuffer = g_compactSizes->GetGPUVirtualAddress() + n * 8;
+			g_gpu.list->BuildRaytracingAccelerationStructure(&build, 1, &post);
+		} else {
+			g_gpu.list->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
+		}
 		D3D12_RESOURCE_BARRIER b = UavBarrier(nullptr);
 		g_gpu.list->ResourceBarrier(1, &b);
 		// from now on the updates read the swayed copy
-		w.desc.Triangles.VertexBuffer.StartAddress = w.positions->GetGPUVirtualAddress();
+		w.desc.Triangles.VertexBuffer.StartAddress = w.positions.Address();
 	}
-	return g_gpu.SubmitAndWait() && EnsureWindScratch();
+	if (!compact) {
+		// no compaction (no room for its read back): they stay in the build pool (freed from there when dropped)
+		return g_gpu.SubmitAndWait() && EnsureWindScratch();
+	}
+	// the sizes back, then each BLAS copied into a span of its compacted size; the ones as built are in no TLAS yet
+	// (BuildScene points the instances at these after this returns): back to the pool once the copies ran
+	UINT64 bytes = static_cast<UINT64>(toBuild.size()) * 8;
+	D3D12_RESOURCE_BARRIER toCopy = Transition(g_compactSizes.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+	g_gpu.list->ResourceBarrier(1, &toCopy);
+	g_gpu.list->CopyBufferRegion(g_compactReadback.Get(), 0, g_compactSizes.Get(), 0, bytes);
+	D3D12_RESOURCE_BARRIER back = Transition(g_compactSizes.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	g_gpu.list->ResourceBarrier(1, &back);
+	if (!g_gpu.SubmitAndWait()) {
+		return false;
+	}
+	std::vector<PoolSpan> uncompacted;
+	void* mapped = nullptr;
+	D3D12_RANGE readRange = { 0, static_cast<SIZE_T>(bytes) };
+	if (SUCCEEDED(g_compactReadback->Map(0, &readRange, &mapped)) && mapped != nullptr) {
+		const UINT64* sizes = static_cast<const UINT64*>(mapped);
+		g_gpu.Begin("wind compact");
+		bool copied = false;
+		for (size_t n = 0; n < toBuild.size(); ++n) {
+			auto& w = g_windBlas[toBuild[n]];
+			UINT64 size = sizes[n];
+			bool known = size > 0 && size <= w.blas.bytes;
+			PoolSpan compacted = g_blasPool.Allocate(known ? size : w.blas.bytes);
+			if (!compacted) {
+				continue;
+			}
+			g_gpu.list->CopyRaytracingAccelerationStructure(compacted.Address(), w.blas.Address(),
+			                                                known ? D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT
+			                                                      : D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_CLONE);
+			uncompacted.push_back(w.blas);
+			w.blas = compacted;
+			copied = true;
+		}
+		D3D12_RANGE none = { 0, 0 };
+		g_compactReadback->Unmap(0, &none);
+		if (copied) {
+			D3D12_RESOURCE_BARRIER all = UavBarrier(nullptr);
+			g_gpu.list->ResourceBarrier(1, &all);
+		}
+		if (!g_gpu.SubmitAndWait()) {
+			return false;
+		}
+	}
+	for (auto& span : uncompacted) {
+		g_blasPool.Free(span);
+	}
+	return EnsureWindScratch();
 }
 
 // WindDisplace.hlsl's constants for one instance: its vertex count, object to world (3x4, row major) and the inverse
@@ -188,7 +280,7 @@ void RecordWind(ID3D12GraphicsCommandList4* list, int slot, const std::vector<D3
 		return;
 	}
 	for (const auto& w : g_windBlas) {
-		if (w.updateScratch > g_windScratchCapacity) {
+		if (w.updateScratch > g_windScratchRing) {
 			return;
 		}
 	}
@@ -238,22 +330,33 @@ void RecordWind(ID3D12GraphicsCommandList4* list, int slot, const std::vector<D3
 		UINT vertices = g.desc.Triangles.VertexCount;
 		float constants[28];
 		WindConstants(resolved[i].Transform, vertices, constants);
-		list->SetComputeRootShaderResourceView(0, g.ownPositions->GetGPUVirtualAddress());
-		list->SetComputeRootUnorderedAccessView(1, w.positions->GetGPUVirtualAddress());
+		list->SetComputeRootShaderResourceView(0, g.ownPositions.Address());
+		list->SetComputeRootUnorderedAccessView(1, w.positions.Address());
 		list->SetComputeRoot32BitConstants(2, 28, constants, 0);
 		list->Dispatch((vertices + 63) / 64, 1, 1);
 	}
-	// 2. the swayed vertices are read by the updates: unordered access -> shader resource, and back after
+	// 2. the swayed vertices are read by the updates: their chunks unordered access -> shader resource, and back after
+	// (whole chunks: barriers go by resource; nothing else reads the swayed copies)
 	std::vector<D3D12_RESOURCE_BARRIER> toRead, toWrite;
+	std::vector<int> chunks;
 	for (size_t k = 0; k < count; ++k) {
-		if (!chosen[k]) {
+		if (!chosen[k] || !g_windBlas[k].positions) {
 			continue;
 		}
-		const auto& w = g_windBlas[k];
-		toRead.push_back(Transition(w.positions.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
-		toWrite.push_back(Transition(w.positions.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+		int c = g_windBlas[k].positions.chunk;
+		if (std::find(chunks.begin(), chunks.end(), c) != chunks.end()) {
+			continue;
+		}
+		chunks.push_back(c);
+		ID3D12Resource* chunk = g_windBlas[k].positions.Resource();
+		toRead.push_back(Transition(chunk, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+		toWrite.push_back(Transition(chunk, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+	}
+	if (toRead.empty()) {
+		return;
 	}
 	list->ResourceBarrier(static_cast<UINT>(toRead.size()), toRead.data());
+	UINT64 scratchUsed = 0;
 	for (size_t k = 0; k < count; ++k) {
 		if (!chosen[k] || firstInstance[k] < 0) {
 			continue;
@@ -266,18 +369,26 @@ void RecordWind(ID3D12GraphicsCommandList4* list, int slot, const std::vector<D3
 		}
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build = {};
 		build.Inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
-		build.Inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD |
-		                     D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+		build.Inputs.Flags = kWindFlags | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
 		build.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
 		build.Inputs.NumDescs = 1;
 		build.Inputs.pGeometryDescs = &w.desc;
-		build.DestAccelerationStructureData = w.blas->GetGPUVirtualAddress();
-		build.SourceAccelerationStructureData = w.blas->GetGPUVirtualAddress();
-		build.ScratchAccelerationStructureData = g_windScratch->GetGPUVirtualAddress();
+		build.DestAccelerationStructureData = w.blas.Address();
+		build.SourceAccelerationStructureData = w.blas.Address();
+		// its own part of the ring; a barrier only when the ring comes round (the updates before must be done with it)
+		UINT64 size = (w.updateScratch + kWindScratchAlign - 1) & ~(kWindScratchAlign - 1);
+		if (scratchUsed + size > g_windScratchRing) {
+			D3D12_RESOURCE_BARRIER b = UavBarrier(nullptr);
+			list->ResourceBarrier(1, &b);
+			scratchUsed = 0;
+		}
+		build.ScratchAccelerationStructureData = g_windScratch->GetGPUVirtualAddress() + scratchUsed;
+		scratchUsed += size;
 		list->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
-		D3D12_RESOURCE_BARRIER b = UavBarrier(nullptr);
-		list->ResourceBarrier(1, &b);
 	}
+	// every update done before the TLAS build reads them (and before the swayed copies go back to being written)
+	D3D12_RESOURCE_BARRIER done = UavBarrier(nullptr);
+	list->ResourceBarrier(1, &done);
 	list->ResourceBarrier(static_cast<UINT>(toWrite.size()), toWrite.data());
 }
 

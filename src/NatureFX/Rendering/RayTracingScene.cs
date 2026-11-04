@@ -100,8 +100,12 @@ namespace NatureFX.Rendering {
 			proxyShader_ = proxyShader;
 		}
 
-		public void Rebuild() {
+		// fresh: after a map load, the own engine drops its whole scene first (every BLAS, buffer and descriptor;
+		// NativeEngine.UploadScene) and builds the meshes still in use again, instead of keeping what the last map
+		// left. Car changes and shader changes keep it (a full rebuild there would be a 400 ms hitch each time).
+		public void Rebuild(bool fresh = false) {
 			needsRebuild_ = false;
+			nativeFresh_ |= fresh;
 			nextOwnHandle_ = 1;
 			moving_.Clear();
 			handles_.Clear();
@@ -134,6 +138,8 @@ namespace NatureFX.Rendering {
 			native_ = 0;
 			glass_ = 0;
 			OwnGlass.Slots.Clear();
+			LeftOut.Clear();
+			OwnLighting.Untraced.Clear();
 			int trees = Sync();
 			int failed = failed_;
 			Kino.Log.Info($"[NatureFX] Ray tracing scene: {InstanceCount} instances, {proxies_.Count} materials, {moving_.Count} moving, {lowerLodCount_} lower LOD renderers skipped, " +
@@ -147,6 +153,7 @@ namespace NatureFX.Rendering {
 		private readonly Dictionary<int, NativeEngine.Instance> nativeInstances_ = new();
 		private bool nativeDirty_;
 		private bool nativeClear_;
+		private bool nativeFresh_; // kept until the engine took it (it may be off at the map load)
 
 		// glass is in the own engine's scene only (Unity's has no use for it): its handles are negative, from here
 		private int nextGlassHandle_ = -1;
@@ -176,9 +183,10 @@ namespace NatureFX.Rendering {
 			if (!nativeDirty_ && !nativeClear_) {
 				return;
 			}
-			NativeEngine.UploadScene(nativeInstances_.Values, nativeClear_);
+			NativeEngine.UploadScene(nativeInstances_.Values, nativeClear_, nativeFresh_);
 			nativeDirty_ = false;
 			nativeClear_ = false;
+			nativeFresh_ = false;
 		}
 
 		private int lowerLodCount_;
@@ -231,6 +239,7 @@ namespace NatureFX.Rendering {
 				bool moving = !batched && r.GetComponentInParent<Rigidbody>() != null;
 				// tiny static props (bolts, signs' screws, pebbles) cost an instance each and barely show in a ray
 				if (!moving && r.bounds.size.magnitude < MinStaticSize) {
+					OwnLighting.Untraced.Add(r);
 					++skipped_;
 					handles_[r] = new List<int>();
 					continue;
@@ -461,6 +470,9 @@ namespace NatureFX.Rendering {
 		// Surfaces that are not real geometry for rays: anything drawn transparent (render queue, or HDRP's
 		// surface type when the queue says opaque) and the cars' fake contact shadow (CarX "CarBlobshadow", a dark
 		// box under the car that showed as a black platform in reflections).
+		// see-through materials neither glass nor solid: the rays pass them (name (shader, queue) -> slots), last rebuild
+		public static readonly Dictionary<string, int> LeftOut = new();
+
 		private static bool Solid(Material m) {
 			if (m.renderQueue >= (int)RenderQueue.Transparent) {
 				return false;
@@ -479,7 +491,7 @@ namespace NatureFX.Rendering {
 		private static readonly string[] NotGlass = {
 			"blobshadow", "fakeshadow", "shadowplane", "shadow", "decal", "particle", "unlit", "additive", "sprite", "ui/", "text",
 			"flare", "glow", "smoke", "dust", "fog", "cloud", "water", "skid", "tire", "trail", "light shaft", "beam",
-			// overlays blended onto roads and walls (a touge map's blend_road_wear dimmed the whole road as "glass")
+			// overlays blended onto roads and walls (a map's road wear overlay dimmed the whole road as "glass")
 			"blend", "wear", "dirt", "overlay", "puddle", "stain", "leak", "grime", "moss", "crack", "mark",
 		};
 		// what a material's name or shader says glass is, whatever its smoothness
@@ -515,6 +527,7 @@ namespace NatureFX.Rendering {
 
 		private List<int> AddRenderer(Renderer r, Mesh mesh, int firstSubMesh, Matrix4x4 matrix, bool moving, bool unscaled, Renderer owner) {
 			var handles = new List<int>();
+			bool traced = false, untraced = false;
 			// the glass the own engine draws is hidden from HDRP (OwnGlass): the scene reads what was there
 			var materials = OwnGlass.Originals(r) ?? r.sharedMaterials;
 			if (moving) {
@@ -533,7 +546,12 @@ namespace NatureFX.Rendering {
 				}
 				if (!Solid(source)) {
 					// glass, particles, decals, fake shadows do not block light; glass goes to the own engine to mirror
-					if (Glass(source)) {
+					if (!Glass(source)) {
+						// the debug page: what rays pass through (reflections see the sky where it was)
+						string key = $"{source.name} ({(source.shader != null ? source.shader.name : "-")}, queue {source.renderQueue})";
+						LeftOut.TryGetValue(key, out int seen);
+						LeftOut[key] = seen + 1;
+					} else {
 						int glassHandle = nextGlassHandle_--;
 						AddNative(glassHandle, mesh, subMesh, matrix, false, "glass", moving ? r.transform : null, unscaled, GetProxy(source),
 							owner != null ? InstanceOverrides(r, i, source, moving) : null);
@@ -556,14 +574,23 @@ namespace NatureFX.Rendering {
 				// instances and any hit work in a ray, for surfaces that show in a reflection as a blur at most
 				if (alphaTest && !moving && r.shadowCastingMode == ShadowCastingMode.Off) {
 					++skipped_;
+					untraced = true;
 					continue;
 				}
+				traced = true;
 				var overrides = owner != null ? InstanceOverrides(r, i, source, moving) : null;
 				try {
 					int handle = nextOwnHandle_++;
 					handles.Add(handle);
 					AddNative(handle, mesh, subMesh, matrix, alphaTest, owner == null ? "tree" : unscaled ? "skinned" : moving ? "car" : "static",
 						moving ? r.transform : null, unscaled, proxy, overrides);
+					// drawn only into the shadow maps (or not at all): it casts its shadow, but it is no ground to lay
+					// anything on (debris floated on such hidden shadow casters along a garage's walls)
+					if (r.shadowCastingMode == ShadowCastingMode.ShadowsOnly || r.forceRenderingOff) {
+						var hidden = nativeInstances_[handle];
+						hidden.NotDrawn = true;
+						nativeInstances_[handle] = hidden;
+					}
 					++InstanceCount;
 					if (moving) {
 						moving_.Add((handle, r.transform, unscaled));
@@ -571,6 +598,10 @@ namespace NatureFX.Rendering {
 				} catch (Exception) {
 					++failed_;
 				}
+			}
+			// drawn by HDRP but not in the scene: the own BSDF has no colour for it (OwnLighting.UntracedLit)
+			if (untraced && !traced) {
+				OwnLighting.Untraced.Add(r);
 			}
 			return handles;
 		}

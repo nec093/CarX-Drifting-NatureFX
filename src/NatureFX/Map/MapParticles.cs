@@ -7,10 +7,10 @@ using UnityEngine.Rendering.HighDefinition;
 
 namespace NatureFX.Map {
 	// Living things and floating bits (docs/map-authoring.md 5.4): nfx_fx_<preset> fills its box with small
-	// particles when the season, the time and the weather suit them (fireflies on summer nights, leaves in autumn
-	// with more wind, petals in spring, moths around lamps on summer nights, dust in the sunlight, pollen in spring and
-	// early summer). Moths also gather by themselves at the lit light markers nearest the camera. A disabled Particle
-	// System of the map named nfx_fx plays while map effects are on. At most 32 run, stopped beyond 80 m.
+	// particles when the time and the weather suit them (fireflies on dry nights, petals, moths around lamps on dry
+	// nights, dust in the sunlight, pollen on dry days). Moths also gather by themselves at the lit light markers
+	// nearest the camera. A disabled Particle System of the map named nfx_fx plays while map effects are on. At most 32
+	// run, stopped beyond 80 m.
 	public class MapParticles {
 		private const int MaxRunning = 32;
 		private const float StopDistance = 80.0f;
@@ -29,7 +29,6 @@ namespace NatureFX.Map {
 
 		private static readonly Dictionary<string, Preset> Presets = new(System.StringComparer.OrdinalIgnoreCase) {
 			["fireflies"] = new Preset { Color = new Color(0.02f, 0.03f, 0.0f), Emission = 600.0f, Size = 0.06f, Rate = 1.5f, Lifetime = 5.0f, Gravity = 0.0f, Noise = 0.4f, MaxParticles = 120 },
-			["leaves"] = new Preset { Color = Color.white, Size = 0.08f, Rate = 2.0f, Lifetime = 14.0f, Gravity = 0.06f, Noise = 0.8f, MaxParticles = 300 },
 			["petals"] = new Preset { Color = Color.white, Size = 0.025f, Rate = 4.0f, Lifetime = 14.0f, Gravity = 0.025f, Noise = 0.6f, MaxParticles = 400 },
 			["moths"] = new Preset { Color = new Color(0.55f, 0.5f, 0.42f), Size = 0.045f, Rate = 4.0f, Lifetime = 3.0f, Gravity = 0.0f, Noise = 2.5f, MaxParticles = 40 },
 			["dust"] = new Preset { Color = new Color(0.9f, 0.85f, 0.75f), Emission = 4.0f, Size = 0.02f, Rate = 8.0f, Lifetime = 10.0f, Gravity = -0.005f, Noise = 0.15f, MaxParticles = 400 },
@@ -107,7 +106,7 @@ namespace NatureFX.Map {
 
 		private Fx Make(string preset, Vector3 position, Quaternion rotation, Vector3 size, float amount, bool auto) {
 			if (!Presets.TryGetValue(preset, out var look)) {
-				Kino.Log.Warning($"[NatureFX] Unknown fx preset '{preset}' (fireflies, leaves, petals, moths, dust, pollen)");
+				Kino.Log.Warning($"[NatureFX] Unknown fx preset '{preset}' (fireflies, petals, moths, dust, pollen)");
 				return null;
 			}
 			var material = MaterialFor(preset, look);
@@ -158,8 +157,8 @@ namespace NatureFX.Map {
 			renderer.renderMode = ParticleSystemRenderMode.Billboard;
 			renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
 			renderer.receiveShadows = false;
-			if (preset == "leaves" || preset == "petals") {
-				// a cupped leaf turning over and over in 3D as it flutters down, sliding sideways with each swing,
+			if (preset == "petals") {
+				// a cupped petal turning over and over in 3D as it flutters down, sliding sideways with each swing,
 				// slowed by the air, then lying where it lands for the rest of its life
 				renderer.renderMode = ParticleSystemRenderMode.Mesh;
 				renderer.mesh = ParticleAtlas.LeafMesh();
@@ -176,7 +175,7 @@ namespace NatureFX.Map {
 				rol.z = new ParticleSystem.MinMaxCurve(-3.0f, 3.0f);
 				var drag = ps.limitVelocityOverLifetime;
 				drag.enabled = true;
-				drag.limit = preset == "leaves" ? 1.2f : 0.8f;
+				drag.limit = 0.8f;
 				drag.dampen = 0.15f;
 				var collision = ps.collision;
 				collision.enabled = true;
@@ -215,8 +214,6 @@ namespace NatureFX.Map {
 			}
 			string name = "NatureFX.Fx " + preset;
 			m = preset switch {
-				// momiji and the other leaves, red, orange and yellow
-				"leaves" => ParticleAtlas.Material(bundle_, name, ParticleAtlas.ModeLeaf, ParticleAtlas.Leaves, look.Color),
 				"petals" => ParticleAtlas.Material(bundle_, name, ParticleAtlas.ModeLeaf, ParticleAtlas.Petals, look.Color),
 				"moths" => ParticleAtlas.Material(bundle_, name, ParticleAtlas.ModeLeaf, ParticleAtlas.Moth, look.Color),
 				"fireflies" => ParticleAtlas.Material(bundle_, name, ParticleAtlas.ModeGlow, ParticleAtlas.Glow, new Color(0.75f, 1.0f, 0.2f), look.Emission),
@@ -263,9 +260,8 @@ namespace NatureFX.Map {
 
 			float elevation = sun != null ? Mathf.Asin(Mathf.Clamp(-sun.transform.forward.y, -1.0f, 1.0f)) * Mathf.Rad2Deg : 45.0f;
 			var w = Weather.Current;
-			int season = Seasons.Current;
-			bool summerNight = on && (season == 1 || season < 0) && elevation < -2.0f && w.Rain < 0.05f;
-			PlaceMoths(summerNight, litLamps, camera);
+			bool dryNight = on && elevation < -2.0f && w.Rain < 0.05f;
+			PlaceMoths(dryNight, litLamps, camera);
 
 			sorted_.Clear();
 			foreach (var f in fx_) {
@@ -279,20 +275,15 @@ namespace NatureFX.Map {
 				allowed.Add(sorted_[i]);
 			}
 
-			float wind = Shader.GetGlobalVector("_NFX_Wind").w;
 			foreach (var f in fx_) {
 				if (f.System == null) {
 					continue;
 				}
-				bool suits = f.Preset == null || Suits(f.Preset, season, elevation, w);
+				bool suits = f.Preset == null || Suits(f.Preset, elevation, w);
 				bool wanted = on && allowed.Contains(f) && suits;
 				float distance = Vector3.Distance(f.Position, camera);
 				f.Why = !on ? "map effects off" : distance >= StopDistance ? $"stopped beyond {StopDistance:0} m" : !allowed.Contains(f) ? "not among the 32 nearest"
 					: wanted ? $"running ({f.System.particleCount} in the air)" : Waits(f.Preset);
-				if (wanted && f.Preset == "leaves") {
-					var emission = f.System.emission;
-					emission.rateOverTime = f.Rate * Mathf.Clamp(0.3f + wind, 0.3f, 3.0f) * Mathf.Max(0.3f, w.Leaves * 2.0f);
-				}
 				if (wanted == f.Running) {
 					continue;
 				}
@@ -309,12 +300,10 @@ namespace NatureFX.Map {
 
 		private static string Waits(string preset) {
 			return preset switch {
-				"fireflies" => "waits for a summer night without rain",
-				"leaves" => "waits for autumn (or many fallen leaves)",
-				"petals" => "waits for spring",
-				"moths" => "waits for a summer night",
+				"fireflies" => "waits for a night without rain",
+				"moths" => "waits for a night without rain",
 				"dust" => "waits for a clear, dry day",
-				"pollen" => "waits for a spring or early summer day",
+				"pollen" => "waits for a dry day",
 				_ => "waits"
 			};
 		}
@@ -339,21 +328,18 @@ namespace NatureFX.Map {
 			return lines;
 		}
 
-		private static bool Suits(string preset, int season, float elevation, WeatherState w) {
+		private static bool Suits(string preset, float elevation, WeatherState w) {
 			bool dry = w.Rain < 0.05f;
-			// no season set: everything that is not tied to one particular season
 			switch (preset) {
-				case "fireflies": return (season == 1 || season < 0) && elevation < -2.0f && dry;
-				case "leaves": return season == 2 || (season < 0 && w.Leaves > 0.3f);
-				case "petals": return season == 0;
-				case "moths": return (season == 1 || season < 0) && elevation < -2.0f && dry;
+				case "fireflies": return elevation < -2.0f && dry;
+				case "moths": return elevation < -2.0f && dry;
 				case "dust": return elevation > 10.0f && w.Cloud < 0.4f && dry;
-				case "pollen": return (season == 0 || (season == 1 && Seasons.Position < 1.5f)) && elevation > 0.0f && dry;
-				default: return true;
+				case "pollen": return elevation > 0.0f && dry;
+				default: return true; // petals: always
 			}
 		}
 
-		// moths at the nearest lit lamps (summer nights)
+		// moths at the nearest lit lamps (dry nights)
 		private void PlaceMoths(bool active, IReadOnlyList<Vector3> lamps, Vector3 camera) {
 			var autos = fx_.FindAll(f => f.Auto);
 			var wanted = new List<Vector3>();

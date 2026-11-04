@@ -5,8 +5,8 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 namespace NatureFX.Rendering {
-	// CarX ships with DX12 (D3D12Core.dll, split gfx jobs) but starts on DX11. Unity only picks the graphics
-	// API at startup, so switching means quitting and relaunching through Steam with -force-d3d12 / -force-d3d11.
+	// CarX ships with DX12 (D3D12Core.dll, split gfx jobs) but starts on DX11; NatureFX needs DX12. Unity only picks
+	// the graphics API at startup, so switching means quitting and relaunching through Steam with -force-d3d12.
 	public static class GraphicsApiSwitcher {
 		private const uint CarXAppId = 635260;
 		// Steam refuses a second instance (single-instance in boot.config), so wait for this one to exit
@@ -14,9 +14,9 @@ namespace NatureFX.Rendering {
 
 		public static bool IsD3D12 => SystemInfo.graphicsDeviceType == GraphicsDeviceType.Direct3D12;
 		public static string Current => SystemInfo.graphicsDeviceType.ToString().Replace("Direct3D", "DX");
-		public static string LaunchOption(bool d3d12) => d3d12 ? "-force-d3d12" : "-force-d3d11";
+		public const string LaunchOption = "-force-d3d12";
 
-		public static bool RestartWith(bool d3d12) {
+		public static bool RestartInDx12() {
 			uint appId = CarXAppId;
 			try {
 				if (Kino.Info.AppId != 0) {
@@ -26,7 +26,7 @@ namespace NatureFX.Rendering {
 				// KSL info not ready; keep the known CarX app id
 			}
 
-			string url = $"steam://run/{appId}//{LaunchOption(d3d12)}/";
+			string url = $"steam://run/{appId}//{LaunchOption}/";
 			try {
 				// a detached shell waits for the game to close, then asks Steam to start it again with the option
 				var info = new ProcessStartInfo("cmd.exe", $"/c timeout /t {RelaunchDelaySeconds} /nobreak >nul & start \"\" \"{url}\"") {
@@ -39,7 +39,7 @@ namespace NatureFX.Rendering {
 				return false;
 			}
 
-			Kino.Log.Info($"[NatureFX] Restarting with {LaunchOption(d3d12)} via {url}");
+			Kino.Log.Info($"[NatureFX] Restarting with {LaunchOption} via {url}");
 			Application.Quit();
 			return true;
 		}

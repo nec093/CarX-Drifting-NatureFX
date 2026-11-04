@@ -16,11 +16,11 @@ namespace NatureFX.Rendering {
 		private RTHandle copy_;
 
 		protected override void Setup(ScriptableRenderContext renderContext, CommandBuffer cmd) {
-			copy_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension,
-				colorFormat: GraphicsFormat.R16G16B16A16_SFloat, useDynamicScale: true, name: "NFX_NightVision_Source");
+			copy_ = SharedColor.Acquire();
 		}
 
 		protected override void Execute(CustomPassContext ctx) {
+			using var cpuTime = NatureFX.Tools.CpuTimings.Scope("pass: night vision"); // (the debug page)
 			if (Material == null || ctx.hdCamera.camera.cameraType != CameraType.Game) {
 				return;
 			}
@@ -32,7 +32,8 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Cleanup() {
-			copy_?.Release();
+			SharedColor.Release(copy_);
+			copy_ = null;
 		}
 	}
 

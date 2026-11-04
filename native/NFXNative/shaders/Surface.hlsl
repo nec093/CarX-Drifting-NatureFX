@@ -3,8 +3,9 @@
 // (HDRP's G-buffer holds neither for a custom pass), the exact normal and distance (the G-buffer normal is
 // quantised), and whether it is a thin card (leaf). The shadow, ambient and reflection passes read this.
 // Surface (NFX_NativeBridge PrepareSurface): float4 per pixel (the point xyz, 1 = something there).
-// Output: 2 float4 per pixel (albedo rgb, metallic * 0.49 + 0.5 when clear coated; normal xyz, distance
-// from the camera: 0 not found, negative a thin card). Compiled into Surface.h.
+// Output: uint4 per pixel (albedo rgb and metallic * 0.49 + 0.5 when clear coated in unorm8 (NfxPackUnorm4x8); the
+// normal as an octahedron (NfxPackOct16); the distance from the camera as a float: 0 not found, negative a thin card
+// (it rebuilds the ray origins: no half); 0). The bridge's UnpackSurface. Compiled into Surface.h.
 #include "NFXCommon.hlsli"
 
 NFX_ENTRY(id)
@@ -20,9 +21,16 @@ NFX_ENTRY(id)
         float3 toPixel = p.xyz - Camera;
         float dist = length(toPixel);
         float3 dir = toPixel / max(dist, 1e-4);
+        // only the stretch of the ray where the surface can be: a hit is taken within this window of the depth
+        // buffer's distance anyway, and the whole ray from the camera walked most of the scene's BVH for it (the
+        // costliest full resolution trace). Something in front of the window (a leaf the depth buffer did not have)
+        // made the pixel fall back to grey before; now its surface is found behind it.
+        float window = max(0.1, dist * 0.02);
+        float start = max(dist - window, 0.0);
         Hit hit;
-        if (Closest(Camera, dir, dist * 1.02 + 0.1, false, hit) && abs(hit.t - dist) < max(0.1, dist * 0.02))
+        if (Closest(Camera + dir * start, dir, dist + window - start, false, hit) && abs(start + hit.t - dist) < window)
         {
+            hit.t += start; // from the camera again (the texture's mip goes by it)
             // the camera ray of a pixel: the texture's own mip for its footprint, as the rasteriser picks it
             HitSurface s = SurfaceAt(hit, dir, -1.0);
             float coat = s.coat ? 0.5 : 0.0;
@@ -34,6 +42,5 @@ NFX_ENTRY(id)
             albedo = float4(0.3, 0.3, 0.3, 0.0);
         }
     }
-    Output.Store4(index * 32, asuint(albedo));
-    Output.Store4(index * 32 + 16, asuint(normal));
+    Output.Store4(index * 16, uint4(NfxPackUnorm4x8(albedo), NfxPackOct16(normal.xyz), asuint(normal.w), 0u));
 }

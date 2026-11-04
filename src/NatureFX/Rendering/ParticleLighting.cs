@@ -49,7 +49,7 @@ namespace NatureFX.Rendering {
 					continue;
 				}
 				float up = Mathf.Clamp01(-l.transform.forward.y * 4.0f + 0.1f);
-				float e = l.intensity * up;
+				float e = HeadlightController.Intensity(l) * up;
 				if (e > best) {
 					best = e;
 					main = l;
@@ -65,31 +65,35 @@ namespace NatureFX.Rendering {
 			float cloud = Weather.Current.Cloud;
 			float skyLux = best * Mathf.Lerp(0.2f, 0.6f, cloud) + 0.03f;
 			var skyTint = Color.Lerp(new Color(0.75f, 0.85f, 1.0f), new Color(0.9f, 0.92f, 0.95f), cloud);
+			// the air's extinction at the camera: the own fog's (MapFog.NativeParams), thinning upwards from its base as
+			// the fog volume does
 			float extinction = 0.0f;
-			var fog = VolumeOverhaul.Stack()?.GetComponent<Fog>();
-			if (fog != null && fog.enabled.value) {
-				extinction = 1.0f / Mathf.Max(fog.meanFreePath.value, 1.0f);
+			var native = NatureFX.Map.MapFog.NativeParams;
+			if (native.w > 0.0f) {
+				float eyeY = Camera.main != null ? Camera.main.transform.position.y : native.y;
+				extinction = native.x * Mathf.Exp(-Mathf.Max(eyeY - native.y, 0.0f) / Mathf.Max(native.z, 1.0f));
 			}
 			Shader.SetGlobalVector(SkyId, new Vector4(skyTint.r * skyLux, skyTint.g * skyLux, skyTint.b * skyLux, extinction));
 
 			// lamps: the ones that light the camera's surroundings most (their illuminance at the camera)
 			ranked_.Clear();
 			foreach (var l in punctual_) {
-				if (l == null || !l.isActiveAndEnabled || l.intensity <= 0.0f) {
+				if (l == null || !l.isActiveAndEnabled || HeadlightController.Intensity(l) <= 0.0f) {
 					continue;
 				}
 				float d2 = Mathf.Max((l.transform.position - eye).sqrMagnitude, 1.0f);
 				if (d2 > l.range * l.range * 4.0f) {
 					continue;
 				}
-				ranked_.Add((l.intensity / d2, l));
+				// Light.intensity of a point or spot light is in candela whatever unit it was set in (HDRP converts)
+				ranked_.Add((HeadlightController.Intensity(l) / d2, l));
 			}
 			ranked_.Sort((a, b) => b.Score.CompareTo(a.Score));
 			int count = Mathf.Min(ranked_.Count, MaxLights);
 			for (int i = 0; i < count; ++i) {
 				var l = ranked_[i].Light;
 				var p = l.transform.position;
-				var c = Linear(l) * l.intensity;
+				var c = Linear(l) * HeadlightController.Intensity(l);
 				positions_[i] = new Vector4(p.x, p.y, p.z, l.range);
 				bool isBeam = HeadlightController.Beams.TryGetValue(l, out int beam);
 				beams_[i] = new Vector4(isBeam ? beam : 0.0f, isBeam ? HeadlightController.Roll(l) : 0.0f, 0.0f, 0.0f);

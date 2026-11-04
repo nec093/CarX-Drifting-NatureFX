@@ -33,6 +33,8 @@ namespace NatureFX.Rendering {
 		private static readonly int DenoiseMode = Shader.PropertyToID("_NFX_DenoiseMode");
 		private static readonly int TraceJitter = Shader.PropertyToID("_NFX_TraceJitter");
 		private static readonly int AmbientProbeId = Shader.PropertyToID("_NFX_AmbientProbe");
+		private static readonly int HdrpAmbientProbeId = Shader.PropertyToID("_AmbientProbeData");
+		private static readonly int OwnBrdfId = Shader.PropertyToID("_NFX_OwnBrdf");
 		private static readonly int RTSunDir = Shader.PropertyToID("_NFX_RTSunDir");
 		private static readonly int RTSunColor = Shader.PropertyToID("_NFX_RTSunColor");
 		private static readonly int LeafParams = Shader.PropertyToID("_NFX_LeafParams");
@@ -65,8 +67,7 @@ namespace NatureFX.Rendering {
 		public long TracedRays { get; private set; }
 		public Vector4 SunDirection;
 		public bool TransparentShadows = true; // the sun's ray traced shadow map for transparent surfaces (SunShadowMap)
-		public bool GroundDetail = true;       // the ground map (GroundMap): ground blend, painted dirt, debris
-		public float GroundBlend = 0.35f;      // m: how high objects take the ground's colour where a material does not say
+		public bool GroundDetail = true;       // the ground map (GroundMap): where the plants' cards meet the ground
 		public Vector4 SunIlluminance;
 
 		public bool TraceShadows = true;
@@ -138,6 +139,12 @@ namespace NatureFX.Rendering {
 		private static readonly int SkyTransmittanceTex = Shader.PropertyToID("_NFX_SkyTransmittance");
 		private static readonly int SkyParamsId = Shader.PropertyToID("_NFX_SkyParams");
 		private static readonly int SkyAmbientOnId = Shader.PropertyToID("_NFX_SkyAmbientOn");
+		private static readonly int OwnAmbientId = Shader.PropertyToID("_NFX_OwnAmbient");
+		private static readonly int OwnSunId = Shader.PropertyToID("_NFX_OwnSun");
+		private static readonly int OwnSkyStrengthId = Shader.PropertyToID("_NFX_OwnSkyStrength");
+		private static readonly int OwnLampsId = Shader.PropertyToID("_NFX_OwnLamps");
+		public static readonly int SkyShareTexId = Shader.PropertyToID("_NFX_SkyShareTex");
+		public static readonly int SkyShareParamsId = Shader.PropertyToID("_NFX_SkyShareParams");
 
 		private static RTHandle CloudTarget(int w, int h, string name) {
 			return RTHandles.Alloc(w, h, TextureXR.slices, dimension: TextureXR.dimension,
@@ -169,6 +176,7 @@ namespace NatureFX.Rendering {
 		public bool DebugView; // grey image of the traced shadows alone
 		public bool DebugGI;   // the ambient light / GI alone, relative to HDRP's (mid grey: unchanged)
 		public bool DebugExactSun; // the exact sun light alone (dark magenta: not known, the estimate is used)
+		public bool DebugAlbedo;   // the surfaces' albedo against real materials' (red too bright, blue too dark, magenta too vivid)
 
 		public string Status { get; private set; } = "not run yet";
 
@@ -194,6 +202,8 @@ namespace NatureFX.Rendering {
 		private RenderTargetIdentifier[] lampTargets_ = new RenderTargetIdentifier[3];
 		private static readonly int LampsTotalId = Shader.PropertyToID("_NFX_LampsTotalTex");
 		private static readonly int GBuffer3Id = Shader.PropertyToID("_NFX_GBuffer3Tex");
+		private static readonly int GBuffer0Id = Shader.PropertyToID("_NFX_GBuffer0Tex");
+		private static readonly int GBuffer0OnId = Shader.PropertyToID("_NFX_GBuffer0On");
 		private static readonly int LampMaskId = Shader.PropertyToID("_NFX_LampMask");
 		private static readonly int LampMaskHistoryId = Shader.PropertyToID("_NFX_LampMaskHistory");
 		private static readonly int LampMaskSizeId = Shader.PropertyToID("_NFX_LampMaskSize");
@@ -205,7 +215,9 @@ namespace NatureFX.Rendering {
 		private readonly Accumulation local_ = new("Local", GraphicsFormat.R16G16B16A16_SFloat);
 		private int frame_;
 
-		// A traced signal's buffers: new frame, two histories (ping-pong) and a blur target
+		// A traced signal's buffers: new frame, two histories (ping-pong) and a blur target. The histories and the blur
+		// target only while the own filter runs on it: NRD (or DLSS Ray Reconstruction) gives the finished signal in
+		// Raw, and they were three idle screens of memory (the sun's at full resolution) the whole time.
 		private class Accumulation {
 			private readonly string name_;
 			private readonly GraphicsFormat format_;
@@ -225,10 +237,25 @@ namespace NatureFX.Rendering {
 				Release();
 				Scale = scale;
 				Raw = Alloc(Vector2.one * scale, $"NFX_RT{name_}_Raw", format_);
-				Denoise = Alloc(Vector2.one * scale, $"NFX_RT{name_}_Denoise", format_);
-				HistoryA = Alloc(Vector2.one * scale, $"NFX_RT{name_}_HistoryA", format_);
-				HistoryB = Alloc(Vector2.one * scale, $"NFX_RT{name_}_HistoryB", format_);
 				fresh_ = true;
+			}
+
+			// The own filter's targets; true when they were just made (their history is whatever memory held)
+			public bool EnsureFilter() {
+				if (Denoise != null) {
+					return false;
+				}
+				Denoise = Alloc(Vector2.one * Scale, $"NFX_RT{name_}_Denoise", format_);
+				HistoryA = Alloc(Vector2.one * Scale, $"NFX_RT{name_}_HistoryA", format_);
+				HistoryB = Alloc(Vector2.one * Scale, $"NFX_RT{name_}_HistoryB", format_);
+				return true;
+			}
+
+			public void DropFilter() {
+				Denoise?.Release();
+				HistoryA?.Release();
+				HistoryB?.Release();
+				Denoise = HistoryA = HistoryB = null;
 			}
 
 			// True once after Ensure made new textures: their history holds whatever memory had (a NaN stays in a
@@ -243,15 +270,13 @@ namespace NatureFX.Rendering {
 
 			public void Release() {
 				Raw?.Release();
-				Denoise?.Release();
-				HistoryA?.Release();
-				HistoryB?.Release();
+				DropFilter();
 				Raw = null;
 			}
 		}
 
 		protected override void Setup(ScriptableRenderContext renderContext, CommandBuffer cmd) {
-			color_ = Alloc(Vector2.one, "NFX_RTShadow_Color", GraphicsFormat.R16G16B16A16_SFloat);
+			color_ = SharedColor.Acquire(); // the camera colour copy, shared with the other composites
 		}
 
 		private static RTHandle Alloc(Vector2 scale, string name, GraphicsFormat format, bool randomWrite = true) {
@@ -278,11 +303,31 @@ namespace NatureFX.Rendering {
 			dbufferNormal_ = Alloc(Vector2.one, "NFX_DBufferNoneNormal", GraphicsFormat.R8G8B8A8_UNorm, false);
 			dbufferWhite_ = Alloc(Vector2.one, "NFX_DBufferNoneMask", GraphicsFormat.R8G8B8A8_UNorm, false);
 			sunExact_ = Alloc(Vector2.one, "NFX_SunExact", GraphicsFormat.R16G16B16A16_SFloat, false);
+			EnsureLampTargets();
+		}
+
+		// the lamps' light from the G-buffer (LampsExact). The lamp mask histories (32 B a
+		// pixel) and DLSS Ray Reconstruction's guides are made when first used (EnsureLampHistory / EnsureGuides):
+		// always there, they were 400 MB at 4K whether or not either ran
+		private void EnsureLampTargets() {
+			if (lampsExact_ != null) {
+				return;
+			}
 			lampsExact_ = Alloc(Vector2.one, "NFX_LampsExact", GraphicsFormat.R16G16B16A16_SFloat, false);
-			// the lamp mask histories (32 B a pixel) and DLSS Ray Reconstruction's guides are made when first used
-			// (EnsureLampHistory / EnsureGuides): always there, they were 400 MB at 4K whether or not either ran
 			lampsTotal_ = Alloc(Vector2.one, "NFX_LampsTotal", GraphicsFormat.R16G16B16A16_SFloat, false);
 			lampHistoryValid_ = false;
+		}
+
+		private void ReleaseLampTargets() {
+			if (lampsExact_ == null) {
+				return;
+			}
+			lampsExact_.Release();
+			lampsTotal_.Release();
+			lampsExact_ = lampsTotal_ = null;
+			ReleaseLampHistory();
+			lampMask_?.Release();
+			lampMask_ = null;
 		}
 
 		private void EnsureLampHistory() {
@@ -328,13 +373,10 @@ namespace NatureFX.Rendering {
 			dbufferNormal_.Release();
 			dbufferWhite_.Release();
 			sunExact_.Release();
-			lampsExact_.Release();
-			ReleaseLampHistory();
-			lampsTotal_.Release();
+			sunExact_ = null;
 			ReleaseGuides();
-			lampMask_?.Release();
-			lampMask_ = null;
 			gbuffer_ = null;
+			ReleaseLampTargets();
 		}
 
 		// HDRP's G-buffer is gone by now (its memory reused), so the opaque renderers' GBuffer pass draws it again into
@@ -373,9 +415,11 @@ namespace NatureFX.Rendering {
 				props_.SetTexture(GBufferTextures[i], gbuffer_[i]);
 			}
 			props_.SetVector(RTSunDir, SunDirection);
+			props_.SetFloat(OwnSunId, OwnLighting.Sun ? 1.0f : 0.0f);
 			CoreUtils.SetRenderTarget(cmd, sunExact_, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, SunExactMaterial, props_, 0);
 			ExactFrame = Time.frameCount;
+			CheckOwnSun(cmd);
 			// DLSS Ray Reconstruction's albedos, from the same G-buffer
 			if (Dlaa.RayReconstruction) {
 				EnsureGuides();
@@ -424,6 +468,7 @@ namespace NatureFX.Rendering {
 				lampProps_.SetVectorArray(LampPosId, Lights.Positions);
 			}
 			lampProps_.SetFloat(LampCountId, Lights != null ? Lights.Count : 0);
+			lampProps_.SetFloat(OwnLampsId, OwnLighting.Lamps ? 1.0f : 0.0f);
 			lampTargets_[0] = lampsExact_;
 			lampTargets_[1] = historyOut;
 			lampTargets_[2] = lampsTotal_;
@@ -439,6 +484,7 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Execute(CustomPassContext ctx) {
+			using var cpuTime = NatureFX.Tools.CpuTimings.Scope("pass: shadows, GI, lamps (RT)"); // (the debug page)
 			// only the camera drawing to the screen: probes, mirrors and previews would flip the status (and with it
 			// HDRP's sun shadows) every frame and mix their images into the history
 			if (!RTSurfaceTrace.IsScreenCamera(ctx.hdCamera)) {
@@ -453,7 +499,8 @@ namespace NatureFX.Rendering {
 				Status = $"unavailable (own engine not running: {NativeEngine.Info})";
 				return;
 			}
-			var probe = HdrpBindings.AmbientProbe(ctx.hdCamera);
+			// the sky's light: the own engine's probe once it replaces HDRP's (OwnLighting), HDRP's otherwise
+			var probe = OwnLighting.Probe(ctx.hdCamera);
 			var exposure = HdrpBindings.ExposureTexture(ctx.hdCamera);
 			if (probe == null || exposure == null) {
 				Status = "unavailable (HDRP sky probe or exposure not reachable)";
@@ -505,8 +552,8 @@ namespace NatureFX.Rendering {
 			NativeEngine.BeginFrame(ctx.hdCamera.camera, SunDirection, sunRadius, SunIlluminance, frame_, ambientParams, Lights, probe);
 			// the sun's shadow on transparent surfaces (their forward pass reads the map)
 			SunShadowMap.Update(cmd, ctx.hdCamera.camera, SunDirection, TransparentShadows && TraceShadows);
-			// the ground seen from above: the map's ground blend, painted dirt and debris read it
-			GroundMap.Update(cmd, ctx.hdCamera.camera, GroundDetail, GroundBlend);
+			// the ground seen from above: the foot of the plants' cards reads it (NFX_ApplyFoliageFoot)
+			GroundMap.Update(cmd, ctx.hdCamera.camera, GroundDetail);
 			Surfaces.EnsureTraced(ctx);
 			bool skyUsed = false; // the sky is the atmosphere pass's (AtmospherePass), drawn after this one
 			float cameraHeight = 1.0f;
@@ -519,6 +566,7 @@ namespace NatureFX.Rendering {
 				RTTimings.ShadowFilter.End(cmd);
 			} else {
 				ReleaseExactTargets();
+				ReleaseLampTargets();
 			}
 
 			// 1. trace: one point of the sun's disc per pixel, one ambient ray per half resolution pixel
@@ -600,14 +648,14 @@ namespace NatureFX.Rendering {
 			props_.SetTexture(ShaftTex, shaftResult ?? color_);
 			props_.SetVector(LocalSize, ambientSize);
 			props_.SetTexture(LocalTex, localResult ?? color_);
-			props_.SetVector(ShadowCompose, new Vector4(TraceShadows ? Strength : 0.0f, DebugExactSun ? 3.0f : DebugGI ? 2.0f : DebugView ? 1.0f : 0.0f, blend, TraceAO ? AOStrength : 0.0f));
+			props_.SetVector(ShadowCompose, new Vector4(TraceShadows ? Strength : 0.0f, DebugAlbedo ? 4.0f : DebugExactSun ? 3.0f : DebugGI ? 2.0f : DebugView ? 1.0f : 0.0f, blend, TraceAO ? AOStrength : 0.0f));
 			props_.SetTexture(ColorTex, color_);
 			props_.SetTexture(SunTex, sunResult ?? color_);
 			props_.SetTexture(AmbientTex, ambientResult ?? color_);
 			props_.SetTexture(RTSurfaceTrace.AlbedoTex, Surfaces.Albedo);
 			props_.SetTexture(RTSurfaceTrace.NormalTex, Surfaces.Normal);
 			props_.SetTexture(SunExactTex, exactUsed_ ? sunExact_ : color_);
-			props_.SetTexture(LampsExactTex, exactUsed_ ? lampsExact_ : color_);
+			props_.SetTexture(LampsExactTex, exactUsed_ || maskUsed_ ? lampsExact_ : color_);
 			if (Lights != null && Lights.Count > 0) {
 				props_.SetVectorArray(LampPosId, Lights.Positions);
 				props_.SetVectorArray(LampColorId, Lights.Colors);
@@ -619,6 +667,8 @@ namespace NatureFX.Rendering {
 			bool relight = exactUsed_ && FullRelight && (maskUsed_ || !localShadows);
 			props_.SetTexture(LampsTotalId, maskUsed_ ? lampsTotal_ : color_);
 			props_.SetTexture(GBuffer3Id, exactUsed_ ? gbuffer_[3] : color_);
+			props_.SetTexture(GBuffer0Id, exactUsed_ ? gbuffer_[0] : color_);
+			props_.SetFloat(GBuffer0OnId, exactUsed_ ? 1.0f : 0.0f);
 			props_.SetVector(SunExactParams, new Vector4(exactUsed_ ? 1.0f : 0.0f, maskUsed_ ? 1.0f : 0.0f, relight ? 1.0f : 0.0f, 0.0f));
 			RelightActive = relight;
 			props_.SetVector(RTSunDir, SunDirection);
@@ -626,6 +676,11 @@ namespace NatureFX.Rendering {
 			props_.SetVector(LeafParams, new Vector4(TraceShadows ? LeafTranslucency : 0.0f, shafts ? 1.0f : 0.0f, localShadows ? 1.0f : 0.0f,
 				giUsed_ ? Mathf.Max(0.001f, GIIntensity) : 0.0f));
 			props_.SetBuffer(AmbientProbeId, probe); // GI: the sky light HDRP gave, which the sky's share scales
+			// OwnLighting.Transparents: what HDRP draws see-through after this takes its sky light from HDRP's probe,
+			// black with HDRP's sky off: the own sky's (the same SH packing) in its place for the rest of the frame
+			if (OwnLighting.Transparents && OwnLighting.Ambient) {
+				ctx.cmd.SetGlobalBuffer(HdrpAmbientProbeId, probe);
+			}
 			props_.SetTexture(SkyViewTex, skyUsed ? skyView_ : color_);
 			props_.SetTexture(SkyTransmittanceTex, skyUsed ? skyTransmittance_ : color_);
 			props_.SetTexture(CloudTex, skyUsed && cloudsUsed_ ? cloudHistoryA_ : color_);
@@ -638,6 +693,26 @@ namespace NatureFX.Rendering {
 			props_.SetBuffer(SkyProbeTex, skyProbe ? NativeEngine.SkyProbe : probe);
 			props_.SetVector(SkyParamsId, new Vector4(skyUsed ? (cloudsUsed_ ? 2.0f : 1.0f) : 0.0f, SkySunLux, cameraHeight, sunRadius));
 			props_.SetFloat(SkyAmbientOnId, skyProbe ? skyShare : 0.0f); // the share of the engine's sky light
+			// OwnLighting: HDRP's sky light is off (its indirect diffuse multiplier 0): the composite adds the own sky's
+			// light on the surface's colour through the GI's sky share instead of darkening HDRP's
+			props_.SetFloat(OwnAmbientId, OwnLighting.Ambient ? 1.0f : 0.0f);
+			props_.SetFloat(OwnSkyStrengthId, OwnLighting.SkyStrength);
+			// OwnLighting.Sun: HDRP's sun is off; only with the exact sun light worked out (it is the sun's light then)
+			props_.SetFloat(OwnSunId, OwnLighting.Sun && exactUsed_ ? 1.0f : 0.0f);
+			if (exactUsed_ && TraceShadows) {
+				OwnLighting.SunComposed();
+			}
+			// OwnLighting.Lamps: HDRP's lamps are off; with the lamp masks' exact light (lit share added)
+			props_.SetFloat(OwnLampsId, OwnLighting.Lamps && maskUsed_ ? 1.0f : 0.0f);
+			props_.SetFloat(OwnBrdfId, 0.0f);
+			if (maskUsed_) {
+				OwnLighting.LampsComposed();
+			}
+			// the GI's sky share for the reflections composite (its rough surfaces' sky): a the share with GI, else the
+			// one bounce factor's brightness
+			cmd.SetGlobalTexture(SkyShareTexId, ambientResult ?? color_);
+			cmd.SetGlobalVector(SkyShareParamsId, new Vector4(ambientResult != null ? 1.0f : 0.0f, giUsed_ ? 1.0f : 0.0f, 0.0f, 0.0f));
+			OwnLighting.ShadowComposed();
 			CoreUtils.SetRenderTarget(cmd, ctx.cameraColorBuffer, ClearFlag.None);
 			CoreUtils.DrawFullScreen(cmd, Material, props_, PassComposite);
 			RTTimings.ShadowFilter.End(cmd);
@@ -653,6 +728,15 @@ namespace NatureFX.Rendering {
 		// Temporal accumulation and two a-trous steps; returns the filtered buffer
 		private RTHandle Filter(CommandBuffer cmd, Accumulation a, Vector4 size, float blend, int denoisePass, float sunRadius, float fov, int steps = 2,
 		                        bool oneFrameLate = false, float stillShare = 1.0f) {
+			// already denoised (NRD, Ray Reconstruction): the temporal pass at a blend of 1 and no blur step only
+			// copied Raw; Raw itself is the result, and the filter's targets go
+			if (blend >= 0.999f && steps == 0 && !oneFrameLate) {
+				a.DropFilter();
+				return a.Raw;
+			}
+			if (a.EnsureFilter()) {
+				blend = 1.0f; // new histories: this frame's samples only
+			}
 			props_.Clear();
 			props_.SetVector(TargetSize, size);
 			props_.SetVector(ShadowCompose, new Vector4(oneFrameLate ? 1.0f : 0.0f, 0.0f, blend, stillShare));
@@ -683,12 +767,14 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Cleanup() {
-			color_?.Release();
+			SharedColor.Release(color_);
+			color_ = null;
 			sun_.Release();
 			ambient_.Release();
 			shafts_.Release();
 			local_.Release();
 			ReleaseExactTargets();
+			ReleaseLampTargets();
 			skyView_?.Release();
 			skyTransmittance_?.Release();
 			clouds_?.Release();
@@ -700,6 +786,48 @@ namespace NatureFX.Rendering {
 			fogVolume_?.Release();
 			fogHistoryA_ = fogHistoryB_ = fogVolume_ = null;
 			skyView_ = skyTransmittance_ = clouds_ = cloudShadow_ = cloudHistoryA_ = cloudHistoryB_ = null;
+		}
+
+		// OwnLighting.Sun leaves HDRP's sun in place but lighting nothing; should HDRP drop such a light from its lists,
+		// the exact sun pass would find none and the sun would be gone. Every 2 s with the sun well up: the middle of the
+		// exact sun target read back; G-buffer pixels there and none of them with any sun on it twice in a row means
+		// exactly that, and the sun goes back to HDRP for this session (OwnLighting.SunUnavailable)
+		private float nextSunCheck_;
+		private int sunZero_;
+		private void CheckOwnSun(CommandBuffer cmd) {
+			// by day only: the moon's light (a fraction of a lux) came out as nothing in the half floats at night's
+			// exposure, which took the sun away from the own engine for the rest of the session
+			float illuminance = Mathf.Max(SunIlluminance.x, Mathf.Max(SunIlluminance.y, SunIlluminance.z));
+			if (!OwnLighting.Sun || SunDirection.w <= 0.0f || SunDirection.y < 0.15f || illuminance < 1000.0f || Time.unscaledTime < nextSunCheck_ || sunExact_ == null) {
+				return;
+			}
+			nextSunCheck_ = Time.unscaledTime + 2.0f;
+			int w = Mathf.Min(64, sunExact_.rt.width), h = Mathf.Min(64, sunExact_.rt.height);
+			int x = Mathf.Max(0, sunExact_.rt.width / 2 - w / 2), y = Mathf.Max(0, sunExact_.rt.height / 2 - h / 2);
+			cmd.RequestAsyncReadback(sunExact_.rt, 0, x, w, y, h, 0, 1, r => {
+				if (r.hasError) {
+					return;
+				}
+				var data = r.GetData<ushort>();
+				int known = 0, lit = 0;
+				for (int i = 0; i + 3 < data.Length; i += 4) {
+					if (Mathf.HalfToFloat(data[i + 3]) < 0.5f) {
+						continue;
+					}
+					++known;
+					if (Mathf.HalfToFloat(data[i]) + Mathf.HalfToFloat(data[i + 1]) + Mathf.HalfToFloat(data[i + 2]) > 1e-7f) {
+						++lit;
+					}
+				}
+				if (known < 200) {
+					return;
+				}
+				sunZero_ = lit == 0 ? sunZero_ + 1 : 0;
+				if (sunZero_ >= 2) {
+					OwnLighting.SunUnavailable = true;
+					KSL.API.Kino.Log.Warning("[NatureFX] Own sun light: HDRP gives the exact sun pass no sun while its own lighting of it is off; the sun stays HDRP's");
+				}
+			});
 		}
 	}
 }

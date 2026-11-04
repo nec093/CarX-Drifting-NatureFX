@@ -25,14 +25,13 @@ namespace NatureFX.Nature {
 			public float Width;
 			public Color Color;
 			public float Type;       // _NFX_Foliage.x: 4 grass, 3 bamboo
-			public bool Plume;
 			public float Distance;   // share of the grass distance it is drawn to
 		}
 
 		private static readonly Dictionary<string, Preset> Presets = new(System.StringComparer.OrdinalIgnoreCase) {
 			["lawn"] = new Preset { Density = 180, MinHeight = 0.05f, MaxHeight = 0.1f, Width = 0.012f, Color = new Color(0.22f, 0.38f, 0.1f), Type = 4, Distance = 0.5f },
 			["wild"] = new Preset { Density = 45, MinHeight = 0.2f, MaxHeight = 0.5f, Width = 0.025f, Color = new Color(0.3f, 0.4f, 0.15f), Type = 4, Distance = 1.0f },
-			["susuki"] = new Preset { Density = 18, MinHeight = 0.8f, MaxHeight = 1.5f, Width = 0.02f, Color = new Color(0.42f, 0.46f, 0.24f), Type = 4, Plume = true, Distance = 1.0f },
+			["susuki"] = new Preset { Density = 18, MinHeight = 0.8f, MaxHeight = 1.5f, Width = 0.02f, Color = new Color(0.42f, 0.46f, 0.24f), Type = 4, Distance = 1.0f },
 			["sasa"] = new Preset { Density = 30, MinHeight = 0.4f, MaxHeight = 0.8f, Width = 0.07f, Color = new Color(0.15f, 0.32f, 0.08f), Type = 3, Distance = 1.0f },
 			["moss"] = new Preset { Density = 400, MinHeight = 0.01f, MaxHeight = 0.02f, Width = 0.01f, Color = new Color(0.12f, 0.22f, 0.06f), Type = 4, Distance = 0.3f }
 		};
@@ -149,7 +148,7 @@ namespace NatureFX.Nature {
 			m.SetFloat("_CullModeForward", 0.0f);
 			m.SetFloat("_AlphaCutoff", 0.0f);
 			m.SetVector("_NFX_Foliage", new Vector4(preset.Type, 0.5f, 0.3f, 0.0f));
-			m.SetVector("_NFX_Foliage2", new Vector4(1.0f, hue, preset.Plume ? 1.0f : 0.0f, 0.0f));
+			m.SetVector("_NFX_Foliage2", new Vector4(1.0f, hue, 0.0f, 0.0f));
 			m.enableInstancing = false;
 			materials_[key] = m;
 			return m;
@@ -264,6 +263,7 @@ namespace NatureFX.Nature {
 						continue;
 					}
 					var rp = new RenderParams(material) { shadowCastingMode = shadows, receiveShadows = true, worldBounds = c.Mesh.bounds };
+					rp.renderingLayerMask |= NatureFX.Rendering.OwnLighting.UntracedBit; // not traced: HDRP lights it under the own BSDF
 					Graphics.RenderMesh(rp, c.Mesh, subMesh, Matrix4x4.identity);
 				}
 			}

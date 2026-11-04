@@ -54,10 +54,13 @@ float NFX_SmokeTransmittance(float3 positionAWS)
 }
 
 // A headlight's beam as HeadlightController's cookies draw it (relative to its peak), for what does not see HDRP's
-// cookies: kind 1 the low beam (the cut-off 0.6° below the axis, rising 15° on the left to 1° up, the hot spot under
-// it, a wide fill, 1.5 % above), 2 the high beam (gathered on the axis). forward: the lamp's axis; dir: from the lamp
+// cookies: kind 1 the low beam for driving on the left (Japan: the cut-off 0.6° below the axis, rising 15° on the left
+// to 1° up, the hot spot under it a little to the left, a wide fill, 1.5 % above), 3 the same mirrored (driving on the
+// right), 2 the high beam (gathered on the axis). forward: the lamp's axis; dir: from the lamp
 // to the point; roll: the lamp's turn about its axis from level (radians: a car leaning in a drift or on a bank).
-float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
+// soft: degrees the cut-off is softened by (the 3D fog: its cells are wider than the cut-off's half degree, and a
+// sharp one stepped from cell to cell, a staircase along the beam's edge)
+float NFX_BeamPatternSoft(float kind, float3 forward, float3 dir, float roll, float soft)
 {
     if (kind < 0.5)
         return 1.0;
@@ -70,7 +73,10 @@ float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
     float z = max(dot(dir, forward), 1e-3);
     float h = degrees(atan2(dot(dir, right), z));
     float a = degrees(atan2(dot(dir, up), z));
-    if (kind > 1.5)
+    // kind 3: the low beam for driving on the right (Europe / US), the pattern mirrored
+    if (kind > 2.5)
+        h = -h;
+    if (kind > 1.5 && kind < 2.5)
     {
         float hot = exp(-(h / 5.0) * (h / 5.0) - (a / 2.5) * (a / 2.5));
         float glow = exp(-(h / 20.0) * (h / 20.0) - (a / 7.0) * (a / 7.0)) * 0.25;
@@ -79,11 +85,16 @@ float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
     }
     float cut = -0.6 + (h < 0.0 ? min(-h * 0.267949, 1.6) : 0.0);
     float below = cut - a;
-    float edge = saturate(below / 0.5 + 0.5);
+    float edge = saturate(below / (0.5 + soft) + 0.5);
     float spread = a < -1.2 ? 2.2 : 1.2; // the peak 1.2° down: slower below it than above
-    float hotSpot = exp(-(h / 9.0) * (h / 9.0) - ((a + 1.2) / spread) * ((a + 1.2) / spread));
-    float fill = exp(-(h / 22.0) * (h / 22.0)) * exp(-max(0.0, below - 1.0) / 2.0) * 0.25 * saturate((38.0 - sqrt(h * h + a * a)) / 8.0);
+    float hotSpot = exp(-((h + 1.5) / 12.0) * ((h + 1.5) / 12.0) - ((a + 1.2) / spread) * ((a + 1.2) / spread));
+    float fill = exp(-(h / 34.0) * (h / 34.0)) * exp(-max(0.0, below - 1.0) / 2.0) * 0.3 * saturate((53.0 - sqrt(h * h + a * a)) / 10.0);
     return lerp(0.015, min(1.0, hotSpot + fill), edge);
+}
+
+float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
+{
+    return NFX_BeamPatternSoft(kind, forward, dir, roll, 0.0);
 }
 
 // The tyre smoke's density in 3D (TireSmoke.UpdateSmokeVolume): extinction (1/m) on a 48 x 24 x 48 grid of 1 m cells
@@ -177,6 +188,24 @@ float4 NFX_Fog(float2 uv, float viewDepth, float distance, float3 dir)
 float3 NFX_ApplyFog(float3 color, float4 fog)
 {
     return color * fog.a + fog.rgb * GetCurrentExposureMultiplier();
+}
+
+// HDRP's forward pass of the NatureFX/* shaders on transparent surfaces (the generated NFX_ShaderPassForward.hlsl), on
+// the light loop's output before HDRP's blend: the 3D fog between the camera and the surface, what the air lets through
+// and, as far as the surface covers (the blend weighs it by the opacity), the air's own light; an additive surface adds
+// none. exposure: 1 where the light loop's output is not exposed yet, else the current multiplier. This is what the
+// see-through objects' second drawing (TransparentFog.cs) did for these surfaces.
+void NFX_FogForwardLighting(PositionInputs posInput, float3 V, float exposure, inout float3 diffuseLighting, inout float3 specularLighting)
+{
+    if (_NFX_FogVolumeParams.x < 0.5)
+        return;
+    float distance = length(posInput.positionWS);
+    float4 fog = NFX_Fog(posInput.positionNDC, posInput.linearDepth, distance, -V);
+    diffuseLighting *= fog.a;
+    specularLighting *= fog.a;
+#ifndef _BLENDMODE_ADD
+    diffuseLighting += fog.rgb * exposure;
+#endif
 }
 
 #endif

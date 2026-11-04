@@ -48,6 +48,7 @@ float NFX_SunMapVisibility(float3 positionRWS)
     return visibility;
 }
 
+#ifndef NFX_SUNMAP_ONLY // (particles: the map alone, without HDRP's lit types)
 void NFX_TransparentSunShadow(float3 V, PositionInputs posInput, PreLightData preLightData, BSDFData bsdfData, BuiltinData builtinData,
                               inout float3 diffuseLighting, inout float3 specularLighting)
 {
@@ -77,5 +78,7 @@ void NFX_TransparentSunShadow(float3 V, PositionInputs posInput, PreLightData pr
         specularLighting = max(specularLighting - sunSpecular * shade, 0.0);
     }
 }
+
+#endif
 
 #endif

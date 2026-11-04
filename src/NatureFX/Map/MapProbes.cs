@@ -161,7 +161,7 @@ namespace NatureFX.Map {
 				version_++;
 			}
 			if (float.IsNaN(lastElevation_) || Mathf.Abs(elevation - lastElevation_) > 2.0f || Mathf.Abs(w.Cloud - lastWeather_.Cloud) > 0.1f
-			    || Mathf.Abs(w.Snow - lastWeather_.Snow) > 0.1f || Mathf.Abs(w.Wetness - lastWeather_.Wetness) > 0.15f) {
+			    || Mathf.Abs(w.Wetness - lastWeather_.Wetness) > 0.15f) {
 				lastElevation_ = elevation;
 				lastWeather_ = w;
 				version_++;

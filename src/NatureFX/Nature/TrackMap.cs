@@ -4,8 +4,10 @@ using KSL.API;
 using UnityEngine;
 
 namespace NatureFX.Nature {
-	// Tyre marks, dry lines in the rain and ruts in snow / leaves: a world aligned map around the camera
-	// written by NFX_TrackMap.compute and read by the NatureFX ground shaders.
+	// The dry line the tyres squeeze out of a wet road and the grass they press down: a world aligned map around the
+	// camera written by NFX_TrackMap.compute and read by the NatureFX ground shaders (g dry line, b compression; r, the
+	// rubber of the removed tyre marks, stays 0). Also what the wheels do each frame (Contacts) for the spray, smoke,
+	// brake glow and the mud on the car.
 	public class TrackMap {
 		public const string ComputeName = "NFX_TrackMap";
 
@@ -86,7 +88,7 @@ namespace NatureFX.Nature {
 		public void Create(ShaderBundle bundle) {
 			compute_ = bundle.GetCompute(ComputeName);
 			if (compute_ == null) {
-				Kino.Log.Warning($"[NatureFX] {ComputeName} not in the shader bundle; tyre marks disabled");
+				Kino.Log.Warning($"[NatureFX] {ComputeName} not in the shader bundle; the dry line and the wheels' contacts disabled");
 				return;
 			}
 
@@ -142,7 +144,7 @@ namespace NatureFX.Nature {
 				return;
 			}
 
-			// keep the map around the camera; moving it loses the old marks
+			// keep the map around the camera; moving it loses the old dry line
 			var camXZ = new Vector2(cam.transform.position.x, cam.transform.position.z);
 			var center = origin_ + Vector2.one * (WorldSize * 0.5f);
 			if (!centered_ || Vector2.Distance(camXZ, center) > RecenterDistance) {
@@ -239,7 +241,7 @@ namespace NatureFX.Nature {
 						A = new Vector2(wheel.LastContact.x, wheel.LastContact.z),
 						B = new Vector2(contact.x, contact.z),
 						Width = wheel.Width * (1.0f + slide * 0.4f),
-						Rubber = slide * s.RubberAmount,
+						Rubber = 0.0f,
 						Press = 1.0f,
 						Dry = 1.0f
 					};

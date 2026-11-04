@@ -62,13 +62,9 @@ namespace NatureFX.Rendering {
 			if (sun_ == null) {
 				return;
 			}
-			moonShadowsTraced_ = EngineLighting.Shadows(s);
-			if (hdSun_ != null && s.Enabled && s.RealisticShadows) {
-				// soft shadow penumbra grows with distance from the caster (PCSS, High shadow filtering only)
-				// overcast sky: the whole sky is the light source, so shadows get very soft
-				hdSun_.angularDiameter = s.SunSize + Weather.Current.Cloud * 12.0f;
-				sizeApplied_ = true;
-			} else if (sizeApplied_ && hdSun_ != null) {
+			moonShadowsTraced_ = true;
+			// (HDRP's soft shadow maps are gone: the traced shadows have their own softness)
+			if (sizeApplied_ && hdSun_ != null) {
 				hdSun_.angularDiameter = original_.AngularDiameter;
 				sizeApplied_ = false;
 			}
@@ -118,9 +114,7 @@ namespace NatureFX.Rendering {
 			// below the horizon the sun gives no light (a directional light ignores the horizon and lit the scene from
 			// under the ground at night)
 			sun_.intensity = original_.Intensity * physical_ * s.SunIntensityScale * daylight * cloudDim;
-			sun_.useColorTemperature = true;
-			sun_.colorTemperature = Mathf.Lerp(2200.0f, s.SunTemperature, Mathf.InverseLerp(0.0f, 30.0f, elevation));
-			if (s.NativeSky) {
+			{
 				// phase 3: the sun light as the own engine's atmosphere lets it through (Sky.hlsli): the same air that
 				// colours the sky reddens and dims the sun, instead of a colour temperature by elevation
 				var cam = Camera.main;
@@ -131,8 +125,6 @@ namespace NatureFX.Rendering {
 				sun_.useColorTemperature = false;
 				sun_.color = peak > 1e-6f ? new Color(t.x / peak, t.y / peak, t.z / peak) : Color.black;
 				sun_.intensity = TopOfAtmosphereLux * peak * disc * cloudDim;
-			} else {
-				sun_.color = original_.Color;
 			}
 
 			// Night: a separate moon light high on the opposite side. The sun stays below the horizon so the
@@ -140,13 +132,12 @@ namespace NatureFX.Rendering {
 			float night = s.Moonlight ? Mathf.InverseLerp(-2.0f, -12.0f, elevation) : 0.0f;
 			// moonlight in the air is faint: the eye's adaptation would otherwise turn a night sky into a bright haze
 			// the moon's strength: physical at 1, brighter for those who want to see more at night
-			UpdateMoon(night, Mathf.Clamp(-elevation * 0.8f, 20.0f, 65.0f), heading + 180.0f, s.SunIntensityScale * cloudDim * Mathf.Clamp(s.MoonBrightness, 0.001f, 0.1f), s.LightShafts * 0.15f);
+			UpdateMoon(night, Mathf.Clamp(-elevation * 0.8f, 20.0f, 65.0f), heading + 180.0f, s.SunIntensityScale * cloudDim * Mathf.Clamp(s.MoonBrightness, 0.001f, 0.1f), 0.0f);
 			SetSunShadows(night < 0.5f);
 
 			if (hdSun_ != null) {
-				// a sun below the horizon lights no air: volumetric fog does not know the horizon, and the faint light
-				// the sun keeps at night lit the whole sky white once the camera's volumetrics were on
-				hdSun_.volumetricDimmer = s.LightShafts * Mathf.SmoothStep(0.0f, 1.0f, Mathf.InverseLerp(-2.0f, 2.0f, elevation));
+				// HDRP's volumetric fog is off: its sun lights none
+				hdSun_.volumetricDimmer = 0.0f;
 			}
 			applied_ = true;
 			UpdateSkyLight(cloud);
@@ -159,7 +150,13 @@ namespace NatureFX.Rendering {
 			float aerosols = 1.0f + 2.0f * cloud + 2.0f * Weather.Current.Rain;
 			var toSun = -sun_.transform.forward;
 			RealSunY = toSun.y;
-			bool moon = moon_ != null && moon_.isActiveAndEnabled && moon_.intensity > 0.0f && toSun.y < -0.035f;
+			// the sky goes by the sun through the twilight: the air it still lights stays bright well below the horizon
+			// (civil twilight to -6°). It went to the moon at -2°, when the moon was only just rising in strength: the
+			// sky and all the light it gave (a garage's skylights) went out at once. Now the moon takes over around -7°,
+			// where its light and the twilight's are about even; a degree apart both ways so it does not flip back and forth.
+			float below = skyFromMoon_ ? MoonSkyBack : MoonSkyFrom;
+			bool moon = moon_ != null && moon_.isActiveAndEnabled && moon_.intensity > 0.0f && toSun.y < Mathf.Sin(below * Mathf.Deg2Rad);
+			skyFromMoon_ = moon;
 			var light = moon ? moon_ : sun_;
 			var dir = -light.transform.forward;
 			var c = light.color.linear * light.intensity;
@@ -168,17 +165,55 @@ namespace NatureFX.Rendering {
 			}
 			SkyLight = light;
 			SkyLightIsMoon = moon;
+			// OwnLighting.Sun: the light the own engine follows lights nothing in HDRP (the composite adds it); the other
+			// keeps HDRP's own handling
+			SetHdrpLighting(hdSun_, !(OwnLighting.Sun && !moon));
+			SetHdrpLighting(hdMoon_, !(OwnLighting.Sun && moon));
 			SkyLightDir = dir;
 			SkyLightGround = new Vector3(c.r, c.g, c.b);
 			SkyLightRadius = 0.0047f; // the sun's and the moon's are nearly the same (0.53 degrees across)
+			float above;
 			if (moon) {
 				var t = AtmosphereTransmittance(height, Mathf.Asin(Mathf.Clamp(dir.y, -1.0f, 1.0f)) * Mathf.Rad2Deg, aerosols);
 				float lum = Mathf.Max(0.2126f * t.x + 0.7152f * t.y + 0.0722f * t.z, 0.02f);
-				SkyLightAbove = (0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b) / lum;
+				above = (0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b) / lum;
 			} else {
-				SkyLightAbove = TopOfAtmosphereLux;
+				above = TopOfAtmosphereLux;
+			}
+			HandOver(moon, above);
+			SkyLightAboveRaw = above;
+			SkyLightAbove = above * SkyScale;
+		}
+
+		// ---- the sky's hand-over between the sun's twilight and the moon
+		// One light makes the own engine's sky. At a hand-over NativeEngine.TraceSky keeps the sky of the last frame
+		// before it and eases the new one in over some seconds (the screen's sky, its light, HDRP's cube and the sky in
+		// the reflections together). A new generation at each hand-over.
+		public static float SkyLightAboveRaw { get; private set; }
+		public static float SkyScale => 1.0f;
+		public static int SkyGeneration { get; private set; }
+		private static bool lastMoon_;
+		// the sine of the elevation where the sun's disc has sunk whole (its light dimmed to nothing, -0.5°): the engine
+		// counts the sun as up above it
+		public static readonly float DiscGoneY = Mathf.Sin(-0.6f * Mathf.Deg2Rad);
+
+		private static float handOverAt_ = -1000.0f;
+
+		private static void HandOver(bool moon, float above) {
+			if (moon != lastMoon_) {
+				lastMoon_ = moon;
+				++SkyGeneration;
+				handOverAt_ = Time.unscaledTime;
 			}
 		}
+
+		// AtmospherePass's sky probe readings (kept for the debug page; the hand-over no longer needs them)
+		public static void SkyMeasured(int generation, float reading, float rawAbove, float scale) {
+		}
+
+		// sun elevations (°) where the sky's light goes to the moon, and back to the sun
+		private const float MoonSkyFrom = -7.5f, MoonSkyBack = -6.5f;
+		private bool skyFromMoon_;
 
 		private GameObject moonObject_;
 		private Light moon_;
@@ -236,7 +271,23 @@ namespace NatureFX.Rendering {
 			sunShadowsOff_ = !on;
 		}
 
+		// OwnLighting.Sun: HDRP's shading of the light off (a rendering layer no renderer is on), the light kept in HDRP's
+		// lists for the exact sun pass
+		private static void SetHdrpLighting(HDAdditionalLightData light, bool on) {
+			var l = light != null ? light.GetComponent<Light>() : null;
+			if (l == null) {
+				return;
+			}
+			if (on) {
+				OwnLighting.HdrpLightOn(l);
+			} else {
+				OwnLighting.HdrpLightOff(l);
+			}
+		}
+
 		public void Restore() {
+			SetHdrpLighting(hdSun_, true);
+			SetHdrpLighting(hdMoon_, true);
 			if (sizeApplied_ && hdSun_ != null) {
 				hdSun_.angularDiameter = original_.AngularDiameter;
 				sizeApplied_ = false;

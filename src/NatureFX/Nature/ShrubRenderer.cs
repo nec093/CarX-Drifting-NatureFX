@@ -13,7 +13,7 @@ namespace NatureFX.Nature {
 	//   far    its octahedral impostor (nfxproto_impostor: one quad showing the scan baked from N x N directions,
 	//          NFX_Impostor.hlsl)
 	// A prototype: an empty nocol_nfx_shrubproto_<name>__frames-<N> with those three children, their renderers off
-	// (nothing shows without NatureFX). Every level draws with NatureFX/Foliage (wind, seasons, snow, back light).
+	// (nothing shows without NatureFX). Every level draws with NatureFX/Foliage (wind, wetness, back light).
 	// The own engine's scene gets every shrub's billboard cloud (RayInstances), so they cast traced shadows and show
 	// in reflections. 16 m cells; the levels are picked per shrub a few times a second.
 	public class ShrubRenderer {

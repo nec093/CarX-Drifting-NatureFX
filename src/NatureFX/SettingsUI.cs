@@ -28,8 +28,8 @@ namespace NatureFX {
 			if (Kino.UI.ContextButton("Foliage & wind")) {
 				Kino.UI.PushContext(NatureContext, "Foliage & wind");
 			}
-			if (Kino.UI.ContextButton("Weather & accumulation")) {
-				Kino.UI.PushContext(WeatherContext, "Weather & accumulation");
+			if (Kino.UI.ContextButton("Weather & wetness")) {
+				Kino.UI.PushContext(WeatherContext, "Weather & wetness");
 			}
 			if (Kino.UI.ContextButton("Tools")) {
 				Kino.UI.PushContext(ToolsContext, "Tools");
@@ -49,24 +49,13 @@ namespace NatureFX {
 		}
 
 		private void WeatherContext() {
-			Toggle("Accumulation", S.Accumulation, v => S.Accumulation = v, false);
-			Slider("Snow", S.Snow, 0.0f, 1.0f, v => S.Snow = v, false);
-			Slider("Fallen leaves", S.Leaves, 0.0f, 1.0f, v => S.Leaves = v, false);
-			Slider("Dust", S.Dust, 0.0f, 1.0f, v => S.Dust = v, false);
+			Toggle("Weather", S.Accumulation, v => S.Accumulation = v, false);
 			Slider("Wetness", S.Wetness, 0.0f, 1.0f, v => S.Wetness = v, false);
-
-			Kino.UI.HorizontalLine();
-			Toggle("Build up over time", S.AccumulateOverTime, v => S.AccumulateOverTime = v, false);
-			Slider("Build up speed (per minute)", S.AccumulationRate, 0.005f, 0.5f, v => S.AccumulationRate = v, false);
-			var c = mod_.Accumulation.Current;
-			Kino.UI.Label($"Current: snow {c.x:P0}, leaves {c.y:P0}, dust {c.z:P0}, wet {c.w:P0}");
-			if (Kino.UI.Button("Reset build up")) {
-				mod_.Accumulation.ResetProgress();
-			}
+			Kino.UI.Label($"Ground wetness now: {mod_.Accumulation.Wetness:P0}");
 
 			Kino.UI.HorizontalLine();
 			Toggle("Wet look on game materials (no bundle needed)", S.WetGameMaterials, v => S.WetGameMaterials = v, false);
-			Kino.UI.Label("Snow, leaves and dust need the NFX shader bundle.");
+			Kino.UI.Label("Puddles, ripples and drips need the NFX shader bundle.");
 		}
 
 		private void ToolsContext() {

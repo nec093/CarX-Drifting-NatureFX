@@ -3,10 +3,13 @@ using KSL.API;
 using UnityEngine;
 
 namespace NatureFX.Nature {
-	// Snow / leaves / dust / wetness. NFX shaders read the global vector directly;
+	// Wetness. NFX shaders read the global vector directly (_NFX_Accumulation.w; xyz stay 0);
 	// plain HDRP/Lit track materials get a cheap wetness approximation (darker albedo + higher smoothness).
 	public class AccumulationController {
 		private static readonly int AntiTilingId = Shader.PropertyToID("_NFX_AntiTiling");
+		// soaked to dry in about two minutes once the weather says the ground dries
+		private const float DryPerSecond = 1.0f / 120.0f;
+
 		private struct LitOriginal {
 			public Color BaseColor;
 			public float Smoothness;
@@ -18,70 +21,36 @@ namespace NatureFX.Nature {
 		private static readonly int SmoothnessRemapMaxId = Shader.PropertyToID("_SmoothnessRemapMax");
 
 		private readonly Dictionary<Material, LitOriginal> litMaterials_ = new();
-		private Vector4 current_;
+		private float wet_;
 		private float appliedWetness_ = -1.0f;
 
-		public Vector4 Current => current_;
-
-		private readonly RaycastHit[] groundHits_ = new RaycastHit[16];
-		private float nextGround_;
-		private float groundY_;
-		private bool groundKnown_;
-
-		// Road wear of the rebuilt shaders (_NFX_Road): how much rubber the driven ground carries, and the height of
-		// that ground so roofs and trailers stay clean
-		public void UpdateRoad(float wear) {
-			if (wear > 0.0f && Time.unscaledTime >= nextGround_) {
-				nextGround_ = Time.unscaledTime + 0.25f;
-				FindGround();
-			}
-			Shader.SetGlobalVector(ShaderGlobals.Road, new Vector4(wear, groundY_, wear > 0.0f && groundKnown_ ? 1.0f : 0.0f, 0.0f));
-		}
-
-		// The highest static surface under the camera: the ground the followed car drives on (cars have rigidbodies)
-		private void FindGround() {
-			var cam = Camera.main;
-			if (cam == null) {
-				return;
-			}
-			int n = Physics.RaycastNonAlloc(cam.transform.position, Vector3.down, groundHits_, 50.0f, ~0, QueryTriggerInteraction.Ignore);
-			float best = float.NegativeInfinity;
-			for (int i = 0; i < n; ++i) {
-				if (groundHits_[i].rigidbody == null && groundHits_[i].point.y > best) {
-					best = groundHits_[i].point.y;
-				}
-			}
-			if (!float.IsNegativeInfinity(best)) {
-				groundY_ = best;
-				groundKnown_ = true;
-			}
-		}
-
-		public void ResetProgress() {
-			current_ = Vector4.zero;
-		}
+		// how wet the ground is now (0..1)
+		public float Wetness => wet_;
 
 		public void Update(ISettings s) {
 			var w = Weather.Current;
-			var target = s.Enabled && s.Accumulation ? new Vector4(w.Snow, w.Leaves, w.Dust, w.Wetness) : Vector4.zero;
+			// while it rains the ground ends up soaked whatever the weather's wetness says
+			float soak = w.Rain > 0.001f ? Mathf.Max(w.Wetness, Mathf.Clamp01(w.Rain * 2.0f)) : w.Wetness;
+			float target = s.Enabled && s.Accumulation ? soak : 0.0f;
 
-			if (s.AccumulateOverTime && target != Vector4.zero) {
-				// AccumulationRate: fraction per minute. Melting / drying happens at double speed.
-				float step = s.AccumulationRate / 60.0f * Time.deltaTime;
-				for (int i = 0; i < 4; ++i) {
-					float rate = current_[i] < target[i] ? step : step * 2.0f;
-					current_[i] = Mathf.MoveTowards(current_[i], target[i], rate);
-				}
+			if (wet_ < target && w.Rain > 0.001f && s.Enabled && s.Accumulation) {
+				// rain wets the ground as fast as it falls: about 5 minutes at 1 mm/h, half a minute at 20
+				float mmPerHour = NatureFX.Map.MapFog.RainRate;
+				wet_ = Mathf.MoveTowards(wet_, target, (0.15f + mmPerHour / 10.0f) / 60.0f * Time.deltaTime);
+			} else if (wet_ > target && s.Enabled && s.Accumulation) {
+				// it dries slowly
+				wet_ = Mathf.MoveTowards(wet_, target, DryPerSecond * Time.deltaTime);
 			} else {
-				current_ = target;
+				// no rain making it wetter, or the weather off: as the weather says
+				wet_ = target;
 			}
 
-			Shader.SetGlobalVector(ShaderGlobals.Accumulation, current_);
+			Shader.SetGlobalVector(ShaderGlobals.Accumulation, new Vector4(0.0f, 0.0f, 0.0f, wet_));
 			float rain = s.Enabled && s.Accumulation ? Weather.Current.Rain : 0.0f;
-			Shader.SetGlobalVector(ShaderGlobals.Weather, new Vector4(rain, s.SnowDepth, s.Enabled ? s.SurfaceDetail : 0.0f, 0.0f));
+			Shader.SetGlobalVector(ShaderGlobals.Weather, new Vector4(rain, 0.0f, s.Enabled ? s.SurfaceDetail : 0.0f, 0.0f));
 			Shader.SetGlobalFloat(AntiTilingId, s.Enabled ? s.AntiTiling : 0.0f);
 
-			float wet = s.WetGameMaterials ? current_.w : 0.0f;
+			float wet = s.WetGameMaterials ? wet_ : 0.0f;
 			if (Mathf.Abs(wet - appliedWetness_) > 0.005f) {
 				ApplyWetness(wet);
 			}

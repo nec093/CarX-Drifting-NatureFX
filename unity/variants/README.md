@@ -38,7 +38,7 @@ NatureFX/Foliage | _ALPHATEST_ON _DOUBLESIDED_ON
 ### 記録のしかた
 
 1. F8 > **Tools > Shader variant recording** の **Record** をオンにする（Unity が、GPU に送ったバリアントを Player.log に書くようになる）
-2. いろいろな状況で走る：DX11 と DX12、昼と夜、雨と雪、公式コースと KN マップ、写真モード、レイトレーシングのオンとオフ
+2. いろいろな状況で走る（DX12）：昼と夜、雨と雪、公式コースと KN マップ、写真モード、レイトレーシングのオンとオフ
 3. **Save recorded variants** を押す（マップの読み込み時とゲームの終了時にも自動で保存）。`kino/config/NatureFX/recorded_variants.txt` に、前回までの記録と合わせて書かれる
 4. そのファイルをこのフォルダにコピーする
 

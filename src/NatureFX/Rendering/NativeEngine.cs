@@ -34,8 +34,9 @@ namespace NatureFX.Rendering {
 		[DllImport(DllName)] private static extern int NFX_Native_Dxr12Probe([MarshalAs(UnmanagedType.LPStr)] string sdkPath, byte[] buffer, int size);
 		[DllImport(DllName)] private static extern int NFX_Native_StartRt([MarshalAs(UnmanagedType.LPStr)] string sdkPath);
 		[DllImport(DllName)] private static extern void NFX_Native_SetRtActive(int active);
+		[DllImport(DllName)] private static extern int NFX_Native_MemoryStats(ulong[] values, int capacity);
+		[DllImport(DllName)] private static extern int NFX_Native_GpuTimings(byte[] buffer, int size);
 		[DllImport(DllName)] private static extern void NFX_Native_SetRtOmm(int enabled);
-		[DllImport(DllName)] private static extern int NFX_Native_SetPipeline(int pipeline);
 		[DllImport(DllName)] private static extern int NFX_Native_GpuMemory(out ulong usedMb, out ulong budgetMb);
 
 		// The game's video memory use and budget (MB), as the OS counts them; logged every 30 s while the engine runs
@@ -142,7 +143,12 @@ namespace NatureFX.Rendering {
 			public bool Wind;          // NatureFX/Foliage: swayed by the wind as it is drawn (Wind.inl)
 			public Transform Follow;   // moving instances: their transform now
 			public bool Unscaled;      // baked skinned meshes: position and rotation only
+			public bool NotDrawn;      // the renderer only casts shadows (or is not drawn): never the ground
 		}
+
+		// the debug page: what the ground map stands on (the largest ground instances of the last upload)
+		public static readonly List<(string Name, float Size)> GroundInstances = new();
+		public static int GroundCount { get; private set; }
 
 		public static bool Ready { get; private set; }
 
@@ -153,6 +159,10 @@ namespace NatureFX.Rendering {
 		public static bool LampMask;
 		// NFX_FLAG_OWN_GLASS: Glass.hlsl draws the glass whole (OwnGlass hides HDRP's)
 		public static bool OwnGlass;
+		// NFX_FLAG_FOG_LISTS: the 3D fog loops over the lamps listed per tile of its grid (the bridge's PrepareFogVolume)
+		// instead of all of them; off for comparing (the same picture, only slower)
+		public static bool FogLightLists = true;
+		private static bool fogListsIssued_; // set while TraceFogVolume issues its trace
 		// what the loaded DLL can do (NFX_Native_Info's "features:"): a mod newer than its DLL must not hide HDRP's glass
 		public static bool Supports(string feature) => Info != null && Info.Contains(feature);
 
@@ -168,26 +178,8 @@ namespace NatureFX.Rendering {
 		private static int loggedEmitters_;
 		private const float EmitterMinLuminance = 200.0f;  // nits: neon, lit signs and lamp shades, not glowing paint
 
-		// DXR 1.0 (TraceRay in ray tracing pipelines) or DXR 1.1 (inline ray queries), Settings.RTBackend 0 / 1
-		public static bool Pipeline { get; set; }
-		private static int pipelineSet_ = -1;
-		private static bool pipelineAvailable_ = true;
-		public static string ModeName => pipelineSet_ == 1 ? "DXR 1.0" : "DXR 1.1";
-
-		private static void UpdatePipeline() {
-			int wanted = Pipeline && pipelineAvailable_ ? 1 : 0;
-			if (wanted == pipelineSet_) {
-				return;
-			}
-			int available = NFX_Native_SetPipeline(wanted);
-			if (wanted == 1 && available != 1) {
-				// the pipelines are made with the scene's first build: until then, and if they fail, inline queries
-				pipelineSet_ = 0;
-				return;
-			}
-			pipelineSet_ = wanted;
-			Kino.Log.Info($"[NatureFX] Native engine: traces with {ModeName}");
-		}
+		// the engine traces inline (DXR 1.1 ray queries); DXR 1.0's ray tracing pipelines are gone
+		public const string ModeName = "DXR 1.1";
 
 		// The traced foliage sways with the wind NatureFX/Foliage draws (Settings.RTWind)
 		public static bool Wind { get; set; }
@@ -237,6 +229,8 @@ namespace NatureFX.Rendering {
 		// Developer tab: each signal can go back to NatureFX's own filter, and the cars' motion vector pass stay off,
 		// to find which part of NRD a problem comes from (not saved)
 		public static bool DevNrdSun = true, DevNrdAmbient = true, DevNrdLamps = true, DevNrdReflections = true, DevCarMotionVectors = true;
+		// REBLUR's performance mode (fewer passes, less quality): the reflections, and the ambient light / GI and lamps
+		public static bool NrdFastReflections, NrdFastDiffuse;
 		public static bool NrdReset;       // the shadow pass dropped its history this frame
 		public static int SunSamples = 1;  // sun shadow rays per pixel (SunShadow.hlsl; Dlaa: more while upscaling)
 		public static string NrdStatus {
@@ -456,21 +450,29 @@ namespace NatureFX.Rendering {
 			if (sizeLogAt_ > 0.0f && Time.unscaledTime >= sizeLogAt_) {
 				sizeLogAt_ = 0.0f;
 				long bytes = 0, retiredBytes = 0;
-				foreach (var b in buffers_) {
-					bytes += b.Surface != null ? (long)b.Surface.count * b.Surface.stride + (long)b.Result.count * b.Result.stride : 0;
+				// per kind too (MB, 1 decimal), to see which of them a change of layout shrank
+				var parts = new System.Text.StringBuilder();
+				for (int k = 0; k < buffers_.Length; ++k) {
+					var b = buffers_[k];
+					if (b.Surface == null) {
+						continue;
+					}
+					long kb = (long)b.Surface.count * b.Surface.stride + (long)b.Result.count * b.Result.stride;
+					bytes += kb;
+					parts.Append($" {KindName(k)} {kb / 1048576.0:0.0}");
 				}
-				bytes += screen_ != null ? (long)screen_.count * screen_.stride : 0;
+				long screenBytes = screen_ != null ? (long)screen_.count * screen_.stride : 0;
+				bytes += screenBytes;
+				parts.Append($" screen {screenBytes / 1048576.0:0.0}");
+				long guideBytes = 0;
+				foreach (var g in new[] { nrdSunGuide_, nrdAmbientGuide_, nrdReflectionGuide_ }) {
+					guideBytes += g.Buffer != null ? (long)g.Buffer.count * g.Buffer.stride : 0;
+				}
 				foreach (var r in retired_) {
 					retiredBytes += (long)r.Buffer.count * r.Buffer.stride;
 				}
-				Kino.Log.Info($"[NatureFX] Camera {sizeWidth_}x{sizeHeight_}: GPU memory {GpuMemory}; trace buffers {bytes / 1048576} MB, " +
-				              $"{retired_.Count} replaced ones still held ({retiredBytes / 1048576} MB)");
-			}
-			try {
-				UpdatePipeline();
-			} catch (Exception e) {
-				pipelineAvailable_ = false;
-				Kino.Log.Warning($"[NatureFX] Native engine: DXR 1.0 pipelines unavailable ({e.GetType().Name}: {e.Message})");
+				Kino.Log.Info($"[NatureFX] Camera {sizeWidth_}x{sizeHeight_}: GPU memory {GpuMemory}; trace buffers {bytes / 1048576} MB " +
+				              $"(+ NRD guides {guideBytes / 1048576} MB), {retired_.Count} replaced ones still held ({retiredBytes / 1048576} MB); by kind (MB):{parts}");
 			}
 			try {
 				UpdateWind();
@@ -541,6 +543,95 @@ namespace NatureFX.Rendering {
 		// ------------------------------------------------------------------ traces
 		// Each trace: Prepare (Unity compute, NFX_NativeBridge) fills a buffer the engine reads, render event 3 runs the
 		// engine's shader on Unity's queue, Unpack (Unity compute) copies the result into the shadow pass's texture.
+
+		// The debug page (DebugPage.cs): the engine's own video memory by kind (NFX_Native_MemoryStats), null with a
+		// DLL that does not report it
+		public static readonly string[] NativeMemoryNames = {
+			"BLAS pool (reserved)", "BLAS pool (used)", "geometry data pool (reserved)", "geometry data pool (used)",
+			"meshes still in upload buffers", "scene build scratch and TLAS", "per frame TLAS", "records and tables",
+			"GI radiance cache", "swaying foliage", "NRD", "DXR 1.2 device"
+		};
+		private static bool memoryStatsMissing_;
+
+		public static ulong[] NativeMemory() {
+			if (!Ready || memoryStatsMissing_) {
+				return null;
+			}
+			try {
+				var values = new ulong[NativeMemoryNames.Length];
+				NFX_Native_MemoryStats(values, values.Length);
+				return values;
+			} catch (EntryPointNotFoundException) {
+				memoryStatsMissing_ = true;
+				return null;
+			} catch (Exception) {
+				return null;
+			}
+		}
+
+		// The engine's GPU time by submission (ms) since the last call, summed over the frames between (the debug page);
+		// null with a DLL that does not measure it
+		private static bool gpuTimingsMissing_;
+		private static readonly byte[] gpuTimingsBuffer_ = new byte[8192];
+
+		public static Dictionary<string, double> GpuTimings() {
+			if (!Ready || gpuTimingsMissing_) {
+				return null;
+			}
+			try {
+				int length = NFX_Native_GpuTimings(gpuTimingsBuffer_, gpuTimingsBuffer_.Length);
+				var result = new Dictionary<string, double>();
+				foreach (string item in Encoding.UTF8.GetString(gpuTimingsBuffer_, 0, Math.Max(0, Math.Min(length, gpuTimingsBuffer_.Length))).Split(';')) {
+					int eq = item.LastIndexOf('=');
+					if (eq > 0 && double.TryParse(item.Substring(eq + 1), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double ms)) {
+						result[item.Substring(0, eq)] = ms;
+					}
+				}
+				return result;
+			} catch (EntryPointNotFoundException) {
+				gpuTimingsMissing_ = true;
+				return null;
+			} catch (Exception) {
+				return null;
+			}
+		}
+
+		// The trace buffers by kind, the screen buffer and the NRD guides (bytes)
+		public static List<(string Name, long Bytes)> TraceMemory() {
+			var list = new List<(string, long)>();
+			for (int k = 0; k < buffers_.Length; ++k) {
+				var b = buffers_[k];
+				if (b.Surface != null) {
+					list.Add(($"trace: {KindName(k)}", (long)b.Surface.count * b.Surface.stride + (long)b.Result.count * b.Result.stride));
+				}
+			}
+			if (screen_ != null) {
+				list.Add(("trace: screen", (long)screen_.count * screen_.stride));
+			}
+			long guides = 0;
+			foreach (var g in new[] { nrdSunGuide_, nrdAmbientGuide_, nrdReflectionGuide_ }) {
+				guides += g.Buffer != null ? (long)g.Buffer.count * g.Buffer.stride : 0;
+			}
+			list.Add(("NRD guides", guides));
+			return list;
+		}
+
+		private static string KindName(int kind) {
+			switch (kind) {
+				case TraceSun_: return "sun";
+				case TraceAmbient_: return "ambient";
+				case TraceLocal_: return "local";
+				case TraceShafts_: return "shafts";
+				case TraceSurface_: return "surface";
+				case TraceReflection_: return "reflection";
+				case TraceGI_: return "gi";
+				case TraceGlass_: return "glass";
+				case TraceFog_: return "fog";
+				case TraceFogVolume_: return "fog-volume";
+				case TraceLampMask_: return "lamp-mask";
+				default: return $"kind{kind}";
+			}
+		}
 
 		public const int TraceSun_ = 0, TraceAmbient_ = 1, TraceLocal_ = 2, TraceShafts_ = 3, TraceSurface_ = 4, TraceReflection_ = 5,
 		                 TraceGI_ = 6, TraceCacheResolve_ = 7, TraceGlass_ = 8;
@@ -671,7 +762,9 @@ namespace NatureFX.Rendering {
 			}
 		}
 
-		private static TraceBuffers Buffers(int kind, int pixels, int surfaceFloat4s, int resultStride) {
+		// surfaceFloat4s: per pixel; surfaceTotal (when not negative): the surface's float4s in all instead (a kind
+		// whose surface is not per pixel, or 0 for one that reads another kind's surface)
+		private static TraceBuffers Buffers(int kind, int pixels, int surfaceFloat4s, int resultStride, int surfaceTotal = -1) {
 			var b = buffers_[kind];
 			if (b.Surface != null && b.Pixels == pixels) {
 				return b;
@@ -681,7 +774,7 @@ namespace NatureFX.Rendering {
 				retired_.Add((b.Result, Time.frameCount));
 			}
 			b.Pixels = pixels;
-			b.Surface = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, pixels * surfaceFloat4s), 16) { name = $"NFX_NativeSurface{kind}" };
+			b.Surface = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, surfaceTotal >= 0 ? surfaceTotal : pixels * surfaceFloat4s), 16) { name = $"NFX_NativeSurface{kind}" };
 			b.Result = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, pixels), resultStride) { name = $"NFX_NativeResult{kind}" };
 			b.SurfacePtr = b.Surface.GetNativeBufferPtr();
 			b.ResultPtr = b.Result.GetNativeBufferPtr();
@@ -700,7 +793,7 @@ namespace NatureFX.Rendering {
 			c[4] = sunColor_.x; c[5] = sunColor_.y; c[6] = sunColor_.z; c[7] = CoarseShadowDistance;
 			c[8] = camera_.x; c[9] = camera_.y; c[10] = camera_.z; c[11] = Bits((uint)frame_);
 			c[12] = Bits((uint)width); c[13] = Bits((uint)height); c[14] = Bits(sunDirection_.w > 0.0f ? 1u : 0u);
-			c[15] = Bits((GlassShadows ? 1u : 0u) | (LampMask ? 2u : 0u) | (OwnGlass ? 4u : 0u) | ((uint)(Mathf.Clamp(SunSamples, 1, 8) - 1) << 8));
+			c[15] = Bits((GlassShadows ? 1u : 0u) | (LampMask ? 2u : 0u) | (OwnGlass ? 4u : 0u) | (fogListsIssued_ ? 16u : 0u) | ((uint)(Mathf.Clamp(SunSamples, 1, 8) - 1) << 8));
 			c[16] = ambientParams_.x; c[17] = ambientParams_.y; c[18] = ambientParams_.z; c[19] = ambientParams_.w;
 			Put(c, 20, skyParams_);
 			c[25] = aerosols_; c[26] = 1.0f; // LightCount.y aerosols, .z ozone (Sky.hlsli)
@@ -727,6 +820,7 @@ namespace NatureFX.Rendering {
 					Put(c, 52 + 3 * m + i * 4, lights_.Spots[i]);
 				}
 				c[24] = lights_.Count;
+				c[27] = lights_.LampReference; // LightCount.w: the GI's clamp and cache scale (CacheReference)
 			}
 			if (eventData_ == IntPtr.Zero) {
 				eventData_ = Marshal.AllocHGlobal(EventSlotSize * EventSlots);
@@ -770,8 +864,22 @@ namespace NatureFX.Rendering {
 		// phase 1c: the sky's light (clouds included) as an ambient probe, in HDRP's packing (7 float4): every trace
 		// after TraceSky in a frame reads it instead of HDRP's probe, and the composite puts it in place of HDRP's
 		public static GraphicsBuffer SkyProbe { get; private set; }
+
+		// the own sky probe before the first TraceSky (dark for that frame): the atmosphere begins its frames with its
+		// own probe, not HDRP's (the native sky and fog ran only once HDRP's probe was reachable)
+		public static GraphicsBuffer EnsureSkyProbe() {
+			if (SkyProbe == null) {
+				SkyProbe = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 8, 16) { name = "NFX_SkyProbe" };
+				SkyProbe.SetData(new Vector4[8]);
+				skyProbePtr_ = SkyProbe.GetNativeBufferPtr();
+			}
+			return SkyProbe;
+		}
 		private static IntPtr skyProbePtr_, skyProbePtrFrame_;
 		private static readonly int SkySamplesId = Shader.PropertyToID("_NFX_SkySamples");
+		private static readonly int SkyLightSaturationId = Shader.PropertyToID("_NFX_SkyLightSaturation");
+		// the sky light's colour: 1 as the sky model, 0.5 as measured skylight (Settings.SkyLightSaturation)
+		public static float SkyLightSaturation = 1.0f;
 		private static readonly int SkyProbeId = Shader.PropertyToID("_NFX_SkyProbe");
 		private static bool cloudNoiseMade_;
 		private static bool kindParams_;
@@ -784,6 +892,16 @@ namespace NatureFX.Rendering {
 			skyTablesFor_ = float.NaN;
 			cloudNoiseMade_ = false;
 		}
+
+		// the sky's cross-fade at a hand-over of its light (TraceSky)
+		public const float SkyFadeSeconds = 6.0f;
+		private static GraphicsBuffer skyViewOld_;
+		private static int skyFadeGeneration_ = -1;
+		private static float skyFadeStart_ = -1000.0f;
+		private static bool skyViewMade_;
+		private static readonly int SkyFadeCurrentId = Shader.PropertyToID("_NFX_SkyFadeCurrent");
+		private static readonly int SkyFadeOldId = Shader.PropertyToID("_NFX_SkyFadeOld");
+		private static readonly int SkyFadeParamsId = Shader.PropertyToID("_NFX_SkyFadeParams");
 
 		private static TraceBuffers SkyBuffer(ref TraceBuffers b, int texels, string name) {
 			if (b == null) {
@@ -813,7 +931,34 @@ namespace NatureFX.Rendering {
 			}
 			// every frame (cheap): an unpacked table survives a lost render texture this way
 			Unpack4(cmd, bridge, t, transmittance, new Vector4(TransmittanceW, TransmittanceH, 1.0f / TransmittanceW, 1.0f / TransmittanceH));
+			// the sky's hand-over between the sun's twilight and the moon (SunController.SkyGeneration): the sky view table
+			// of the last frame before it is kept, and the new light's table eased in from it over some seconds. The
+			// screen's sky, the sky light (probe), HDRP's cube and the sky the reflections see all come from this table,
+			// so all of them change together and smoothly instead of at once.
+			int skyFade = bridge.FindKernel("SkyFade");
+			int generation = SunController.SkyGeneration;
+			if (generation != skyFadeGeneration_) {
+				bool first = skyFadeGeneration_ < 0;
+				skyFadeGeneration_ = generation;
+				if (!first && skyViewMade_) {
+					skyViewOld_ ??= new GraphicsBuffer(GraphicsBuffer.Target.Structured, SkyViewW * SkyViewH, 16) { name = "NFX_SkyViewBefore" };
+					cmd.SetComputeBufferParam(bridge, skyFade, SkyFadeCurrentId, v.Result);
+					cmd.SetComputeBufferParam(bridge, skyFade, SkyFadeOldId, skyViewOld_);
+					cmd.SetComputeVectorParam(bridge, SkyFadeParamsId, new Vector4(SkyViewW * SkyViewH, -1.0f, 0.0f, 0.0f)); // copy
+					cmd.DispatchCompute(bridge, skyFade, (SkyViewW * SkyViewH + 63) / 64, 1, 1);
+					skyFadeStart_ = Time.unscaledTime;
+				}
+			}
 			Issue(cmd, TraceSkyView_, m.ResultPtr, v.ResultPtr, SkyViewW, SkyViewH, t.ResultPtr);
+			skyViewMade_ = true;
+			float fadeAge = Time.unscaledTime - skyFadeStart_;
+			if (skyViewOld_ != null && fadeAge < SkyFadeSeconds) {
+				float keep = 1.0f - Mathf.SmoothStep(0.0f, 1.0f, fadeAge / SkyFadeSeconds); // the old sky's share
+				cmd.SetComputeBufferParam(bridge, skyFade, SkyFadeCurrentId, v.Result);
+				cmd.SetComputeBufferParam(bridge, skyFade, SkyFadeOldId, skyViewOld_);
+				cmd.SetComputeVectorParam(bridge, SkyFadeParamsId, new Vector4(SkyViewW * SkyViewH, keep, 0.0f, 0.0f));
+				cmd.DispatchCompute(bridge, skyFade, (SkyViewW * SkyViewH + 63) / 64, 1, 1);
+			}
 			Unpack4(cmd, bridge, v, view, new Vector4(SkyViewW, SkyViewH, 1.0f / SkyViewW, 1.0f / SkyViewH));
 			// the clouds' noise once, whether or not the clouds are drawn: the 3D fog's boxes and the tyre smoke read
 			// its Worley noise too (FogVolume.hlsl), and were empty in a session that never showed clouds
@@ -856,6 +1001,7 @@ namespace NatureFX.Rendering {
 					skyProbePtr_ = SkyProbe.GetNativeBufferPtr();
 				}
 				int project = bridge.FindKernel("SkyAmbientSH");
+				cmd.SetComputeFloatParam(bridge, SkyLightSaturationId, Mathf.Clamp01(SkyLightSaturation));
 				cmd.SetComputeBufferParam(bridge, project, SkySamplesId, a.Result);
 				cmd.SetComputeBufferParam(bridge, project, SkyProbeId, SkyProbe);
 				cmd.DispatchCompute(bridge, project, 1, 1, 1);
@@ -870,7 +1016,7 @@ namespace NatureFX.Rendering {
 		// Sun shadows into the shadow pass's sun texture
 		public static void TraceSun(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, RTHandle sunOutput, Vector4 size) {
 			int width = (int)size.x, height = (int)size.y;
-			var b = Buffers(TraceSun_, width * height, 2, 8);
+			var b = Buffers(TraceSun_, width * height, 1, 4); // packed: SunShadow.hlsl (origin and pixel; 2 halves)
 			int prepare = bridge.FindKernel("Prepare");
 			int unpack = bridge.FindKernel("Unpack");
 			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
@@ -918,7 +1064,7 @@ namespace NatureFX.Rendering {
 					retired_.Add((guide.Buffer, Time.frameCount));
 				}
 				guide.Pixels = pixels;
-				guide.Buffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, pixels * 2), 16) { name = "NFX_NrdGuide" };
+				guide.Buffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, pixels), 16) { name = "NFX_NrdGuide" }; // a packed uint4 per pixel
 				guide.Ptr = guide.Buffer.GetNativeBufferPtr();
 			}
 			int kernel = bridge.FindKernel("PrepareNrdGuide");
@@ -965,6 +1111,9 @@ namespace NatureFX.Rendering {
 			Marshal.WriteInt32(slot, 32, frame_);
 			Marshal.WriteInt32(slot, 36, NrdReset ? 1 : 0);
 			Marshal.WriteInt32(slot, 320, mode);
+			// flags: REBLUR's performance mode (Developer > NRD parts), per denoiser
+			bool fast = eventId == 7 ? NrdFastReflections : eventId == 6 && NrdFastDiffuse;
+			Marshal.WriteInt32(slot, 324, fast ? 1 : 0);
 			cmd.IssuePluginEventAndData(NFX_Native_RenderEventAndDataFunc(), eventId, slot);
 		}
 
@@ -1106,7 +1255,7 @@ namespace NatureFX.Rendering {
 		private static TraceBuffers PrepareAmbient(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, Vector4 size,
 		                                           TraceBuffers result, Vector4 resultDefault) {
 			int width = (int)size.x, height = (int)size.y;
-			var surface = Buffers(TraceAmbient_, width * height, 3, 16);
+			var surface = Buffers(TraceAmbient_, width * height, 2, 16);
 			int prepare = bridge.FindKernel("PrepareAmbient");
 			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
 			cmd.SetComputeVectorParam(bridge, NativeDefaultId, resultDefault);
@@ -1125,7 +1274,7 @@ namespace NatureFX.Rendering {
 		// in place of TraceAmbient: same surfaces, same result (ambient light relative to HDRP's)
 		public static void TraceGI(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, RTHandle target, Vector4 size) {
 			int width = (int)size.x, height = (int)size.y;
-			var surface = PrepareAmbient(cmd, bridge, ctx, surfaceNormal, size, Buffers(TraceAmbient_, width * height, 3, 16), Vector4.one);
+			var surface = PrepareAmbient(cmd, bridge, ctx, surfaceNormal, size, Buffers(TraceAmbient_, width * height, 2, 16), Vector4.one);
 			Issue(cmd, TraceGI_, surface.SurfacePtr, surface.ResultPtr, width, height);
 			// this frame's samples into the cache (the buffers only fill the trace's slots: the resolve uses the cache)
 			Issue(cmd, TraceCacheResolve_, surface.SurfacePtr, surface.ResultPtr, CacheWidth, CacheHeight);
@@ -1137,7 +1286,7 @@ namespace NatureFX.Rendering {
 
 		public static void TraceAmbient(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, RTHandle target, Vector4 size) {
 			int width = (int)size.x, height = (int)size.y;
-			var surface = PrepareAmbient(cmd, bridge, ctx, surfaceNormal, size, Buffers(TraceAmbient_, width * height, 3, 16), Vector4.one);
+			var surface = PrepareAmbient(cmd, bridge, ctx, surfaceNormal, size, Buffers(TraceAmbient_, width * height, 2, 16), Vector4.one);
 			Issue(cmd, TraceAmbient_, surface.SurfacePtr, surface.ResultPtr, width, height);
 			if (NrdAmbient) {
 				IssueNrd(cmd, bridge, ctx, nrdAmbientGuide_, surface.SurfacePtr, surface.ResultPtr, width, height, size, 6, 0);
@@ -1148,7 +1297,7 @@ namespace NatureFX.Rendering {
 		// Blocked local light into the shadow pass's local light texture (same resolution as the ambient light)
 		public static void TraceLocal(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, RTHandle target, Vector4 size) {
 			int width = (int)size.x, height = (int)size.y;
-			var result = Buffers(TraceLocal_, width * height, 1, 16);
+			var result = Buffers(TraceLocal_, width * height, 0, 16); // its surface is the ambient light's
 			TraceBuffers surface;
 			var ambient = buffers_[TraceAmbient_];
 			if (ambientPreparedFrame_ == Time.frameCount && ambient.Surface != null && ambient.Pixels == width * height) {
@@ -1183,7 +1332,7 @@ namespace NatureFX.Rendering {
 		private static bool Ground(Instance instance) {
 			// leaves and grass cards are never the ground, however wide a combined mesh of them is (a map's combined
 			// grass cards, flat and many metres across, would put the ground at their tips)
-			if (instance.Glass || instance.Follow != null || instance.Mesh == null || instance.AlphaTest || instance.Wind) {
+			if (instance.Glass || instance.Follow != null || instance.Mesh == null || instance.AlphaTest || instance.Wind || instance.NotDrawn) {
 				return false;
 			}
 			if (instance.Kind == "terrain") {
@@ -1233,7 +1382,7 @@ namespace NatureFX.Rendering {
 
 		public static void TraceLampMask(CommandBuffer cmd, ComputeShader bridge, CustomPassContext ctx, RTHandle surfaceNormal, RTHandle target, Vector4 size) {
 			int width = (int)size.x, height = (int)size.y;
-			var result = Buffers(TraceLampMask_, width * height, 1, 16);
+			var result = Buffers(TraceLampMask_, width * height, 0, 16); // its surface is the ambient light's
 			var ambient = buffers_[TraceAmbient_];
 			TraceBuffers surface = ambientPreparedFrame_ == Time.frameCount && ambient.Surface != null && ambient.Pixels == width * height
 				? ambient
@@ -1253,7 +1402,7 @@ namespace NatureFX.Rendering {
 			var bridge = Bridge;
 			int width = ctx.hdCamera.actualWidth, height = ctx.hdCamera.actualHeight;
 			var size = new Vector4(width, height, 1.0f / width, 1.0f / height);
-			var b = Buffers(TraceSurface_, width * height, 1, 32);
+			var b = Buffers(TraceSurface_, width * height, 1, 16); // packed: Surface.hlsl
 			int prepare = bridge.FindKernel("PrepareSurface");
 			int unpack = bridge.FindKernel("UnpackSurface");
 			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
@@ -1278,7 +1427,7 @@ namespace NatureFX.Rendering {
 			reflParams_ = reflParams;
 			PrepareScreen(cmd, bridge, ctx, color);
 
-			var b = Buffers(TraceReflection_, width * height, 3, 32);
+			var b = Buffers(TraceReflection_, width * height, 2, 16); // packed: NfxReflSurface / NfxPackReflResult
 			int prepare = bridge.FindKernel("PrepareReflection");
 			int unpack = bridge.FindKernel("UnpackReflection");
 			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
@@ -1310,7 +1459,7 @@ namespace NatureFX.Rendering {
 					retired_.Add((screen_, Time.frameCount));
 				}
 				screenPixels_ = screenPixels;
-				screen_ = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, screenPixels), 12) { name = "NFX_NativeScreen" };
+				screen_ = new GraphicsBuffer(GraphicsBuffer.Target.Structured, Math.Max(1, screenPixels), 8) { name = "NFX_NativeScreen" }; // 4 halves (PrepareScreen)
 				screenPtr_ = screen_.GetNativeBufferPtr();
 			}
 			// ScreenSize is this buffer's size: the render resolution, not the camera's pixel size. With DLSS upscaling
@@ -1333,7 +1482,7 @@ namespace NatureFX.Rendering {
 			int width = (int)size.x, height = (int)size.y;
 			reflParams_ = reflParams;
 			PrepareScreen(cmd, bridge, ctx, color);
-			var b = Buffers(TraceGlass_, width * height, 2, 16);
+			var b = Buffers(TraceGlass_, width * height, 1, 16); // packed: Glass.hlsl (one uint4 per pixel)
 			int prepare = bridge.FindKernel("PrepareGlass");
 			cmd.SetComputeVectorParam(bridge, TargetSizeId, size);
 			cmd.SetComputeTextureParam(bridge, prepare, CameraDepthId, ctx.cameraDepthBuffer);
@@ -1421,16 +1570,24 @@ namespace NatureFX.Rendering {
 			}
 		}
 		public const int FogW = 160, FogH = 90, FogD = 64;
+		// columns (3 each, FogW * FogH * 3), 64 boxes (5 each), the smoke grid (3 + its cells / 4: up to FogW * FogH * 4),
+		// then the light lists (20 x 12 tiles, 4 bands): FOG_LIST_BASE + 960 in NFX_NativeBridge.compute
+		private const int FogSurfaceFloat4s = FogW * FogH * 4 + 20 * 12 * 4;
 		private static readonly int FogTargetId = Shader.PropertyToID("_NFX_FogTarget");
 		private static readonly int FogSourceId = Shader.PropertyToID("_NFX_FogSource");
 		private static readonly int FogCamDeltaId = Shader.PropertyToID("_NFX_FogCamDelta");
+		private static readonly int FogLampPosId = Shader.PropertyToID("_NFX_FogLampPos");
+		private static readonly int FogLampParamsId = Shader.PropertyToID("_NFX_FogLampParams");
+		// the lights the fog's light lists were last built with (F8)
+		public static int FogLampCount { get; private set; }
 		// boxes: the local fog boxes (5 float4 each, FogVolume.hlsl BoxesSigma), boxCount of them
 		public static void TraceFogVolume(CommandBuffer cmd, ComputeShader bridge, Vector4 fog, RTHandle historyIn, RTHandle historyOut, RTHandle integrated,
 		                                  Vector3 cameraDelta, float share, Vector4[] boxes = null, int boxCount = 0, Vector4[] smoke = null) {
 			if (skyTransmittance_ == null) {
 				return; // the fog reads the sky data (its noise, the transmittance): nothing sensible without it
 			}
-			var b = Buffers(TraceFogVolume_, FogW * FogH * FogD, 1, 16);
+			// the surface holds the columns, the boxes, the smoke and the light lists (FogVolume.hlsl), not a float4 per cell
+			var b = Buffers(TraceFogVolume_, FogW * FogH * FogD, 1, 16, FogSurfaceFloat4s);
 			if (boxes != null && boxCount > 0) {
 				cmd.SetBufferData(b.Surface, boxes, 0, FogW * FogH * 3, boxCount * 5);
 			} // surface: 3 float4 per column (fits)
@@ -1440,13 +1597,25 @@ namespace NatureFX.Rendering {
 			}
 			int prepare = bridge.FindKernel("PrepareFogVolume");
 			cmd.SetComputeBufferParam(bridge, prepare, NativeSurfaceId, b.Surface);
+			// the light lists, from the same lights Issue hands the engine (lights_, BeginFrame): one thread group per
+			// tile of 8 x 8 columns (FogVolume.hlsl reads them by the same tiles)
+			int lampCount = FogLightLists && lights_ != null ? Mathf.Min(lights_.Count, LocalLights.Max) : 0;
+			if (lampCount > 0) {
+				cmd.SetComputeVectorArrayParam(bridge, FogLampPosId, lights_.Positions);
+			}
+			cmd.SetComputeVectorParam(bridge, FogLampParamsId, new Vector4(lampCount, 0.0f, 0.0f, 0.0f));
+			FogLampCount = lampCount;
 			cmd.DispatchCompute(bridge, prepare, (FogW + 7) / 8, (FogH + 7) / 8, 1);
 			kindParams_ = true;
+			fogListsIssued_ = lampCount > 0;
 			kindA_ = fog;
-			kindB_ = new Vector4(boxCount, Time.time, smoke != null ? 1.0f : 0.0f, NatureFX.Map.MapFog.LampAirSigma);
+			// z: the smoke grid in its sign, the share of the lamps' light the air scatters in its size (1 + share)
+			float lampShare = 1.0f + NatureFX.Map.MapFog.LampScatterScale;
+			kindB_ = new Vector4(boxCount, Time.time, smoke != null ? lampShare : -lampShare, NatureFX.Map.MapFog.LampAirSigma);
 			// Screen: the sky data (the boxes' noise)
 			Issue(cmd, TraceFogVolume_, b.SurfacePtr, b.ResultPtr, FogW, FogH * FogD, skyTransmittance_ != null ? skyTransmittance_.ResultPtr : IntPtr.Zero);
 			kindParams_ = false;
+			fogListsIssued_ = false;
 			int reproject = bridge.FindKernel("FogReproject");
 			cmd.SetComputeBufferParam(bridge, reproject, NativeResultId, b.Result);
 			cmd.SetComputeTextureParam(bridge, reproject, FogSourceId, historyIn);
@@ -1500,14 +1669,21 @@ namespace NatureFX.Rendering {
 
 		// Builds the engine's scene from what the ray tracing scene holds. clear: a new map (all geometry dropped);
 		// otherwise meshes already built are reused and only the instances are taken again.
-		public static void UploadScene(ICollection<Instance> instances, bool clear) {
+		// fresh: drop the engine's whole scene first (NFX_Native_ClearScene: every geometry, material, BLAS, buffer and
+		// descriptor) and add what the instances use again: what earlier maps left (meshes still alive, ids never
+		// reused) goes with it
+		public static void UploadScene(ICollection<Instance> instances, bool clear, bool fresh = false) {
 			if (!Ready || !Enabled) {
 				return;
 			}
 			try {
 				// meshes and materials built before stay unless they are gone (a new map): rebuilding them all made
 				// every scene change a 250 ms hitch
-				if (clear) {
+				if (fresh) {
+					NFX_Native_ClearScene();
+					geometries_.Clear();
+					materials_.Clear();
+				} else if (clear) {
 					ReleaseGone();
 				}
 				int geometriesBefore = geometries_.Count;
@@ -1516,6 +1692,8 @@ namespace NatureFX.Rendering {
 				var flags = new int[instances.Count];
 				var materials = new int[instances.Count];
 				uploaded_.Clear();
+				GroundInstances.Clear();
+				GroundCount = 0;
 				int n = 0, rejected = 0;
 				foreach (var source in instances) {
 					var instance = source;
@@ -1536,6 +1714,11 @@ namespace NatureFX.Rendering {
 					transforms[o + 8] = m.m20; transforms[o + 9] = m.m21; transforms[o + 10] = m.m22; transforms[o + 11] = m.m23;
 					ids[n] = id;
 					bool ground = Ground(instance);
+					if (ground) {
+						++GroundCount;
+						var gb = instance.Mesh.bounds;
+						GroundInstances.Add(($"{instance.Mesh.name} / {(instance.Material != null ? instance.Material.name : "-")} ({instance.Kind}{(Road(instance) ? ", road" : "")})", gb.size.magnitude));
+					}
 					flags[n] = (instance.AlphaTest ? 1 : 0) | (instance.Glass ? 2 : 0) | (instance.Wind ? 4 : 0) | (instance.Follow != null ? 8 : 0)
 					           | (ground ? 16 : 0) | (ground && Road(instance) ? 32 : 0);
 					materials[n] = MaterialId(instance.Material, instance.Color, instance.Finish);

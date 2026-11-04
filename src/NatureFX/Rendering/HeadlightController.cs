@@ -1,6 +1,9 @@
+using System;
 using System.Collections.Generic;
+using HarmonyLib;
 using UnityEngine;
 using UnityEngine.Rendering.HighDefinition;
+using Object = UnityEngine.Object;
 
 namespace NatureFX.Rendering {
 	// Car headlights (spot lights under heavy rigidbodies) get visible beams in volumetric fog, and (HeadlightType) a
@@ -28,7 +31,9 @@ namespace NatureFX.Rendering {
 		// the high beam: the same lamp, its light gathered on the axis without a cut-off (some 2.5 times the low
 		// beam's peak; the regulations allow up to about 215 000 cd for all the car's high beams together)
 		private const float HighBeamGain = 2.5f;
-		private const float BeamAngle = 80.0f; // the cookie spans it: the low beam's wide near field included
+		// the cookie spans it: the low beam's wide near field included (a real low beam lights the verges out to some 45°
+		// either side, 2 to 4° down: at 80° the beam looked narrow, a lit tunnel down the road)
+		private const float BeamAngle = 110.0f;
 
 		private struct Original {
 			public float Intensity, Temperature, SpotAngle, Range, Inner;
@@ -36,7 +41,13 @@ namespace NatureFX.Rendering {
 			public Color Color;
 			public Texture Cookie;
 			public float Volumetric;
+			public float Dimmer;
 			public Quaternion LocalRotation;
+			// HDRP's own copy of the intensity (in its unit): SetIntensity changes both, and HDRP writes it back over
+			// Light.intensity whenever it runs UpdateLightIntensity (Awake / OnEnable, a shape setter: a car switched
+			// back on), so with the legacy value alone restored the game's lights came back at NatureFX's brightness
+			public LightUnit Unit;
+			public float HdIntensity;
 		}
 
 		private readonly Dictionary<HDAdditionalLightData, Original> originals_ = new();
@@ -49,7 +60,10 @@ namespace NatureFX.Rendering {
 
 		// the high beam of the player's car (the one nearest the camera): F7 or the Headlights card
 		public bool HighBeam { get => highBeam_; set => highBeam_ = value; }
-		public void ToggleHighBeam() => highBeam_ = !highBeam_;
+		public void ToggleHighBeam() {
+			highBeam_ = !highBeam_;
+			KSL.API.Kino.Log.Info($"[NatureFX] Headlights: high beam {(highBeam_ ? "on" : "off")} (F7)");
+		}
 		// retroreflection (docs/map-authoring.md 6.3): the headlights nearest the camera, for the shaders
 		public const int MaxRetroLights = 4;
 		private static readonly int HeadlightsId = Shader.PropertyToID("_NFX_Headlights");
@@ -60,9 +74,246 @@ namespace NatureFX.Rendering {
 		private float nextScan_;
 		private float applied_ = -1.0f;
 		private int appliedType_ = -1;
+		// the low beam's side: false Japan (driving on the left: the cut-off rises on the left), true Europe / US
+		private static bool rightTraffic_;
+		private bool appliedRight_;
 		private readonly Dictionary<int, Texture2D> cookies_ = new();
 
 		public string Status { get; private set; } = "the game's own";
+
+		// ---- the game sets its headlights again every frame while the car is driven, after NatureFX's Update (its own
+		// LateUpdate): the frame was drawn with the game's beam. Just before HDRP renders (every script done), ours is put
+		// back on each lamp the game changed.
+		private bool hooked_;
+		private int lateType_;
+		private float lateAim_;
+		private int lateFrame_ = -1;
+		private int lateFixes_;
+
+		private void Hook() {
+			if (!hooked_) {
+				hooked_ = true;
+				UnityEngine.Rendering.RenderPipelineManager.beginContextRendering += BeforeRendering;
+				UnityEngine.Rendering.RenderPipelineManager.beginCameraRendering += BeforeCamera;
+				PatchIntensity();
+			}
+		}
+
+		public void Unhook() {
+			if (hooked_) {
+				hooked_ = false;
+				UnityEngine.Rendering.RenderPipelineManager.beginContextRendering -= BeforeRendering;
+				UnityEngine.Rendering.RenderPipelineManager.beginCameraRendering -= BeforeCamera;
+			}
+			owned_.Clear();
+			intended_.Clear();
+		}
+
+		// ---- the game sets its headlights' intensity again while the car is driven on the throttle (4775 cd, each frame,
+		// at times after the frame's start: the beam went dim, "gone"). HDRP's own setters of a lamp NatureFX holds are
+		// skipped (Harmony), unless NatureFX is the one setting it; where the game sets Light.intensity itself (not
+		// patchable), ours is put back again just before each camera renders.
+		private static readonly HashSet<HDAdditionalLightData> owned_ = new();
+		// the intensity (cd) NatureFX gives each lamp it holds: what the own engine's lamp light and the particles use,
+		// whatever the game wrote over it this frame (it writes Light.intensity itself, not through HDRP's setters, and
+		// the own engine read the game's 4775 cd: the beam dim on the throttle)
+		private static readonly Dictionary<Light, float> intended_ = new();
+		// what a lamp shines now (cd) as the own engine sees it: the value NatureFX holds for it (a headlight's, a map
+		// lamp's with its warm-up, flicker and blink, a game headlight silenced to 0), else the light's own as the game
+		// or map set it. HDRP's dimmer is not read
+		public static float Intensity(Light light) {
+			if (light == null) {
+				return 0.0f;
+			}
+			return intended_.TryGetValue(light, out float held) ? held : light.intensity;
+		}
+
+		// a lamp NatureFX makes (MapLights, CarGlow): its intensity in candela as NatureFX works it out, what the own
+		// engine uses (not read back from HDRP's unit conversion)
+		public static void HoldIntensity(Light light, float candela) {
+			if (light != null) {
+				intended_[light] = candela;
+			}
+		}
+
+		public static void ReleaseIntensity(Light light) {
+			if (light != null) {
+				intended_.Remove(light);
+			}
+		}
+
+		// luminous flux (lm) to intensity (cd): a point light sends it all round (4 pi sr), a spot with its reflector
+		// into its cone (2 pi (1 - cos half angle) sr)
+		public static float LumenToCandela(float lumen, LightType type, float spotAngle) {
+			if (type == LightType.Spot) {
+				float solid = 2.0f * Mathf.PI * (1.0f - Mathf.Cos(Mathf.Clamp(spotAngle, 1.0f, 179.0f) * 0.5f * Mathf.Deg2Rad));
+				return lumen / Mathf.Max(solid, 1e-4f);
+			}
+			return lumen / (4.0f * Mathf.PI);
+		}
+
+		// ---- NatureFX's own lamp in place of each of the game's headlights. The game writes its lights again and again
+		// on the throttle (Light.intensity to 4775 cd every frame, the light switched off and on with its rendering layer
+		// back at HDRP's: its own beam lit the road again, the own one went dim), not through anything NatureFX can
+		// hold. Its lamp is dimmed to nothing (HDRP's dimmer, which it does not touch) and a lamp of NatureFX's own, a
+		// child of it (so it goes where the game moves or hides it), shines instead: nothing but NatureFX sets it.
+		private const string OwnLampName = "NatureFX.Headlight";
+		private readonly Dictionary<Light, Light> own_ = new();
+		private GameObject ownRoot_;
+
+		// NatureFX's lamp where the game's is, on while it is, its axis from the car's body (the low beam a little below
+		// level, the high beam level), whatever the game does with its own lamp's rotation
+		private void Follow(Light game, Light lamp, Rigidbody car, bool beamHigh, float aim) {
+			var rotation = car != null ? car.transform.rotation * Quaternion.Euler(beamHigh ? 0.0f : aim, 0.0f, 0.0f) : game.transform.rotation;
+			lamp.transform.SetPositionAndRotation(game.transform.position, rotation);
+			bool on = game.isActiveAndEnabled;
+			if (lamp.enabled != on) {
+				lamp.enabled = on;
+			}
+			if (held_.TryGetValue(lamp, out var h)) {
+				held_[lamp] = (h.Intensity, lamp.transform.localRotation);
+			}
+		}
+
+		private Light OwnLamp(Light game) {
+			if (own_.TryGetValue(game, out var lamp) && lamp != null) {
+				return lamp;
+			}
+			// not a child of the game's lamp: its parents' scales (a mirrored lamp, -1) mirrored the cookie and the beam's
+			// cut-off, and the game's own tilt of its lamp moved the beam; it follows the game's lamp each frame (Follow)
+			if (ownRoot_ == null) {
+				ownRoot_ = new GameObject("NatureFX.Headlights");
+				Object.DontDestroyOnLoad(ownRoot_);
+			}
+			var go = new GameObject(OwnLampName);
+			go.transform.SetParent(ownRoot_.transform, false);
+			go.transform.SetPositionAndRotation(game.transform.position, game.transform.rotation);
+			lamp = go.AddComponent<Light>();
+			lamp.type = LightType.Spot;
+			lamp.shadows = game.shadows;
+			go.AddComponent<HDAdditionalLightData>();
+			own_[game] = lamp;
+			if (cars_.TryGetValue(game, out var car)) {
+				cars_[lamp] = car;
+			}
+			return lamp;
+		}
+
+		// the game's lamp: no light of its own while NatureFX's shines (for HDRP its dimmer, for the own engine 0 held)
+		private static void Silence(HDAdditionalLightData game) {
+			var light = game.GetComponent<Light>();
+			if (light != null) {
+				intended_[light] = 0.0f;
+			}
+			game.lightDimmer = 0.0f;
+			game.volumetricDimmer = 0.0f;
+		}
+
+		// back to the game's lamp alone
+		private void DropOwn(Light game, HDAdditionalLightData gameHd, Original o) {
+			if (own_.TryGetValue(game, out var lamp)) {
+				own_.Remove(game);
+				if (lamp != null) {
+					var hd = lamp.GetComponent<HDAdditionalLightData>();
+					if (hd != null) {
+						owned_.Remove(hd);
+					}
+					Beams.Remove(lamp);
+					held_.Remove(lamp);
+					intended_.Remove(lamp);
+					cars_.Remove(lamp);
+					Object.Destroy(lamp.gameObject);
+				}
+			}
+			if (gameHd != null) {
+				gameHd.lightDimmer = o.Dimmer;
+				intended_.Remove(game);
+			}
+		}
+		private static bool applying_;
+		private static Harmony harmony_;
+		private static bool stackLogged_;
+
+		private static void PatchIntensity() {
+			if (harmony_ != null) {
+				return;
+			}
+			try {
+				harmony_ = new Harmony("nec093.NatureFX.headlights");
+				var t = typeof(HDAdditionalLightData);
+				var prefix = new HarmonyMethod(typeof(HeadlightController), nameof(BlockGameIntensity));
+				var methods = new[] {
+					AccessTools.PropertySetter(t, "intensity"),
+					AccessTools.PropertySetter(t, "lightUnit"),
+					AccessTools.Method(t, "SetIntensity", new[] { typeof(float) }),
+					AccessTools.Method(t, "SetIntensity", new[] { typeof(float), typeof(LightUnit) }),
+				};
+				int patched = 0;
+				foreach (var m in methods) {
+					if (m != null) {
+						harmony_.Patch(m, prefix: prefix);
+						++patched;
+					}
+				}
+				KSL.API.Kino.Log.Info($"[NatureFX] Headlights: {patched} of HDRP's intensity setters held for NatureFX's lamps");
+			} catch (Exception e) {
+				KSL.API.Kino.Log.Warning($"[NatureFX] Headlights: intensity setters not patched ({e.GetType().Name}: {e.Message})");
+			}
+		}
+
+		// Harmony prefix: false skips the setter
+		private static bool BlockGameIntensity(HDAdditionalLightData __instance) {
+			if (applying_ || __instance == null || !owned_.Contains(__instance)) {
+				return true;
+			}
+			if (!stackLogged_) {
+				stackLogged_ = true;
+				KSL.API.Kino.Log.Info($"[NatureFX] Headlights: the game's intensity setter held off on '{Path(__instance.transform)}'; called from:\n{new System.Diagnostics.StackTrace(1, false)}");
+			}
+			return false;
+		}
+
+		private void BeforeCamera(UnityEngine.Rendering.ScriptableRenderContext context, Camera camera) {
+			if (lateType_ == 0 || camera == null || camera.cameraType != CameraType.Game) {
+				return;
+			}
+			Reassert();
+		}
+
+		private void BeforeRendering(UnityEngine.Rendering.ScriptableRenderContext context, List<Camera> cameras) {
+			if (lateType_ == 0 || lateFrame_ == Time.frameCount) {
+				return;
+			}
+			lateFrame_ = Time.frameCount;
+			Reassert();
+		}
+
+		private void Reassert() {
+			var player = PlayerCar();
+			foreach (var kv in originals_) {
+				var hd = kv.Key;
+				if (hd == null) {
+					continue;
+				}
+				var light = hd.GetComponent<Light>();
+				if (light == null || !front_.Contains(light)) {
+					continue;
+				}
+				Silence(hd);
+				var lamp = OwnLamp(light);
+				var lampHd = lamp.GetComponent<HDAdditionalLightData>();
+				cars_.TryGetValue(light, out var car);
+				bool beamHigh = highBeam_ && car != null && car == player;
+				Follow(light, lamp, car, beamHigh, lateAim_);
+				if (lampHd != null && !Holds(lamp, beamHigh ? HighCookie(lateType_) : Cookie(lateType_), lateType_)) {
+					ApplyBeam(lamp, lampHd, car, lateType_, beamHigh, lateAim_);
+					if (lateFixes_ < 5) {
+						++lateFixes_;
+						KSL.API.Kino.Log.Info($"[NatureFX] Headlights: '{Path(light.transform)}' changed by the game after NatureFX's update; ours put back before rendering");
+					}
+				}
+			}
+		}
 
 		// retro: pass the headlights to the shaders for the map's retroreflective materials
 		public void Update(ISettings s, bool retro) {
@@ -81,16 +332,23 @@ namespace NatureFX.Rendering {
 			var player = PlayerCar();
 			bool high = highBeam_;
 			kelvin_ = s.HeadlightKelvin >= 2700.0f ? Mathf.Min(s.HeadlightKelvin, 8000.0f) : 0.0f;
-			bool changed = !(Mathf.Approximately(shafts, applied_) && type == appliedType_ && Mathf.Approximately(s.HeadlightAim, appliedAim_)
+			rightTraffic_ = s.HeadlightStandard == 1;
+			bool changed = !(Mathf.Approximately(shafts, applied_) && type == appliedType_ && rightTraffic_ == appliedRight_ && Mathf.Approximately(s.HeadlightAim, appliedAim_)
 			                 && Mathf.Approximately(kelvin_, appliedKelvin_)
 			                 && player == appliedPlayer_ && high == appliedHigh_);
 			applied_ = shafts;
 			appliedType_ = type;
+			appliedRight_ = rightTraffic_;
 			appliedAim_ = s.HeadlightAim;
 			appliedKelvin_ = kelvin_;
 			appliedPlayer_ = player;
 			appliedHigh_ = high;
 
+			lateType_ = type;
+			lateAim_ = s.HeadlightAim;
+			if (type != 0) {
+				Hook();
+			}
 			int front = 0;
 			foreach (var kv in originals_) {
 				var hd = kv.Key;
@@ -98,29 +356,44 @@ namespace NatureFX.Rendering {
 					continue;
 				}
 				var o = kv.Value;
-				if (changed) {
-					// 0 keeps the game's own value. 1.5 times the physical scattering at 1: at 4 the beams lit a bright
-					// dome of the air right in front of the car, like a filter over the picture
-					hd.volumetricDimmer = shafts > 0.0f ? shafts * 1.5f : o.Volumetric;
-				}
 				var light = hd.GetComponent<Light>();
-				if (light == null || !front_.Contains(light)) {
+				bool isFront = light != null && front_.Contains(light);
+				// HDRP's volumetric light of the lamp (where HDRP's fog still runs): Headlight beams times 1.5 (at 4 the beams
+				// lit a bright dome of the air right in front of the car), 0 none; every frame (the game sets it again).
+				// The game's own value only with NatureFX off: at 0 it was put back, the game's haze round the headlights
+				float volumetric = s.Enabled ? shafts * 1.5f : o.Volumetric;
+				// (set when a setting changed, not read back from HDRP)
+				if ((!isFront || type == 0) && changed) {
+					hd.volumetricDimmer = volumetric;
+				}
+				if (!isFront) {
 					continue;
 				}
 				++front;
 				if (type == 0) {
 					if (changed) {
+						DropOwn(light, hd, o);
 						Apply(light, hd, o);
 						Beams.Remove(light);
 					}
 					continue;
 				}
+				LogTransitions(light, hd);
+				Silence(hd);
+				var lamp = OwnLamp(light);
+				var lampHd = lamp.GetComponent<HDAdditionalLightData>();
+				if (lampHd == null) {
+					continue;
+				}
+				if (changed) {
+					lampHd.volumetricDimmer = volumetric;
+				}
 				cars_.TryGetValue(light, out var car);
 				bool beamHigh = high && car != null && car == player;
-				// every frame: the game sets its lights again now and then (a lamp switched on, its own presets): put
-				// ours back as soon as it has, not at the next scan
-				if (changed || !Holds(light, beamHigh ? HighCookie(type) : Cookie(type), type)) {
-					ApplyBeam(light, hd, car, type, beamHigh, s.HeadlightAim);
+				LogBeam(light, beamHigh, car, player);
+				Follow(light, lamp, car, beamHigh, s.HeadlightAim);
+				if (changed || !Holds(lamp, beamHigh ? HighCookie(type) : Cookie(type), type)) {
+					ApplyBeam(lamp, lampHd, car, type, beamHigh, s.HeadlightAim);
 				}
 			}
 			if (changed) {
@@ -149,7 +422,44 @@ namespace NatureFX.Rendering {
 		// a while when only the intensity, cookie, angle and aim were watched)
 		private int heldLogged_;
 
+		private readonly HashSet<string> heldKinds_ = new();
+
+		// what the game does to a lamp of ours besides its values (switched off, hidden, dimmed): each change in the log,
+		// the first 40 (the beam went out on the throttle, not at a creep)
+		private readonly Dictionary<Light, string> lampStates_ = new();
+		private int transitionsLogged_;
+
+		// the high beam going on and off by itself (45 000 / 18 000 cd in turn in the log): why, the first 20 times
+		private readonly Dictionary<Light, bool> beamWas_ = new();
+		private int beamLogged_;
+
+		private void LogBeam(Light light, bool beamHigh, Rigidbody car, Rigidbody player) {
+			if (beamWas_.TryGetValue(light, out bool was) && was != beamHigh && beamLogged_ < 20) {
+				++beamLogged_;
+				var cam = Camera.main;
+				string far = cam != null && car != null ? $"{Vector3.Distance(car.position, cam.transform.position):0.0} m" : "-";
+				string farPlayer = cam != null && player != null ? $"{Vector3.Distance(player.position, cam.transform.position):0.0} m" : "-";
+				KSL.API.Kino.Log.Info($"[NatureFX] Headlights: '{Path(light.transform)}' high beam {was} -> {beamHigh} (high beam switch {highBeam_}, " +
+				                      $"its car {(car != null ? car.name : "none")} {far}, player {(player != null ? player.name : "none")} {farPlayer}, {cars_.Count} lamps known)");
+			}
+			beamWas_[light] = beamHigh;
+		}
+
+		private void LogTransitions(Light light, HDAdditionalLightData hd) {
+			if (transitionsLogged_ >= 40) {
+				return;
+			}
+			string state = $"enabled {light.enabled}, active {light.gameObject.activeInHierarchy}, intensity {light.intensity:0}, " +
+			               $"layer mask {light.renderingLayerMask}, culling {light.cullingMask}";
+			if (lampStates_.TryGetValue(light, out var before) && before != state) {
+				++transitionsLogged_;
+				KSL.API.Kino.Log.Info($"[NatureFX] Headlights: '{Path(light.transform)}' {before} -> {state}");
+			}
+			lampStates_[light] = state;
+		}
+
 		private bool Holds(Light light, Texture cookie, int type) {
+			var hd = light.GetComponent<HDAdditionalLightData>();
 			if (!held_.TryGetValue(light, out var h)) {
 				return false;
 			}
@@ -160,11 +470,17 @@ namespace NatureFX.Rendering {
 				: !light.useColorTemperature || Mathf.Abs(light.colorTemperature - Kelvin(type)) > 1.0f ? $"colour temperature -> {light.colorTemperature:0} K"
 				: light.color != Color.white ? "colour"
 				: !Mathf.Approximately(light.range, 120.0f) ? $"range -> {light.range:0}"
+				: !Mathf.Approximately(light.innerSpotAngle, BeamAngle * 0.95f) ? $"inner angle -> {light.innerSpotAngle:0}"
+				: light.type != LightType.Spot ? $"shape -> {light.type}"
+				: hd != null && !Mathf.Approximately(hd.shapeRadius, 0.04f) ? $"radius -> {hd.shapeRadius:0.000}"
+				: hd != null && hd.lightUnit != LightUnit.Candela ? $"unit -> {hd.lightUnit}"
 				: null;
 			if (changed == null) {
 				return true;
 			}
-			if (heldLogged_ < 12) {
+			// each kind of change in the log (the first 12 of any kind left out what the game did later, on the throttle)
+			string kind = changed.Split(' ')[0];
+			if (heldLogged_ < 40 && heldKinds_.Add(kind + "|" + Path(light.transform))) {
 				++heldLogged_;
 				KSL.API.Kino.Log.Info($"[NatureFX] Headlights: the game set '{Path(light.transform)}' again ({changed}); ours put back");
 			}
@@ -186,11 +502,23 @@ namespace NatureFX.Rendering {
 			light.spotAngle = BeamAngle;
 			light.innerSpotAngle = BeamAngle * 0.95f;
 			light.range = 120.0f;
-			hd.SetIntensity(t.Candela * (beamHigh ? HighBeamGain : 1.0f), LightUnit.Candela);
+			applying_ = true;
+			try {
+				hd.SetIntensity(t.Candela * (beamHigh ? HighBeamGain : 1.0f), LightUnit.Candela);
+			} finally {
+				applying_ = false;
+			}
+			owned_.Add(hd);
+			intended_[light] = t.Candela * (beamHigh ? HighBeamGain : 1.0f);
 			hd.SetCookie(beamHigh ? HighCookie(type) : Cookie(type));
 			hd.shapeRadius = 0.04f;
+			// a cone (HDRP's box and pyramid spots are light types of their own now)
+			if (light.type != LightType.Spot) {
+				light.type = LightType.Spot;
+			}
 			held_[light] = (light.intensity, light.transform.localRotation);
-			Beams[light] = beamHigh ? 2 : 1;
+			// 1 the low beam (driving on the left), 3 the same mirrored (on the right), 2 the high beam (NFX_BeamPattern)
+			Beams[light] = beamHigh ? 2 : rightTraffic_ ? 3 : 1;
 		}
 
 		private bool appliedHigh_;
@@ -199,24 +527,41 @@ namespace NatureFX.Rendering {
 		private float Kelvin(int type) => kelvin_ > 0.0f ? kelvin_ : Types[type].Kelvin;
 
 		// the car the camera follows: the heavy body nearest it
+		// once a frame, and it stays the player's until another car is clearly nearer (the camera between two cars, or a
+		// car of two heavy bodies, flipped it frame to frame: the high beam on, off, on: 45 000 / 18 000 cd in the log)
+		private Rigidbody player_;
+		private int playerFrame_ = -1;
+
 		private Rigidbody PlayerCar() {
+			if (playerFrame_ == Time.frameCount) {
+				return player_;
+			}
+			playerFrame_ = Time.frameCount;
 			var cam = Camera.main;
 			if (cam == null) {
-				return null;
+				return player_ = null;
 			}
+			var eye = cam.transform.position;
 			Rigidbody best = null;
 			float bestDistance = float.MaxValue;
 			foreach (var rb in cars_.Values) {
 				if (rb == null) {
 					continue;
 				}
-				float d = (rb.position - cam.transform.position).sqrMagnitude;
+				float d = (rb.position - eye).sqrMagnitude;
 				if (d < bestDistance) {
 					bestDistance = d;
 					best = rb;
 				}
 			}
-			return best;
+			if (player_ != null && best != player_ && cars_.ContainsValue(player_)) {
+				float kept = (player_.position - eye).sqrMagnitude;
+				// half the distance (a quarter squared) nearer, or the kept one far off (a car change, a replay)
+				if (bestDistance > kept * 0.25f && kept < 900.0f) {
+					return player_;
+				}
+			}
+			return player_ = best;
 		}
 
 		// the high beam: the light gathered round the axis (a hot centre a few degrees across, a wider glow out to the
@@ -251,6 +596,14 @@ namespace NatureFX.Rendering {
 		}
 
 		private static void Apply(Light light, HDAdditionalLightData hd, Original o) {
+			// the unit first (its setter converts the value), then the value in it; Light.intensity (candela, what the
+			// light loop reads) is set again below in any case
+			if (hd != null) {
+				owned_.Remove(hd);
+				intended_.Remove(light);
+				hd.lightUnit = o.Unit;
+				hd.intensity = o.HdIntensity;
+			}
 			light.transform.localRotation = o.LocalRotation;
 			light.useColorTemperature = o.UseTemperature;
 			light.colorTemperature = o.Temperature;
@@ -267,12 +620,15 @@ namespace NatureFX.Rendering {
 		// above) a hot spot a few degrees down, a wide fill that falls off to the sides, and the road close in front
 		// dimmer (it is near: little light makes it bright); above it 1.5 % stray light. HID: a faint blue edge.
 		private Texture2D Cookie(int type) {
-			if (cookies_.TryGetValue(type, out var tex) && tex != null) {
+			int key = type + (rightTraffic_ ? 100 : 0);
+			if (cookies_.TryGetValue(key, out var tex) && tex != null) {
 				return tex;
 			}
-			const int size = 256;
+			// fine enough for a projector's cut-off and its colour fringe (a tenth of a degree: 256 texels over 80° drew it
+			// as a third of a degree, the fringe lost)
+			int size = type >= 2 ? 1024 : 512;
 			tex = new Texture2D(size, size, TextureFormat.RGBA32, true, true) {
-				name = $"NatureFX.LowBeam.{Types[type].Name}", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear, hideFlags = HideFlags.DontSave
+				name = $"NatureFX.LowBeam.{Types[type].Name}{(rightTraffic_ ? ".right" : "")}", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear, hideFlags = HideFlags.DontSave
 			};
 			var px = new Color32[size * size];
 			float half = Mathf.Tan(BeamAngle * 0.5f * Mathf.Deg2Rad);
@@ -280,39 +636,52 @@ namespace NatureFX.Rendering {
 				for (int x = 0; x < size; ++x) {
 					float u = ((x + 0.5f) / size * 2.0f - 1.0f) * half, v = ((y + 0.5f) / size * 2.0f - 1.0f) * half;
 					float h = Mathf.Atan(u) * Mathf.Rad2Deg, a = Mathf.Atan(v) * Mathf.Rad2Deg;
+					// driving on the right: the same pattern mirrored (the kerb on the right)
+					if (rightTraffic_) {
+						h = -h;
+					}
 					// the cut-off: flat on the right, rising on the left (kerb side) by 15° up to 1°
 					float cut = -0.6f + (h < 0.0f ? Mathf.Min(-h * Mathf.Tan(15.0f * Mathf.Deg2Rad), 1.6f) : 0.0f);
 					float below = cut - a; // degrees under the cut-off
-					float edge = Mathf.Clamp01(below / 0.5f + 0.5f); // its sharpness: a fraction of a degree
+					// its sharpness: a reflector's (halogen) about half a degree, a projector lens's (HID, LED) a quarter or less
+					float edgeWidth = type == 2 ? 0.25f : type == 3 ? 0.18f : 0.5f;
+					float edge = Mathf.Clamp01(below / edgeWidth + 0.5f);
 					// the peak as the regulations measure it (ECE R149 class B: the 75R / 50V points, 0.5 to 1.5° down, 25
 					// to 75 m ahead), falling off fast above it and slower below
 					float spread = a < -1.2f ? 2.2f : 1.2f;
-					float hot = Mathf.Exp(-Mathf.Pow(h / 9.0f, 2.0f) - Mathf.Pow((a + 1.2f) / spread, 2.0f));
+					// the hot spot a little to the kerb side (Japan's measuring points: the brightest some 1 to 2° left of the
+					// middle, under the cut-off), so the near verge and the lane are lit more than the oncoming lane
+					float hot = Mathf.Exp(-Mathf.Pow((h + 1.5f) / 12.0f, 2.0f) - Mathf.Pow((a + 1.2f) / spread, 2.0f));
 					// steeply down (the road a few metres ahead) a real low beam sends little: under 2 % of its peak 8° down,
 					// so the road just in front is no brighter than the road 30 m on (with 5 % it was a white blob at night);
 					// to the sides it fades out before the spot's edge, which drew a round rim on the verges
-					float fill = Mathf.Exp(-Mathf.Pow(h / 22.0f, 2.0f)) * Mathf.Exp(-Mathf.Max(0.0f, below - 1.0f) / 2.0f) * 0.25f
-					             * Mathf.Clamp01((38.0f - Mathf.Sqrt(h * h + a * a)) / 8.0f);
+					// (NFX_BeamPatternSoft has the same numbers)
+					float fill = Mathf.Exp(-Mathf.Pow(h / 34.0f, 2.0f)) * Mathf.Exp(-Mathf.Max(0.0f, below - 1.0f) / 2.0f) * 0.3f
+					             * Mathf.Clamp01((53.0f - Mathf.Sqrt(h * h + a * a)) / 10.0f);
 					float value = Mathf.Lerp(0.015f, Mathf.Min(1.0f, hot + fill), edge);
 					var c = new Color(value, value, value, 1.0f);
 					if (type >= 2) {
-						// a projector lens (HID and LED) splits the cut-off's edge by colour: blue-violet just above it,
-						// a faint amber just under it (the blue bends more); xenon's stronger
-						float strength = type == 2 ? 0.3f : 0.18f;
-						float across = Mathf.Exp(-Mathf.Pow(h / 30.0f, 2.0f)) * strength;
-						float blue = Mathf.Exp(-Mathf.Pow((below + 0.12f) / 0.18f, 2.0f)) * across;
-						float amber = Mathf.Exp(-Mathf.Pow((below - 0.25f) / 0.2f, 2.0f)) * across;
-						float lit = Mathf.Max(value, 0.05f);
-						c = new Color(Mathf.Min(1.0f, value * (1.0f - blue * 0.6f) + amber * lit * 0.4f),
-						              Mathf.Min(1.0f, value * (1.0f - blue * 0.8f) + amber * lit * 0.15f),
-						              Mathf.Min(1.0f, value * (1.0f - amber * 0.5f) + blue * 0.35f), 1.0f);
+						// a projector lens (HID and LED) splits the cut-off's edge by colour (the blue bends more): a thin
+						// blue-violet line just above it, a faint amber one just under it, as bright as the beam is at the
+						// edge there (the hot spot's side bright, the far sides faint). Xenon's violet and strongest; an LED's
+						// a cooler cyan-blue, thinner and fainter
+						bool xenon = type == 2;
+						float level = Mathf.Min(1.0f, hot + fill);
+						float across = Mathf.Exp(-Mathf.Pow(h / 40.0f, 2.0f)) * level * (xenon ? 0.55f : 0.35f);
+						float blueWidth = xenon ? 0.13f : 0.09f;
+						float blue = Mathf.Exp(-Mathf.Pow((below + blueWidth * 0.8f) / blueWidth, 2.0f)) * across;
+						float amber = Mathf.Exp(-Mathf.Pow((below - 0.18f) / (xenon ? 0.14f : 0.1f), 2.0f)) * across * (xenon ? 0.5f : 0.3f);
+						var fringe = xenon ? new Color(0.55f, 0.35f, 1.0f) : new Color(0.3f, 0.6f, 1.0f);
+						c = new Color(Mathf.Min(1.0f, value * (1.0f - amber * 0.1f) + blue * fringe.r + amber * 0.9f),
+						              Mathf.Min(1.0f, value * (1.0f - amber * 0.35f) + blue * fringe.g + amber * 0.55f),
+						              Mathf.Min(1.0f, value * (1.0f - amber * 0.8f) + blue * fringe.b), 1.0f);
 					}
 					px[y * size + x] = c;
 				}
 			}
 			tex.SetPixels32(px);
 			tex.Apply(true, false);
-			cookies_[type] = tex;
+			cookies_[key] = tex;
 			return tex;
 		}
 
@@ -325,8 +694,10 @@ namespace NatureFX.Rendering {
 				// the front lights where they are known: from a chase camera the nearest lamps are the own car's tail
 				// lights, which would have sent the markings' light back in red
 				bool frontOnly = front_.Count > 0;
-				foreach (var l in lights_) {
-					if (l != null && l.isActiveAndEnabled && l.intensity > 0.0f && (!frontOnly || front_.Contains(l))) {
+				foreach (var g in lights_) {
+					// NatureFX's own lamp where it shines in the game's place
+					var l = g != null && own_.TryGetValue(g, out var mine) && mine != null ? mine : g;
+					if (l != null && l.isActiveAndEnabled && Intensity(l) > 0.0f && (!frontOnly || front_.Contains(g))) {
 						nearest_.Add(((l.transform.position - c).sqrMagnitude, l));
 					}
 				}
@@ -339,7 +710,7 @@ namespace NatureFX.Rendering {
 					var d = l.transform.forward;
 					var color = l.color;
 					float tint = Mathf.Max(color.r, Mathf.Max(color.g, color.b));
-					positions_[i] = new Vector4(p.x, p.y, p.z, l.intensity * tint);
+					positions_[i] = new Vector4(p.x, p.y, p.z, Intensity(l) * tint);
 					directions_[i] = new Vector4(d.x, d.y, d.z, Mathf.Cos(l.spotAngle * 0.5f * Mathf.Deg2Rad));
 				} else {
 					positions_[i] = Vector4.zero;
@@ -361,6 +732,7 @@ namespace NatureFX.Rendering {
 		}
 
 		public void Restore() {
+			lateType_ = 0;
 			foreach (var kv in originals_) {
 				if (kv.Key == null) {
 					continue;
@@ -368,8 +740,19 @@ namespace NatureFX.Rendering {
 				kv.Key.volumetricDimmer = kv.Value.Volumetric;
 				var light = kv.Key.GetComponent<Light>();
 				if (light != null && front_.Contains(light)) {
+					DropOwn(light, kv.Key, kv.Value);
 					Apply(light, kv.Key, kv.Value);
 				}
+			}
+			foreach (var kv in own_) {
+				if (kv.Value != null) {
+					Object.Destroy(kv.Value.gameObject);
+				}
+			}
+			own_.Clear();
+			if (ownRoot_ != null) {
+				Object.Destroy(ownRoot_);
+				ownRoot_ = null;
 			}
 			originals_.Clear();
 			front_.Clear();
@@ -418,11 +801,43 @@ namespace NatureFX.Rendering {
 				cars_.Remove(l);
 			}
 
+			// lamps that are gone (a map's, a car's glow): their held intensities go too
+			var goneHeld = new List<Light>();
+			foreach (var kv in intended_) {
+				if (kv.Key == null) {
+					goneHeld.Add(kv.Key);
+				}
+			}
+			foreach (var l in goneHeld) {
+				intended_.Remove(l);
+			}
+			var goneOwn = new List<Light>();
+			foreach (var kv in own_) {
+				if (kv.Key == null || kv.Value == null) {
+					goneOwn.Add(kv.Key);
+				}
+			}
+			foreach (var l in goneOwn) {
+				// a car that left: its lamps no longer go with it
+				if (own_.TryGetValue(l, out var lamp) && lamp != null) {
+					Object.Destroy(lamp.gameObject);
+				}
+				own_.Remove(l);
+			}
 			foreach (var light in Object.FindObjectsByType<Light>(FindObjectsInactive.Exclude, FindObjectsSortMode.None)) {
-				if (light.type != LightType.Spot) {
+				// NatureFX's own lamps are not the game's
+				if (light.type != LightType.Spot || light.name == OwnLampName) {
 					continue;
 				}
-				var rb = light.GetComponentInParent<Rigidbody>();
+				// the car's body: the first rigid body up the hierarchy heavy enough for a car (a lamp under a light part
+				// with a body of its own, a bumper or a light pod, was passed over: the game's own beam when driving)
+				Rigidbody rb = null;
+				foreach (var candidate in light.GetComponentsInParent<Rigidbody>(true)) {
+					if (candidate.mass >= MinCarMass) {
+						rb = candidate;
+						break;
+					}
+				}
 				// a lamp the game keeps apart from the car's body (a view's own headlights, on the camera's rig): the car it
 				// sits in front of and points along, the player's within 8 m
 				if (rb == null) {
@@ -436,6 +851,12 @@ namespace NatureFX.Rendering {
 					}
 				}
 				if (rb == null || rb.mass < MinCarMass) {
+					// a spot near the player's car that is not taken: in the log once (the game's own beam showed when driving)
+					var near = PlayerCar();
+					if (near != null && (light.transform.position - near.position).sqrMagnitude < 64.0f && loggedLoose_.Add(-light.GetInstanceID())) {
+						KSL.API.Kino.Log.Info($"[NatureFX] Headlights: spot '{Path(light.transform)}' by {near.name} not taken (body {(rb != null ? $"{rb.name} {rb.mass:0} kg" : "none")}, " +
+						                      $"facing {Vector3.Dot(light.transform.forward, near.transform.forward):0.00})");
+					}
 					continue;
 				}
 				var hd = light.GetComponent<HDAdditionalLightData>();
@@ -443,7 +864,7 @@ namespace NatureFX.Rendering {
 					originals_[hd] = new Original {
 						Intensity = light.intensity, Temperature = light.colorTemperature, UseTemperature = light.useColorTemperature, Color = light.color,
 						SpotAngle = light.spotAngle, Inner = light.innerSpotAngle, Range = light.range, Cookie = light.cookie, Volumetric = hd.volumetricDimmer,
-						LocalRotation = light.transform.localRotation,
+						LocalRotation = light.transform.localRotation, Unit = hd.lightUnit, HdIntensity = hd.intensity, Dimmer = hd.lightDimmer,
 					};
 					cars_[light] = rb;
 					lights_.Add(light);

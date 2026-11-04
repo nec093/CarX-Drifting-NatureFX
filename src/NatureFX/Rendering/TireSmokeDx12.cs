@@ -7,8 +7,8 @@ using UnityEngine.Rendering;
 namespace NatureFX.Rendering {
 	// CarX's GPU tire smoke (GpuExtensions.dll: ParticleSimulationPass / ParticleRenderPass) uses compute shaders
 	// without DX12 kernels ("Kernel 'BlurMS' not found"). Temporary measure while DX12 support is investigated:
-	// on DX12 the two passes are skipped so the rest of the frame renders. On DX11 they are skipped only while
-	// ReplaceGameSmoke is set (NatureFX's lit smoke, TireSmoke, instead of the game's).
+	// the two passes are skipped so the rest of the frame renders (NatureFX runs on DX12 only: its lit smoke,
+	// TireSmoke, is the smoke).
 	public static class TireSmokeDx12 {
 		private static Harmony harmony_;
 		private static bool dx12_;
@@ -20,7 +20,7 @@ namespace NatureFX.Rendering {
 			if (harmony_ != null) {
 				return;
 			}
-			dx12_ = SystemInfo.graphicsDeviceType == GraphicsDeviceType.Direct3D12;
+			dx12_ = true; // NatureFX starts only on DX12 (NatureFXMod)
 
 			try {
 				var render = AccessTools.TypeByName("ParticleRenderPass");

@@ -20,15 +20,16 @@ namespace NatureFX {
 		public float LeafFlutter { get; set; }
 		public bool InteractiveFoliage { get; set; }
 
-		// accumulation / weather
+		// the weather: rain and wetness on or off
 		public bool Accumulation { get; set; }
-		public bool AccumulateOverTime { get; set; }
-		public float AccumulationRate { get; set; }
-		public float Snow { get; set; }
-		public float Leaves { get; set; }
-		public float Dust { get; set; }
+		public bool AccumulateOverTime { get; set; }  // removed (the build-up over time): kept only so old files load
+		public float AccumulationRate { get; set; }   // removed
+		public float Snow { get; set; }               // removed (snow)
+		public float Leaves { get; set; }             // removed (fallen leaves)
+		public float Dust { get; set; }               // removed (dust)
 		public float Wetness { get; set; }
 		public bool WetGameMaterials { get; set; }
+		public bool CalibrateAlbedo { get; set; }     // the map's materials brought to their real material's albedo ([materials], MaterialProfiles)
 
 		// shader replacement (needs naturefx.bundle)
 		public bool ReplaceShaders { get; set; }
@@ -42,6 +43,15 @@ namespace NatureFX {
 		public bool SunOverride { get; set; }
 		public bool SyncGameNight { get; set; }            // the game's night lighting (street lights) follows NatureFX's sun
 		public float TimeOfDay { get; set; }          // hours 0..24
+		public bool TimePasses { get; set; }          // the time of day runs on by itself
+		public bool OwnSkyLighting { get; set; }      // HDRP's sky light, reflections and sky from the own engine (OwnLighting)
+		public bool OwnSunLight { get; set; }         // HDRP's sun lights nothing; the shadow composite adds it (OwnLighting.Sun)
+		public bool OwnLampLight { get; set; }        // HDRP's lamps light nothing; the shadow composite adds them (OwnLighting.Lamps)
+		public bool OwnTransparentLight { get; set; } // HDRP's sun, lamps and the own sky light still light what is drawn see-through (OwnLighting.Transparents)
+		public bool OwnBrdf { get; set; }             // the sun and lamps lit by the own BSDF, no G-buffer drawn again (RTShadowPass.OwnBrdf)
+		public float SkyLightStrength { get; set; }   // the own sky's light on surfaces (OwnLighting.Ambient): the shade's brightness
+		public float SkyLightSaturation { get; set; } // the sky light's colour: 1 the sky model's, 0.5 measured skylight (NativeEngine)
+		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
 		public float SunMaxElevation { get; set; }    // degrees at noon
 		public float SunIntensityScale { get; set; }
@@ -49,18 +59,22 @@ namespace NatureFX {
 		public float LightShafts { get; set; }        // sun volumetric dimmer, needs volumetric fog
 
 		// camera / filters
-		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral, 2 Filmic (GT-style custom curve), 3 None
+		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral (Khronos PBR Neutral), 2 AgX, 3 None
+		public float WhiteBalance { get; set; }       // 0..1 how much the eye takes the light around as white (PostProcess)
+		public float NightDarkness { get; set; }      // 0..1 a dark scene seen dark, not lifted to grey (PostProcess.NightKey)
+		public float FixedExposure { get; set; }      // EV100 with the exposure fixed (ExposureMode 0)
+		public float CloudAmount { get; set; }        // 0..1 the clouds with the Clear and Manual weather (WeatherController)
 
 		// --- added in config version 3: screen space path tracing ---
 
 		// --- added in config version 4: weather and shadows ---
 		public float Rain { get; set; }               // 0..1 ripples, drips, wet surfaces
-		public float SnowDepth { get; set; }          // metres of real snow thickness at full snow
+		public float SnowDepth { get; set; }          // removed (snow): kept only so old files load
 		public bool RealisticShadows { get; set; }
 		public float SunSize { get; set; }            // angular diameter in degrees (PCSS, needs High shadow filtering)
 
 		// --- added in config version 5: camera realism ---
-		public int ExposureMode { get; set; }         // 0 game, 1 eye adaptation, 2 physical camera
+		public int ExposureMode { get; set; }         // 0 fixed (FixedExposure), 1 eye adaptation
 		public float AutoExposureMin { get; set; }    // EV100
 		public float AutoExposureMax { get; set; }
 		public float AdaptationSpeed { get; set; }
@@ -73,13 +87,14 @@ namespace NatureFX {
 		public float MoonBrightness { get; set; }           // the moon's light against its physical strength (1 = real)
 		public float HeadlightShafts { get; set; }
 		public int HeadlightType { get; set; }              // 0 the game's own, 1 halogen, 2 HID, 3 LED (a real low beam)
+		public int HeadlightStandard { get; set; }          // 0 Japan (driving on the left), 1 Europe / US (on the right): the low beam's side
 		public float HeadlightAim { get; set; }             // the low beam's axis below level (°)
 		public float HeadlightKelvin { get; set; }          // the lamps' colour temperature (K); 0: the type's own
 		public float SurfaceDetail { get; set; }
 
-		// tire marks / car rain
+		// tyres on the road (the dry line, the wheels' contacts) / car rain
 		public bool TireMarks { get; set; }
-		public float RubberAmount { get; set; }
+		public float RubberAmount { get; set; }       // removed (tyre rubber): kept only so old files load
 		public bool CarRain { get; set; }
 		public float CarRainDrops { get; set; }
 		public float OilFilm { get; set; }
@@ -114,7 +129,7 @@ namespace NatureFX {
 		public bool RTLampMasks { get; set; }              // roadmap A4: each lamp shadowed by its own mask (with RTExactSun)
 		public bool RTFullRelight { get; set; }            // roadmap A4: HDRP's pixel taken apart and lit again by the own engine
 		public bool RTHideFakeShadows { get; set; }        // hide the game's painted shadow planes while the ray traced shadows run
-		public bool RebuildFoliage { get; set; }           // shader rebuild: foliage too (wind, snow); off leaves it to the game's shaders
+		public bool RebuildFoliage { get; set; }           // shader rebuild: foliage too (wind, wetness); off leaves it to the game's shaders
 		public bool RTWind { get; set; }                   // own engine: the traced foliage sways with the wind as it is drawn
 		public float RTLeafTranslucency { get; set; }      // sunlight through back-lit leaves (0: off)
 		public bool RTShafts { get; set; }                 // ray traced light shafts
@@ -143,17 +158,24 @@ namespace NatureFX {
 		public float RTSkyOcclusion { get; set; }          // m: overhangs further than the ambient distance take the sky (0: off)
 		public float RTContactShadows { get; set; }        // darkening where surfaces meet (0: off)
 
-		// shader rebuild: road surface detail of the NatureFX shaders (grain, rubber laid down on the driven line)
+		// removed (the road's rubber and wear): kept only so old files load
 		public float RoadWear { get; set; }
 
-		// map extension (docs/map-authoring.md 5 and 7): season of the foliage colours and the floating particles
-		// (0 automatic: the weather preset, else the map's [defaults] season; 1 spring .. 4 winter; 5 none), the 3D
-		// grass (density multiplier, metres from the camera) and the map's decals, water, local fog and particles
+		// map extension (docs/map-authoring.md 5 and 7): the 3D grass (density multiplier, metres from the camera) and
+		// the map's decals, water, local fog and particles. Season: removed (the seasonal colours), kept so old files load
 		public int Season { get; set; }
+		// leaves and grass brought to measured colours (0 the textures' own, 1 a real leaf's: some 4 to 12 % of the light
+		// back, an olive green, not a painted one; NFX_LitData)
+		public float FoliageColor { get; set; }
 		public float GrassDensity { get; set; }
 		public float GrassDistance { get; set; }
 		public float ShrubDensity { get; set; }            // the map's thickets of scanned shrubs (ShrubRenderer): density, 0 off
 		public float ShrubDistance { get; set; }           // m: where the scans give way to their billboard clouds (impostors at 3x)
+		// --- added in config version 62: the debug page (Tools/DebugPage.cs) ---
+		public bool DebugPage { get; set; }                // a page with memory, timings and the log, for a browser on this PC
+		public int DebugPagePort { get; set; }             // its port on 127.0.0.1
+		public float TextureStreamingBudget { get; set; }  // MB for Unity's texture mip streaming; 0 the game's own
+		public bool WriteMaterialInventory { get; set; }   // the shader rebuild's data at each map load (text and texture samples)
 		public bool MapEffects { get; set; }
 		// sky: HDRP volumetric clouds following the weather (and the map's cloud sea), the strength of their shadows,
 		// the blue haze over distant mountains (0 off)
@@ -171,7 +193,7 @@ namespace NatureFX {
 		// camera's exposure does not reach), and how long a change of weather takes (s)
 		public float StarBrightness { get; set; }
 		public float WeatherChangeTime { get; set; }
-		// falling rain (with splashes) and snow around the camera: how dense (0 off)
+		// falling rain (with splashes) around the camera: how dense (0 off)
 		public float Precipitation { get; set; }
 		// shader rebuild: hex tiled textures where the map's [materials] ask for it (antitiling=), 0 off .. 1
 		public float AntiTiling { get; set; }
@@ -180,7 +202,7 @@ namespace NatureFX {
 		public float TireSmoke { get; set; }
 		public bool ReplaceGameSmoke { get; set; }
 		public bool CarGlow { get; set; }
-		// dirt, dust and snow building up on the car nearest the camera (how much at most)
+		// mud building up on the car nearest the camera (how much at most)
 		public bool CarDirt { get; set; }
 		public float CarDirtAmount { get; set; }
 		// the camera and the eye: night vision (Purkinje shift and grain, 0 off), lens flare (0 off), depth of field on
@@ -198,8 +220,8 @@ namespace NatureFX {
 		public float MotionBlur { get; set; }              // own post: the shutter's share of a frame (0.5: 180°), 0 off
 		public float DofFStop { get; set; }                // own post's depth of field: the lens's f-number
 		public bool RTTransparentShadows { get; set; }     // the sun's ray traced shadow on transparent surfaces (SunShadowMap)
-		public bool MapGroundDetail { get; set; }          // the ground map: ground blend, painted dirt and debris on the map
-		public float Detritus { get; set; }                // debris (pebbles, twigs, leaves) along the road's edges: density, 0 off
+		public bool MapGroundDetail { get; set; }          // removed (ground blend, painted dirt, debris): kept only so old files load
+		public float Detritus { get; set; }                // removed (debris)
 		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
 		public bool MapProbes { get; set; }
 		// draw the map's markers over the picture (F8 > Map), for map authors
@@ -228,15 +250,16 @@ namespace NatureFX {
 		public float LeafFlutter { get; set; }
 		public bool InteractiveFoliage { get; set; }
 
-		// accumulation / weather
+		// the weather: rain and wetness on or off
 		public bool Accumulation { get; set; }
-		public bool AccumulateOverTime { get; set; }
-		public float AccumulationRate { get; set; }
-		public float Snow { get; set; }
-		public float Leaves { get; set; }
-		public float Dust { get; set; }
+		public bool AccumulateOverTime { get; set; }  // removed (the build-up over time): kept only so old files load
+		public float AccumulationRate { get; set; }   // removed
+		public float Snow { get; set; }               // removed (snow)
+		public float Leaves { get; set; }             // removed (fallen leaves)
+		public float Dust { get; set; }               // removed (dust)
 		public float Wetness { get; set; }
 		public bool WetGameMaterials { get; set; }
+		public bool CalibrateAlbedo { get; set; }     // the map's materials brought to their real material's albedo ([materials], MaterialProfiles)
 
 		// shader replacement (needs naturefx.bundle)
 		public bool ReplaceShaders { get; set; }
@@ -250,6 +273,15 @@ namespace NatureFX {
 		public bool SunOverride { get; set; }
 		public bool SyncGameNight { get; set; }            // the game's night lighting (street lights) follows NatureFX's sun
 		public float TimeOfDay { get; set; }          // hours 0..24
+		public bool TimePasses { get; set; }          // the time of day runs on by itself
+		public bool OwnSkyLighting { get; set; }      // HDRP's sky light, reflections and sky from the own engine (OwnLighting)
+		public bool OwnSunLight { get; set; }         // HDRP's sun lights nothing; the shadow composite adds it (OwnLighting.Sun)
+		public bool OwnLampLight { get; set; }        // HDRP's lamps light nothing; the shadow composite adds them (OwnLighting.Lamps)
+		public bool OwnTransparentLight { get; set; } // HDRP's sun, lamps and the own sky light still light what is drawn see-through (OwnLighting.Transparents)
+		public bool OwnBrdf { get; set; }             // the sun and lamps lit by the own BSDF, no G-buffer drawn again (RTShadowPass.OwnBrdf)
+		public float SkyLightStrength { get; set; }   // the own sky's light on surfaces (OwnLighting.Ambient): the shade's brightness
+		public float SkyLightSaturation { get; set; } // the sky light's colour: 1 the sky model's, 0.5 measured skylight (NativeEngine)
+		public float TimeSpeed { get; set; }          // how much faster than real time (60: an hour a minute)
 		public float SunAzimuthOffset { get; set; }   // degrees added to the track's sun heading
 		public float SunMaxElevation { get; set; }    // degrees at noon
 		public float SunIntensityScale { get; set; }
@@ -257,18 +289,22 @@ namespace NatureFX {
 		public float LightShafts { get; set; }        // sun volumetric dimmer, needs volumetric fog
 
 		// camera / filters
-		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral, 2 Filmic (GT-style custom curve), 3 None
+		public int TonemapMode { get; set; }          // 0 ACES, 1 Neutral (Khronos PBR Neutral), 2 AgX, 3 None
+		public float WhiteBalance { get; set; }       // 0..1 how much the eye takes the light around as white (PostProcess)
+		public float NightDarkness { get; set; }      // 0..1 a dark scene seen dark, not lifted to grey (PostProcess.NightKey)
+		public float FixedExposure { get; set; }      // EV100 with the exposure fixed (ExposureMode 0)
+		public float CloudAmount { get; set; }        // 0..1 the clouds with the Clear and Manual weather (WeatherController)
 
 		// --- added in config version 3: screen space path tracing ---
 
 		// --- added in config version 4: weather and shadows ---
 		public float Rain { get; set; }               // 0..1 ripples, drips, wet surfaces
-		public float SnowDepth { get; set; }          // metres of real snow thickness at full snow
+		public float SnowDepth { get; set; }          // removed (snow): kept only so old files load
 		public bool RealisticShadows { get; set; }
 		public float SunSize { get; set; }            // angular diameter in degrees (PCSS, needs High shadow filtering)
 
 		// --- added in config version 5: camera realism ---
-		public int ExposureMode { get; set; }         // 0 game, 1 eye adaptation, 2 physical camera
+		public int ExposureMode { get; set; }         // 0 fixed (FixedExposure), 1 eye adaptation
 		public float AutoExposureMin { get; set; }    // EV100
 		public float AutoExposureMax { get; set; }
 		public float AdaptationSpeed { get; set; }
@@ -281,13 +317,14 @@ namespace NatureFX {
 		public float MoonBrightness { get; set; }           // the moon's light against its physical strength (1 = real)
 		public float HeadlightShafts { get; set; }
 		public int HeadlightType { get; set; }              // 0 the game's own, 1 halogen, 2 HID, 3 LED (a real low beam)
+		public int HeadlightStandard { get; set; }          // 0 Japan (driving on the left), 1 Europe / US (on the right): the low beam's side
 		public float HeadlightAim { get; set; }             // the low beam's axis below level (°)
 		public float HeadlightKelvin { get; set; }          // the lamps' colour temperature (K); 0: the type's own
 		public float SurfaceDetail { get; set; }
 
-		// tire marks / car rain
+		// tyres on the road (the dry line, the wheels' contacts) / car rain
 		public bool TireMarks { get; set; }
-		public float RubberAmount { get; set; }
+		public float RubberAmount { get; set; }       // removed (tyre rubber): kept only so old files load
 		public bool CarRain { get; set; }
 		public float CarRainDrops { get; set; }
 		public float OilFilm { get; set; }
@@ -322,7 +359,7 @@ namespace NatureFX {
 		public bool RTLampMasks { get; set; }              // roadmap A4: each lamp shadowed by its own mask (with RTExactSun)
 		public bool RTFullRelight { get; set; }            // roadmap A4: HDRP's pixel taken apart and lit again by the own engine
 		public bool RTHideFakeShadows { get; set; }        // hide the game's painted shadow planes while the ray traced shadows run
-		public bool RebuildFoliage { get; set; }           // shader rebuild: foliage too (wind, snow); off leaves it to the game's shaders
+		public bool RebuildFoliage { get; set; }           // shader rebuild: foliage too (wind, wetness); off leaves it to the game's shaders
 		public bool RTWind { get; set; }                   // own engine: the traced foliage sways with the wind as it is drawn
 		public float RTLeafTranslucency { get; set; }      // sunlight through back-lit leaves (0: off)
 		public bool RTShafts { get; set; }                 // ray traced light shafts
@@ -351,17 +388,24 @@ namespace NatureFX {
 		public float RTSkyOcclusion { get; set; }          // m: overhangs further than the ambient distance take the sky (0: off)
 		public float RTContactShadows { get; set; }        // darkening where surfaces meet (0: off)
 
-		// shader rebuild: road surface detail of the NatureFX shaders (grain, rubber laid down on the driven line)
+		// removed (the road's rubber and wear): kept only so old files load
 		public float RoadWear { get; set; }
 
-		// map extension (docs/map-authoring.md 5 and 7): season of the foliage colours and the floating particles
-		// (0 automatic: the weather preset, else the map's [defaults] season; 1 spring .. 4 winter; 5 none), the 3D
-		// grass (density multiplier, metres from the camera) and the map's decals, water, local fog and particles
+		// map extension (docs/map-authoring.md 5 and 7): the 3D grass (density multiplier, metres from the camera) and
+		// the map's decals, water, local fog and particles. Season: removed (the seasonal colours), kept so old files load
 		public int Season { get; set; }
+		// leaves and grass brought to measured colours (0 the textures' own, 1 a real leaf's: some 4 to 12 % of the light
+		// back, an olive green, not a painted one; NFX_LitData)
+		public float FoliageColor { get; set; }
 		public float GrassDensity { get; set; }
 		public float GrassDistance { get; set; }
 		public float ShrubDensity { get; set; }            // the map's thickets of scanned shrubs (ShrubRenderer): density, 0 off
 		public float ShrubDistance { get; set; }           // m: where the scans give way to their billboard clouds (impostors at 3x)
+		// --- added in config version 62: the debug page (Tools/DebugPage.cs) ---
+		public bool DebugPage { get; set; }                // a page with memory, timings and the log, for a browser on this PC
+		public int DebugPagePort { get; set; }             // its port on 127.0.0.1
+		public float TextureStreamingBudget { get; set; }  // MB for Unity's texture mip streaming; 0 the game's own
+		public bool WriteMaterialInventory { get; set; }   // the shader rebuild's data at each map load (text and texture samples)
 		public bool MapEffects { get; set; }
 		// sky: HDRP volumetric clouds following the weather (and the map's cloud sea), the strength of their shadows,
 		// the blue haze over distant mountains (0 off)
@@ -379,7 +423,7 @@ namespace NatureFX {
 		// camera's exposure does not reach), and how long a change of weather takes (s)
 		public float StarBrightness { get; set; }
 		public float WeatherChangeTime { get; set; }
-		// falling rain (with splashes) and snow around the camera: how dense (0 off)
+		// falling rain (with splashes) around the camera: how dense (0 off)
 		public float Precipitation { get; set; }
 		// shader rebuild: hex tiled textures where the map's [materials] ask for it (antitiling=), 0 off .. 1
 		public float AntiTiling { get; set; }
@@ -388,7 +432,7 @@ namespace NatureFX {
 		public float TireSmoke { get; set; }
 		public bool ReplaceGameSmoke { get; set; }
 		public bool CarGlow { get; set; }
-		// dirt, dust and snow building up on the car nearest the camera (how much at most)
+		// mud building up on the car nearest the camera (how much at most)
 		public bool CarDirt { get; set; }
 		public float CarDirtAmount { get; set; }
 		// the camera and the eye: night vision (Purkinje shift and grain, 0 off), lens flare (0 off), depth of field on
@@ -406,8 +450,8 @@ namespace NatureFX {
 		public float MotionBlur { get; set; }              // own post: the shutter's share of a frame (0.5: 180°), 0 off
 		public float DofFStop { get; set; }                // own post's depth of field: the lens's f-number
 		public bool RTTransparentShadows { get; set; }     // the sun's ray traced shadow on transparent surfaces (SunShadowMap)
-		public bool MapGroundDetail { get; set; }          // the ground map: ground blend, painted dirt and debris on the map
-		public float Detritus { get; set; }                // debris (pebbles, twigs, leaves) along the road's edges: density, 0 off
+		public bool MapGroundDetail { get; set; }          // removed (ground blend, painted dirt, debris): kept only so old files load
+		public float Detritus { get; set; }                // removed (debris)
 		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
 		public bool MapProbes { get; set; }
 		// draw the map's markers over the picture (F8 > Map), for map authors
@@ -550,7 +594,7 @@ namespace NatureFX {
 				d.ConfigVersion = 17;
 			}
 			if (d.ConfigVersion < 18) {
-				// shader rebuild, stage 0: replace every game material (docs/shader-rebuild-plan.md)
+				// shader rebuild, stage 0: replace every game material
 				d.ReplaceShaders = true;
 				d.FullReplacement = true;
 				d.ConfigVersion = 18;
@@ -779,6 +823,158 @@ namespace NatureFX {
 				d.ShrubDistance = 25.0f;
 				d.ConfigVersion = 61;
 			}
+			if (d.ConfigVersion < 62) {
+				// the debug page: off, its port
+				d.DebugPagePort = 8765;
+				d.ConfigVersion = 62;
+			}
+			if (d.ConfigVersion < 63) {
+				// the time of day running on: off, an hour a minute
+				d.TimeSpeed = 60.0f;
+				d.ConfigVersion = 63;
+			}
+			if (d.ConfigVersion < 64) {
+				// HDRP's sky light, reflections and sky handed over to the own engine
+				d.OwnSkyLighting = true;
+				d.ConfigVersion = 64;
+			}
+			if (d.ConfigVersion < 65) {
+				// the sun's light from the own engine
+				d.OwnSunLight = true;
+				d.ConfigVersion = 65;
+			}
+			if (d.ConfigVersion < 66) {
+				// the lamps' light from the own engine
+				d.OwnLampLight = true;
+				d.ConfigVersion = 66;
+			}
+			if (d.ConfigVersion < 67) {
+				// the shade's brightness (the own sky's light), as it is
+				d.SkyLightStrength = 1.0f;
+				d.ConfigVersion = 67;
+			}
+			if (d.ConfigVersion < 68) {
+				// the low beam for driving on the left (Japan), as it was
+				d.HeadlightStandard = 0;
+				d.ConfigVersion = 68;
+			}
+			if (d.ConfigVersion < 69) {
+				// see-through surfaces lit again under the own engine's lighting
+				d.OwnTransparentLight = true;
+				d.ConfigVersion = 69;
+			}
+			if (d.ConfigVersion < 70) {
+				// true to life: Khronos PBR Neutral (the surfaces' own colours, highlights rolled off to white, no hue
+				// shift like ACES's), no added contrast or saturation, the eye's white balance
+				d.TonemapMode = 1;
+				d.AcesTonemapping = true;
+				d.Contrast = 0.0f;
+				d.Saturation = 0.0f;
+				d.WhiteBalance = 0.6f;
+				d.ConfigVersion = 70;
+			}
+			if (d.ConfigVersion < 71) {
+				// the shade as blue as under a real clear sky, not twice as blue
+				d.SkyLightSaturation = 0.5f;
+				d.ConfigVersion = 71;
+			}
+			if (d.ConfigVersion < 72) {
+				// the night seen dark, as the eye sees it
+				d.NightDarkness = 1.0f;
+				d.ConfigVersion = 72;
+			}
+			if (d.ConfigVersion < 73) {
+				// the user's choice: the eye opens up to 2 EV at most at night, a fainter bloom
+				d.AutoExposureMin = 2.0f;
+				d.PostBloom = 0.02f;
+				d.ConfigVersion = 73;
+			}
+			if (d.ConfigVersion < 74) {
+				// no rainbow oil film on car paint (a clear coat does not carry one)
+				d.OilFilm = 0.0f;
+				d.ConfigVersion = 74;
+			}
+			if (d.ConfigVersion < 75) {
+				// DXR 1.1 (inline ray queries) by default: what the user tests with
+				d.RTBackend = 1;
+				d.ConfigVersion = 75;
+			}
+			if (d.ConfigVersion < 76) {
+				// the exposure's first choice is a fixed EV now (the game's own did not fit real sunshine): a sunny day's
+				d.FixedExposure = 14.0f;
+				d.ConfigVersion = 76;
+			}
+			if (d.ConfigVersion < 77) {
+				// NVIDIA's NRD by default: a reset to the defaults went back to the own variance guided filter (noisy)
+				d.RTDenoiser = 2;
+				d.ConfigVersion = 77;
+			}
+			if (d.ConfigVersion < 78) {
+				// the debug page on by default while NatureFX is being developed (this PC only: 127.0.0.1)
+				d.DebugPage = true;
+				d.ConfigVersion = 78;
+			}
+			if (d.ConfigVersion < 79) {
+				// closer to a camera's picture of the real thing: AgX (highlights go to white without a hue shift, bright
+				// colours do not clip; Neutral kept them saturated up to the shoulder, which read as rendered), a little
+				// contrast on its flat base, leaves and grass at measured colours
+				d.TonemapMode = 2;
+				d.Contrast = 8.0f;
+				d.FoliageColor = 1.0f;
+				d.ConfigVersion = 79;
+			}
+			if (d.ConfigVersion < 80) {
+				// the map's asphalt, concrete, stone, wood and soil at the albedo the real ones have
+				d.CalibrateAlbedo = true;
+				d.ConfigVersion = 80;
+			}
+			if (d.ConfigVersion < 81) {
+				// back lit leaves as real ones: a share of the sun through them, not a glow
+				d.RTLeafTranslucency = 0.35f;
+				d.ConfigVersion = 81;
+			}
+			if (d.ConfigVersion < 82) {
+				// the Snow and Autumn weather were removed (WeatherController.Names): they become Clear, Fog moves from 7 to 5
+				if (d.WeatherPreset == 5 || d.WeatherPreset == 6) {
+					d.WeatherPreset = 1;
+				} else if (d.WeatherPreset == 7) {
+					d.WeatherPreset = 5;
+				}
+				d.ConfigVersion = 82;
+			}
+			if (d.ConfigVersion < 83) {
+				// the stars as the night adapted eye sees them: at 4x they hardly showed under the eye's night exposure
+				d.StarBrightness = 15.0f;
+				d.ConfigVersion = 83;
+			}
+			FixOwnEngine(d);
+		}
+
+		// The own engine draws all of it: its parts are fixed on (their switches are gone: every combination of them
+		// was another picture to get right, and some fell back to HDRP's own). Kept in the settings file only so old
+		// files load; set again every frame (NatureFXMod), so presets and the debug page cannot turn a part back to
+		// HDRP's. The own BSDF (experimental) is gone, HDRP-only settings (its fog's sun, soft shadow maps, the sun's
+		// colour temperature for HDRP's sky) no longer used.
+		internal static void FixOwnEngine(ISettings d) {
+			if (!d.NativeSky) d.NativeSky = true;
+			if (!d.OwnSkyLighting) d.OwnSkyLighting = true;
+			if (!d.OwnSunLight) d.OwnSunLight = true;
+			if (!d.OwnLampLight) d.OwnLampLight = true;
+			if (!d.OwnTransparentLight) d.OwnTransparentLight = true;
+			if (!d.NativeFog) d.NativeFog = true;
+			if (!d.NativeLighting) d.NativeLighting = true;
+			if (!d.NativeParticles) d.NativeParticles = true;
+			if (!d.NativeGlass) d.NativeGlass = true;
+			if (!d.NativePost) d.NativePost = true;
+			if (d.OwnBrdf) d.OwnBrdf = false;
+			if (!d.RTShadows) d.RTShadows = true;
+			if (!d.RTAO) d.RTAO = true;
+			if (!d.RTReflections) d.RTReflections = true;
+			if (!d.RTLocalLights) d.RTLocalLights = true;
+			if (!d.RTLampShadows) d.RTLampShadows = true;
+			if (!d.RTGlassReflections) d.RTGlassReflections = true;
+			if (!d.RTGIBounce) d.RTGIBounce = true;
+			if (!d.RTGIMultiBounce) d.RTGIMultiBounce = true;
 		}
 
 		public static void Save() {

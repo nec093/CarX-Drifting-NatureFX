@@ -3,6 +3,7 @@
 // t2 the instance records, t3 HDRP's ambient probe, t4 the screen (camera colour and depth, for reflections); the
 // descriptor heap is indexed directly (shader model 6.6).
 // Helpers shared by every trace kind.
+#include "NfxPack.hlsli"
 RaytracingAccelerationStructure Scene : register(t0);
 RWByteAddressBuffer Output : register(u0);
 RWByteAddressBuffer Surface : register(u1);
@@ -29,7 +30,7 @@ cbuffer Frame : register(b0)
     uint Flags;             // NFX_FLAG_*
     float4 AmbientParams;   // x ambient ray length, y 1 = bounce light, z sky occlusion length (0 off), w contact strength
     float4 SkyParams;       // xyz the sun above the air (lux), w the camera above the ground (m): Sky.hlsli
-    float4 LightCount;      // x lights in use; y aerosols, z ozone (Sky.hlsli)
+    float4 LightCount;      // x lights in use; y aerosols, z ozone (Sky.hlsli), w the brightest lamp's level (lux, CacheReference)
     float4x4 ViewProj;      // camera relative world to clip (reflections: what of a hit is on screen)
     float4 ScreenSize;      // full resolution: xy size, zw 1 / size
     float4 ReflParams;      // x max distance (m), y roughness cutoff, z 1 = second bounce (glass: refraction strength),
@@ -49,6 +50,8 @@ static const uint NoDescriptor = 0xFFFFFFFFu;
 // Flags bits
 #define NFX_FLAG_GLASS_SHADOWS 1u  // sun shadow rays pass glass dimmed (tinted windows darker) instead of untouched
 #define NFX_FLAG_OWN_GLASS 4u      // Glass.hlsl draws the glass itself (HDRP's glass hidden, roadmap E): see there
+#define NFX_FLAG_FOG_LISTS 16u     // FogVolume.hlsl: the lamps' light lists per tile (the bridge's PrepareFogVolume) are
+                                   // written (bits 8..10 hold the sun's samples)
 #define NFX_FLAG_LAMP_MASK 2u      // HDRP's lamps are shadowed one by one (LampMask.hlsl, roadmap A4): LocalShadows
                                    // then only traces the lights NatureFX adds
 // instance masks (NFX_Native_SetInstances): the scene every trace sees, and glass, which only Glass.hlsl looks for
@@ -219,10 +222,8 @@ bool AlphaSolid(uint instance, uint primitive, float2 barycentrics)
 }
 
 // ------------------------------------------------------------------ rays
-// Two ways to trace the same rays: inline ray queries (DXR 1.1, compute shaders: the default) or, with NFX_PIPELINE,
-// TraceRay in a ray tracing pipeline (DXR 1.0: each trace kind compiled as a library with a ray generation shader,
-// one hit group whose any hit shader runs the alpha test, and a miss shader). The traces only use these helpers, and
-// NFX_ENTRY for their entry point, so they compile either way.
+// The rays are traced inline (DXR 1.1 ray queries in compute shaders; DXR 1.0's ray tracing pipelines are gone). The
+// traces only use these helpers, and NFX_ENTRY for their entry point.
 
 bool CoarseAt(float3 pointAWS)
 {
@@ -249,108 +250,6 @@ RayDesc MakeRay(float3 origin, float3 direction, float maxDist)
     return ray;
 }
 
-#ifdef NFX_PIPELINE
-
-// TraceRay's payload: what the closest hit shader saw (t < 0: missed)
-struct NfxPayload
-{
-    float t;
-    uint instance;
-    uint primitive;
-    float2 barycentrics;
-    float4 row0;
-    float4 row1;
-    float4 row2;
-};
-
-[shader("anyhit")]
-void NfxAnyHit(inout NfxPayload p, BuiltInTriangleIntersectionAttributes attributes)
-{
-    // only non opaque (alpha tested) instances get here
-    if (!AlphaSolid(InstanceID(), PrimitiveIndex(), attributes.barycentrics))
-        IgnoreHit();
-}
-
-[shader("closesthit")]
-void NfxClosestHit(inout NfxPayload p, BuiltInTriangleIntersectionAttributes attributes)
-{
-    p.t = RayTCurrent();
-    p.instance = InstanceID();
-    p.primitive = PrimitiveIndex();
-    p.barycentrics = attributes.barycentrics;
-    float3x4 m = ObjectToWorld3x4();
-    p.row0 = m[0];
-    p.row1 = m[1];
-    p.row2 = m[2];
-}
-
-[shader("miss")]
-void NfxMiss(inout NfxPayload p)
-{
-    p.t = -1.0;
-}
-
-NfxPayload NfxTrace(float3 origin, float3 direction, float maxDist, uint flags, uint mask)
-{
-    NfxPayload p = (NfxPayload)0;
-    p.t = -1.0;
-    TraceRay(Scene, flags | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, mask, 0, 0, 0, MakeRay(origin, direction, maxDist), p);
-    return p;
-}
-
-bool NfxToHit(NfxPayload p, out Hit hit)
-{
-    hit = (Hit)0;
-    if (p.t < 0.0)
-        return false;
-    hit.t = p.t;
-    hit.instance = p.instance;
-    hit.primitive = p.primitive;
-    hit.barycentrics = p.barycentrics;
-    hit.objectToWorld = float3x4(p.row0, p.row1, p.row2);
-    return true;
-}
-
-// Whether anything lies within maxDist along the ray; alpha tested surfaces cut their holes unless coarse
-bool Blocked(float3 origin, float3 direction, float maxDist, bool coarse)
-{
-    NfxPayload p = (NfxPayload)0;
-    p.t = 1.0;  // the miss shader clears it; with the closest hit shader skipped a hit leaves it
-    TraceRay(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES |
-             (coarse ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE), NFX_SCENE_MASK, 0, 0, 0, MakeRay(origin, direction, maxDist), p);
-    return p.t >= 0.0;
-}
-
-// The distance to the first blocker found (any, not the closest: the sun's penumbra), < 0 when none
-float FirstBlocker(float3 origin, float3 direction, float maxDist, bool coarse)
-{
-    return NfxTrace(origin, direction, maxDist, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | (coarse ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE),
-                    NFX_SCENE_MASK).t;
-}
-
-bool Closest(float3 origin, float3 direction, float maxDist, bool coarse, out Hit hit)
-{
-    return NfxToHit(NfxTrace(origin, direction, maxDist, coarse ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, NFX_SCENE_MASK), hit);
-}
-
-// the closest of the instances in mask (alpha tested)
-bool ClosestMasked(float3 origin, float3 direction, float maxDist, uint mask, out Hit hit)
-{
-    return NfxToHit(NfxTrace(origin, direction, maxDist, RAY_FLAG_NONE, mask), hit);
-}
-
-// The closest glass along the ray (glass is opaque to this query: no alpha test)
-bool ClosestGlass(float3 origin, float3 direction, float maxDist, out Hit hit)
-{
-    return NfxToHit(NfxTrace(origin, direction, maxDist, RAY_FLAG_FORCE_OPAQUE, NFX_GLASS_MASK), hit);
-}
-
-// the trace's entry point: a ray generation shader over the dispatch's width x height
-#define NFX_ENTRY(id) void NfxTraceMain(uint3 id); \
-    [shader("raygeneration")] void NfxRayGen() { NfxTraceMain(DispatchRaysIndex()); } \
-    void NfxTraceMain(uint3 id)
-
-#else
 
 // Whether anything lies within maxDist along the ray; alpha tested surfaces cut their holes unless coarse
 bool Blocked(float3 origin, float3 direction, float maxDist, bool coarse)
@@ -448,7 +347,6 @@ bool ClosestGlass(float3 origin, float3 direction, float maxDist, out Hit hit)
 // the trace's entry point: a compute shader in 8 x 8 groups
 #define NFX_ENTRY(id) [numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID)
 
-#endif
 
 bool SunVisible(float3 originAWS)
 {
@@ -468,6 +366,36 @@ struct HitSurface
     bool moving;     // a car's part (instance flag bit 3)
     float3 emission; // light the surface gives off (radiance, before exposure)
 };
+
+// The colour texture's mip at a hit, as the rasteriser picks it (a ray cone): the triangle's texels per metre from its
+// UV and world areas, the footprint of one pixel's ray at the hit's distance, stretched where the surface is seen at a
+// grazing angle (partly: the rasteriser's anisotropic filtering keeps such surfaces sharper than a plain cone).
+// Was "a texture spans about 4 m": a building's 2048 texture over 20 m came out four mips too coarse, which blurred
+// what the composite rebuilds from this colour (walls and windows in the shade).
+static const float NfxPixelAngle = 0.0009; // radians a pixel spans (about 1080 lines over a 55 degree view)
+float HitMip(Record r, uint3 tri, Hit hit, float3 rayDir, float3 normal, Texture2D texture)
+{
+    uint w, h;
+    texture.GetDimensions(w, h);
+    ByteAddressBuffer positions = ResourceDescriptorHeap[r.positions];
+    ByteAddressBuffer uvs = ResourceDescriptorHeap[r.uvs];
+    float3 p0 = mul((float3x3)hit.objectToWorld, asfloat(positions.Load3(tri.x * 12)));
+    float3 p1 = mul((float3x3)hit.objectToWorld, asfloat(positions.Load3(tri.y * 12)));
+    float3 p2 = mul((float3x3)hit.objectToWorld, asfloat(positions.Load3(tri.z * 12)));
+    float2 t0 = asfloat(uvs.Load2(tri.x * 8)) * r.st.xy;
+    float2 t1 = asfloat(uvs.Load2(tri.y * 8)) * r.st.xy;
+    float2 t2 = asfloat(uvs.Load2(tri.z * 8)) * r.st.xy;
+    float worldArea = length(cross(p1 - p0, p2 - p0));
+    float2 e1 = (t1 - t0) * float2(w, h);
+    float2 e2 = (t2 - t0) * float2(w, h);
+    float texelArea = abs(e1.x * e2.y - e1.y * e2.x);
+    if (worldArea < 1e-12 || texelArea < 1e-12)
+        return 0.0;
+    float texelsPerMetre = sqrt(texelArea / worldArea);
+    float facing = sqrt(max(abs(dot(normal, rayDir)), 0.0625));
+    float footprint = hit.t * NfxPixelAngle / facing;
+    return clamp(log2(max(footprint * texelsPerMetre, 1e-4)), 0.0, 12.0);
+}
 
 // The surface where a ray hit: colour, normal, metalness and smoothness from the instance's mesh and material.
 // lod: the colour texture's mip (-1: from the hit distance, as the ray cone of NFX_RTLitHit.hlsl)
@@ -521,12 +449,7 @@ HitSurface SurfaceAt(Hit hit, float3 rayDir, float lod)
             Texture2D texture = ResourceDescriptorHeap[r.texture];
             float mip = lod;
             if (mip < 0.0)
-            {
-                uint w, h;
-                texture.GetDimensions(w, h);
-                // a texture spans about 4 m; the footprint grows with the distance
-                mip = clamp(log2(max(hit.t * 0.002 * w / 4.0, 1e-4)), 0.0, 10.0);
-            }
+                mip = HitMip(r, tri, hit, rayDir, s.normal, texture);
             s.albedo *= texture.SampleLevel(LinearWrap, uv, mip).rgb;
         }
         if (r.emissionMap != NoDescriptor && any(r.emission > 0.0))
@@ -589,6 +512,8 @@ float Luminance(float3 c)
     return dot(c, float3(0.2126, 0.7152, 0.0722));
 }
 
+// (the trace buffers' packing helpers, Nfx*: NfxPack.hlsli, included at the top)
+
 // The sky probe's lower half is the open ground around the map: light from below keeps only its level
 float3 HitSkyLight(float3 hn)
 {
@@ -632,10 +557,13 @@ float LampWeight(float3 n, float3 toLight, float3 toView, bool shine)
 }
 
 // A headlight's beam as HeadlightController's cookies draw it (relative to its peak), for what does not see HDRP's
-// cookies: kind 1 the low beam (the cut-off 0.6° below the axis, rising 15° on the left to 1° up, the hot spot under
-// it, a wide fill, 1.5 % above), 2 the high beam (gathered on the axis). forward: the lamp's axis; dir: from the lamp
+// cookies: kind 1 the low beam for driving on the left (Japan: the cut-off 0.6° below the axis, rising 15° on the left
+// to 1° up, the hot spot under it a little to the left, a wide fill, 1.5 % above), 3 the same mirrored (driving on the
+// right), 2 the high beam (gathered on the axis). forward: the lamp's axis; dir: from the lamp
 // to the point; roll: the lamp's turn about its axis from level (radians: a car leaning in a drift or on a bank).
-float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
+// soft: degrees the cut-off is softened by (the 3D fog: its cells are wider than the cut-off's half degree, and a
+// sharp one stepped from cell to cell, a staircase along the beam's edge)
+float NFX_BeamPatternSoft(float kind, float3 forward, float3 dir, float roll, float soft)
 {
     if (kind < 0.5)
         return 1.0;
@@ -648,7 +576,10 @@ float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
     float z = max(dot(dir, forward), 1e-3);
     float h = degrees(atan2(dot(dir, right), z));
     float a = degrees(atan2(dot(dir, up), z));
-    if (kind > 1.5)
+    // kind 3: the low beam for driving on the right (Europe / US), the pattern mirrored
+    if (kind > 2.5)
+        h = -h;
+    if (kind > 1.5 && kind < 2.5)
     {
         float hot = exp(-(h / 5.0) * (h / 5.0) - (a / 2.5) * (a / 2.5));
         float glow = exp(-(h / 20.0) * (h / 20.0) - (a / 7.0) * (a / 7.0)) * 0.25;
@@ -657,11 +588,16 @@ float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
     }
     float cut = -0.6 + (h < 0.0 ? min(-h * 0.267949, 1.6) : 0.0);
     float below = cut - a;
-    float edge = saturate(below / 0.5 + 0.5);
+    float edge = saturate(below / (0.5 + soft) + 0.5);
     float spread = a < -1.2 ? 2.2 : 1.2; // the peak 1.2° down: slower below it than above
-    float hotSpot = exp(-(h / 9.0) * (h / 9.0) - ((a + 1.2) / spread) * ((a + 1.2) / spread));
-    float fill = exp(-(h / 22.0) * (h / 22.0)) * exp(-max(0.0, below - 1.0) / 2.0) * 0.25 * saturate((38.0 - sqrt(h * h + a * a)) / 8.0);
+    float hotSpot = exp(-((h + 1.5) / 12.0) * ((h + 1.5) / 12.0) - ((a + 1.2) / spread) * ((a + 1.2) / spread));
+    float fill = exp(-(h / 34.0) * (h / 34.0)) * exp(-max(0.0, below - 1.0) / 2.0) * 0.3 * saturate((53.0 - sqrt(h * h + a * a)) / 10.0);
     return lerp(0.015, min(1.0, hotSpot + fill), edge);
+}
+
+float NFX_BeamPattern(float kind, float3 forward, float3 dir, float roll)
+{
+    return NFX_BeamPatternSoft(kind, forward, dir, roll, 0.0);
 }
 
 float3 LocalLightIlluminance(int i, float3 pointAWS, out float3 toLight, out float dist)
@@ -762,11 +698,21 @@ uint CacheKey(float3 pointAWS, float3 normal, out uint slot)
     return HashMix(h ^ 0x9e3779b9u) | 1u;
 }
 
-// The scale the accumulated sums are stored with: about 1000 steps for the sunlit level of the scene
+// The brightest light level of the scene the GI expects: the sun and the sky on a white surface, or the strongest
+// local light at half its range (LightCount.w, LocalLights.LampReference, lux) with a bounce of up to half of it (a
+// white wall: albedo 0.8 / pi = 0.25). With the sun's alone, at night (the moon, 0.1 lux) a headlight's bounce off the
+// road was cut to a few hundredth.
+float CacheReference()
+{
+    float sky = Luminance(SunColor) * INV_PI + Luminance(SampleSH9(float3(0.0, 1.0, 0.0)));
+    return max(sky, max(LightCount.w, 0.0) * 0.5);
+}
+
+// The scale the accumulated sums are stored with: about 1000 steps for the brightest level of the scene. The sums
+// live one frame (GICacheResolve clears them every frame), so a reference changing between frames is fine.
 float CacheScale()
 {
-    float reference = Luminance(SunColor) * INV_PI + Luminance(SampleSH9(float3(0.0, 1.0, 0.0)));
-    return 1024.0 / max(reference, 1e-3);
+    return 1024.0 / max(CacheReference(), 1e-3);
 }
 
 // The cached light a point receives; false when the cell has none yet

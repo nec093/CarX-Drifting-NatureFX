@@ -1,343 +1,251 @@
-# 引き継ぎ資料（2026-11-01 時点）
+# 引き継ぎ資料（2026-11-04 時点、ConfigVersion 83）
 
-次のセッションがこのファイルと `AGENT.md` を読めば作業を続けられるようにまとめたもの。
-基本ルール（日本語で返答、署名キー、push、ダウンロード許可、ビルド方法）は `AGENT.md` にある。ここには **今の状態と次にやること** だけを書く。
-
----
-
-## 0. 最初に確認すること
-
-1. **シェーダーバンドルのビルドが終わったか** → **11-01 01:51 に完了・エラーなし・インストール済み**（以下は次にビルドしたときの手順として残す）
-   - ログ: `C:\Users\kppn1223\NatureFX-Unity\Logs\naturefx_build.log`
-   - 2026-11-01 時点で `NatureFX/LitAccumulation` の `Forward` (fp) を 2136 バリアント中 1879 までコンパイル中（約 0.2 バリアント/秒、エラーなし）。この後に Foliage など他のシェーダーが続く。バックグラウンドのタスク名は bxlf17x13（出力の最後に grep の結果が出る）。全 hlsl 共通の変更（アンチタイリング）でキャッシュが無効になったので非常に長い（数時間）。
-   - 終わったら次を確認する:
-     ```bash
-     L=/c/Users/kppn1223/NatureFX-Unity/Logs/naturefx_build.log
-     grep -a "Shader error" $L | sort | uniq -c
-     grep -a "lost keywords\|variant materials" $L
-     ```
-   - 前回の失敗: `invalid subscript 'tangentWS'`（LitDataIndividualLayer.hlsl:79、Foliage と LitAccumulation）。`NFX_AntiTiling.hlsl` の `UVMapping` に `tangentWS` / `bitangentWS` を常に持たせて直した。これが再発していないかを見る。
-   - `variant_054 (NatureFX/LitAccumulation) lost keywords: _NORMALMAP` は前回も出ていた既知の警告（1 件）。
-2. **ゲームが起動中か**
-   - 起動中ならバンドルは `kino/mods/NatureFX/reload/naturefx-<日時>.bundle` に置かれる → Developer > Reload shaders で読める。
-   - 閉じたら `C:\Users\kppn1223\NatureFX-Unity\Build\NatureFX\naturefx.bundle` を `C:\Program Files (x86)\Steam\steamapps\common\CarX Drift Racing Online\kino\mods\NatureFX\` にコピーする（起動中は上書き禁止。壊れたバンドルを読んでしまう）。
-3. **git の状態**: 最後のコミットは `0093a94`（2026-10-31 02:22）。それ以降の作業（41 ファイル変更 + 新規ファイル多数）は **すべて未コミット**。ユーザーの方針は「ゲームで確認してからコミット」で、コミット前に必ずユーザーに聞く。push はしない。
+本資料は、次の作業者が本資料と `AGENT.md` を読んで作業を継続できるようにするためのものである。
+記載対象は、現在の構成、既定値、未確認の項目および注意点に限る。
+基本ルール（日本語での応答、署名キー、push、ダウンロード許可、ビルド方法の詳細）は `AGENT.md` に、残作業は [ROADMAP.md](ROADMAP.md) に、マップの書式は [map-authoring.md](map-authoring.md) に記載している。
+作業の経緯は `git log` で参照できる。本資料には日付付きの経過を記載せず、作業の区切りごとに現在の状態へ書き改める。
 
 ---
 
-## 0.5 コードレビュー（2026-11-01）の結果
+## 1. 全体構成
 
-`docs/review-2026-11-01.md` に不具合 41 件・性能 20 件の一覧（レベル付き、修正済み/未修正）。重要な点:
+NatureFX は次の 3 つの成果物で構成される。3 つの成果物は必ず同じ版を組み合わせて配置する。構造体やバッファの配置を変更した場合、1 つでも古い版が残っていると表面、NRD、反射の描画が破綻する。たとえば古いシェーダーバンドルを使うと、画面全体のざらつきと紫色の点が発生する。
 
-- **ビルド中のバンドルは法線が壊れる**（B1: `NFX_AntiTiling.hlsl` が `SURFACE_GRADIENT` 未定義で HDRP の法線サンプラーをコンパイルしていた）。修正は入れたが共通 hlsl なので **もう一度フルビルド**が要る。同じビルドで B16（雪の影パスの法線）、B26（ヘックスの歪み）、P12 も入る。
-- C# 側の修正（反射の `ViewProj` 転置、暗視/F9 の初期化順、Sun override 解除時の月、Tire marks オフ時の例外、遠景ヘイズのトラック霧上書き、UI 2 件、NRE 2 件、RT シーンの VRAM 増加、RT 全オフ時のシーン構築、DX11 の煙パッチ）は Debug ビルドが通った状態。**Release ビルドと .ksm の入れ替えはまだ**。
-- ネイティブ側（解放済み BLAS を次のビルドまで保持、GI キャッシュの解放漏れ、記述子ヒープ枯渇の表示）は `cl /Zs` の構文チェックのみ。**DLL は未ビルド**（`build_native.ps1` はゲームフォルダへコピーするので、ゲームを閉じてから）。
-- 未修正で判断がいるもの: マップ読み込みごとの PNG 書き出し（P1）、`ClearScene` を呼ばない記述子ヒープのリーク（B19）、NRD の行列の利き手（B21）、`CheckScene` の同期待ち（P3）。
-
-## 0.6 シェーダービルドの時間（2026-11-01）
-
-11-01 のフルビルドは **6.4 時間**（ログの `finished in` を合計）。内訳: LitAccumulation Forward fp 45%、同 GBuffer fp 25%、Foliage Forward fp 14%、同 GBuffer fp 7%。1 バリアントの fp に 90〜190 CPU 秒（HDRP 素の Lit は数秒）。二つの対策を入れた（`unity/variants/README.md` 4 章）:
-
-1. **1 バリアントを速く**: `NFX_Common.hlsl` のノイズをテクスチャ参照にした（Mod が起動時に `_NFX_NoiseTex` を作る、`ShaderGlobals.EnsureNoiseTexture`）。落ち葉・ひび・リップル・再帰反射の `[unroll]` を `[loop]` に。fxc 単体計測で GBuffer 11→2.2 秒、Forward 24→8.5 秒、Foliage Forward 32→11 秒。
-   **新しいバンドルは新しい .ksm が必要**（テクスチャが無いとノイズが一定値になり、雪・濡れ・落ち葉の模様が消える）。両方そろえて入れ替える。
-2. **変種を減らす**: 2 章の「記録」は製品ビルドのゲームでは Unity がログを書かず使えない（`Player.log` に 0 行、`recorded_variants.txt` は空）。代わりに Mod が描き方の事実を `kino/config/NatureFX/game_hdrp/game_variant_profile.txt` に書き（`Tools/VariantProfileDump.cs`）、`Editor/VariantProfileStripper.cs` がそれで削る。`unity/variants/game_variant_profile.txt` は手書きの初版（`litShaderMode=Deferred`、`msaa=no`）で、Forward 系パスは不透明の組み合わせから外れる（前回の 60% 分）。**次にゲームを動かしたら `game_hdrp/` の中身を `unity/variants/` にコピーする**と、方向付きライトマップ・シャドウマスク・LOD クロスフェードの事実も入り、さらに減る。
-   `litShaderMode=Deferred` が間違っていれば、置換した不透明マテリアルが Forward 変種を見つけられず崩れて見える（その場合はその行を消す）。見込みのフルビルドは 30〜60 分。
-
-**今ゲームに入っているバンドル（11-01 01:51）は B1 の法線のバグを含む。** 次のビルドで直る。
-→ 11-01 02:46 に B1・B16・B26・P12 とビルド時間対策の入ったフルビルドを開始（ログは `NatureFX-Unity/Logs/naturefx_build.log`）。ゲームが閉じていればそのままゲームのフォルダにコピーされる。終わったら `Shader error` と所要時間（`finished in`）を確認する。
-→ **03:13 に完了、27 分**（6.4 時間から）、シェーダーエラーなし、既知の `variant_054 lost _NORMALMAP` のみ。バンドルは 168 MB → 33 MB。ゲームのフォルダにインストール済み（.ksm・DLL とそろった）。ゲームで未確認: 法線（B1）、雪・濡れ・落ち葉の模様（ノイズのテクスチャ化）、不透明の置換マテリアルが崩れないか（`litShaderMode=Deferred` の前提）。
-
-## 0.7 11-01 の新しいバンドルでのゲーム確認（ユーザー）
-
-- 全体は問題なし（不透明の置換マテリアルの崩れなし → `litShaderMode=Deferred` の前提は当面 OK）。
-- **未解決 1: 雲が赤い**（11 時のつもりで夕焼けのような赤い空と霞。「CarX の雲が表示されている」とも）。原因未特定。候補: 太陽の色温度（`SunController` は高度 0〜30° で 2200 K から上げる。`SunMaxElevation` が低い、または時刻がゲーム側のまま）、雨の霧に赤い太陽光が散乱。ユーザーに F8 の時刻・Map カードの Sky type・Clouds のオンオフを確認してもらう。
-- **未解決 2: 雨 + ヘッドライトで車の前に線（画面の上下いっぱいの白い筋、曲がったものも）**。ヘッドライトを消すと消える。有力: 自前の雨（`Precipitation.cs`、`NFX_Particle.shader` の mode 1）がランプの光（`ParticleLighting`、`facing * 0.15`）で明るくなりすぎ。CarX のヘッドライトの強さ（cd）や点光源の有無は未確認。F8 の Rain and snow を 0 にして消えるかで切り分ける。前回の「謎のフィルタ」と同じ現象の可能性。
-- **修正済み（未インストール）: `No more space in Reflection Probe Atlas` が 5000 回以上**。`MapProbes` の自動プローブ 16 個がゲームの解像度で HDRP のアトラスを埋めていた → 128 に固定（`ProbeSettings.cubeResolution` は internal なのでリフレクション）。11-01 03:40 に Release の .ksm をインストール済み。
-- 切り分け結果（ユーザー）: 時刻は NatureFX の 11 時。Sky type は `HDRISky, day`（テストマップなのに。ログでは parking の Volume が sky type 1 を選んでいて、テストマップ読み込み後に Track sky type の変化が出ていない）。**Clouds をオフにしても雲は消えない → 雲は HDRI の写真**。**Rain and snow を 0 にしても線は消えない → 自前の雨ではない**。次の候補: HDRP の体積フォグ（ヘッドライトの volumetricDimmer）か RT の Light shafts。案: 時刻を NatureFX が動かすときは、昼も物理ベースの空（＋自前の体積雲）に切り替える（ユーザーの判断待ち）。
-- **修正（11-01 03:54 に Release の .ksm をインストール済み、ゲームで未確認）**:
-  - 空: ユーザーの方針「常に物理ベースの空、基本的にすべて物理ベースの演算に」。`VolumeOverhaul.UpdateSky` は NatureFX が有効な間ずっと sky type を PhysicallyBased に上書き（トラックの PBS の設定値は上書きしないので通る）。写真の空を夜に暗くする処理（DimSky・間接光の倍率）は無効化（`night = 0`）。星もどのマップでも出るようになる。
-  - ヘッドライトの線: ユーザーの切り分けで「Cars in the rain」をオフにすると消えた。`CarRain` が車の全レンダラーを水滴シェーダーで描き直していて、ヘッドライトのビーム（車の前に伸びる半透明のコーン）に水の筋が描かれていた → サブメッシュ単位で、半透明かつ加算／名前が light・beam・flare・glow 等のマテリアルを除外（`IsLightEffect`）。窓ガラスは残す。→ **ゲームで直っていなかった**（空・プローブは確認済み OK）。03:59 に追加: 車のコライダーの範囲（+1.2 m）からはみ出すレンダラーを除外し、除外したものを `Car rain leaves out ...` としてログに出す。ゲームで未確認（ログで何が除外されたかを見る）。
-- 11-01 ユーザー確認: 空（常に物理ベース）OK、ヘッドライトの線 OK（コライダー範囲での除外が効いた）、プローブのエラーなし・落ちていない。
-- **体積雲のリアル化と風（11-01 04:07 に .ksm インストール、ゲームで未確認）**: `CloudController` を HDRP の Advanced モードに。Mod が起動時にノイズから雲の種類のマップ（積雲・高層雲・積乱雲・雨、256²、R8）を作り、天候の雲量と雨で各倍率を決める（倍率は 0.02 刻み: 変わるたびに HDRP がクラウドマップを焼き直すため）。Worley の侵食・微細侵食・多重散乱・粉効果・ステップ増。風は `_NFX_Wind`（WindController）の向きと強さから km/h（地上の約 2.5 倍、最低 15 km/h）、向きは +x から +z への角度（HDRP は向きの方向へマップを動かす。逆向きならここ）。雲海は従来どおり Simple モード。Advanced の生成シェーダーは HDRP が体積雲の初期化で必ず読むので、雲が出ているゲームには入っている。
-- 体積雲がゲームで描かれていなかった（ユーザー）。有力: ゲームのカメラのフレーム設定で VolumetricClouds がオフ（HDRP は `frameSettings.IsEnabled(VolumetricClouds)` がないと描かない。以前の Simple モードの雲も実は出ていなかった可能性）。`CameraVolumetrics` をフィールド指定の汎用クラスにして、`CameraClouds` で雲がオンの間だけ上書き（F8 の Map タブに「Volumetric clouds:」の行）。HDRP アセット側で非対応なら Sky の行に `NOT DRAWN` と出す。04:2x に .ksm インストール、ゲームで未確認。
-- カメラの VolumetricClouds をオンにしても雲は出なかった（F8: `VolumetricClouds on (switched on by NatureFX)`、NOT DRAWN なし、cover 80%）。調べたこと: 雲のコンピュートシェーダーはバンドルに全変種あり（DX12 fix で差し替え済み、IsSupported の警告なし）。Unity プロジェクトの HDRP アセットも supportVolumetricClouds 1。合成シェーダー `VolumetricCloudsCombine`（ピクセルシェーダー、ゲーム側のまま）は未確認。次の候補: 霞・雨の霧（`MapFog` の haze は 3.5〜40 km × FogScale、高さ +1500 m まで）が km 先の雲を隠している。Sky の行に `[HDRP: <モード>, fog <平均自由行程> m up to <高さ> m]` を追加（04:28 .ksm）。晴れで出るか確認してもらう。
-- 雲は晴れでも出なかった（ユーザー、11-01）。**方針転換: ユーザーの決定で、直接光・空・体積雲・霧を独自エンジンへ移す**。計画は `docs/native-atmosphere-lighting-plan.md`（段階 1a 空 → 1b 雲 → 1c 環境光 → 2 霧 → 3 直接光、各段階に F8 のトグル）。HDRP の雲（`CloudController` の Advanced モード化とカメラ設定の上書き）はこの段階 1b で置き換える。
-- **段階 1a（独自エンジンの空）実装済み・ゲームで未確認（11-01 04:47 DLL、04:50 .ksm、04:52 バンドル（エラーなし）、すべてインストール済み）**:
-  - 独自エンジン: `shaders/Sky.hlsli`（大気の定数・媒質・位相関数・Bruneton と Hillaire のパラメータ化・生バッファの双線形 `NFX_LUT_SAMPLE`）、`SkyTransmittance.hlsl`（256×64）、`SkyMultiScatter.hlsl`（32×32、64 方向）、`SkyView.hlsl`（192×108、32 ステップ）。`TraceKind` 9〜11（光線は使わない。トレースの仕組みだけ借りる）。`Frame.ShaftParams`（未使用だった）を `SkyParams`（xyz 大気の外の太陽 lux、w カメラの高さ）に改名、`LightCount.y` がエアロゾル、`.z` がオゾン。
-  - C#: `NativeEngine.TraceSky`（透過率・多重散乱はエアロゾルが変わったときと Reload shaders の後だけ、スカイビューは毎フレーム。Unpack4 で RTHandle へ）。`RTShadowPass` が BeginFrame の後に呼ぶ（影のパスが動いているとき＝RT の影・AO・光の筋のどれかがオン）。太陽の値は `SunController.TopOfAtmosphereLux`（トラックの元の太陽の強さ × Sun intensity）、エアロゾルは 1 + 2×雲 + 2×雨。
-  - 合成: `NFX_RTShadow.shader` の `CompositeSurface` で空の画素を `NativeSky()` に（スカイビューを方向で引く＋太陽の円盤（周辺減光つき）×透過率）。夜（太陽 -2〜-7°）は HDRP の空（星・月）を足す。パラメータ化は Sky.hlsli と同じものを複製しているので、変えるときは両方。
-  - 設定: `NativeSky`（移行 42 でオン）、F8 の Sky カードに「Native sky」スイッチと状態の行。
-- 段階 1a: ユーザー確認「かなりいい感じ」。
-- **段階 1b（独自エンジンの体積雲）実装中（11-01 05:00）**: `CloudNoise.hlsl`（種類 12: 64³ Perlin-Worley、32³ Worley、256² 雲の種類マップを、透過率の表と同じ「空のデータ」バッファの後ろに作る。オフセットは Sky.hlsli）、`Clouds.hlsl`（種類 13: 1/4 解像度、雲層 1.5〜5.5 km、64 ステップ＋太陽へ 6 ステップ、Wrenninge の多重散乱 3 オクターブ、HG 2 ローブ、粉効果、環境光はスカイビューから、遠くは霞に溶ける）。定数は `Issue` の kindParams（AmbientParams＝雲量: 積雲・高層雲・積乱雲・密度、ReflParams＝風のずれ・経過時間・霞の距離）、Probe にスカイビュー、Screen に空のデータ。`PrepareClouds`（ブリッジ）が方向と空かどうかを作る。`CloudController.UpdateNative` が雲量と風（m/s、地上の 2.5 倍、最低 15 km/h）を計算、Native sky オンのとき HDRP の雲とカメラの雲設定は使わない。合成は `NativeSky(dir, hdrp, uv)` で空×透過率＋雲の光、太陽の円盤も雲で隠れる、星も雲で隠れる。**時間方向の蓄積はまだない**（ジッタは画素ごとに固定）。雲の影（地面）もまだ。
-  - インストール: .ksm 05:00、DLL とバンドル 05:02（エラーなし）。**ユーザー確認「めっちゃいい感じ」（11-01）**。残り: 時間方向の蓄積（縁のざらつき）、雲の影（`SunShadow.hlsl` の可視度に雲層の透過率を掛ける）、段階 1c（独自の空から環境光）。
-- **11-01 05:05 コミット c056beb**（0093a94 以降の全作業をまとめたチェックポイント。ファイルが入り組んでいて機能ごとに分けられなかった）。
-- **雲の影・雲のなめらかさ・段階 1c（05:11、.ksm のみインストール。DLL とバンドルはゲーム起動中のため未。新しい .ksm は古い DLL だと影と環境光が真っ暗になるので、再起動前に必ず DLL とバンドルを入れる）**:
-  - `CloudsCommon.hlsli`（雲の密度を Clouds と共有）、`CloudShadow.hlsl`（種類 14: 地面 y=0 から太陽へ 24 ステップ、512²、16 km 四方、カメラにスナップ。前方散乱で真っ黒にはしない）。合成で `sunVisible *= CloudShadowAt(p)`（点を太陽に沿って y=0 へ）。雲の影があるときは `SunController` の雲量による太陽の一律の減光を止める（`CloudController.NativeShadowsActive`）。
-  - 時間方向: `Clouds.hlsl` のジッタをフレームごとに変え、ブリッジの `CloudTemporal`（前フレームの VP で方向を再投影、3×3 の範囲でクランプ、今のフレーム 12%）。履歴 2 枚を交互に。
-  - 段階 1c: `SkyAmbient.hlsl`（種類 15: 32×16 方向の空（雲を通した光）と地面）→ ブリッジの `SkyAmbientSH`（L2 SH に投影、余弦ローブ/π、HDRP の 7 float4 に詰める）→ `NativeEngine.SkyProbe`。そのフレームの以降のトレースは HDRP のプローブの代わりにこれを読む（`skyProbePtrFrame_`）。合成は `skyDelta = アルベド × (独自 SH − HDRP SH) × 露出 × 空の見える割合` を足す（拡散のみ。HDRP の鏡面の空の反射はそのまま）。
-- 上記（雲の影・なめらかさ・1c）は 05:13 に DLL とバンドルもインストール済み。ゲームで未確認。
-- **段階 2（霧）と段階 3（太陽の光）（05:18 .ksm・バンドル、DLL も同時刻台にインストール済み。ゲームで未確認）**:
-  - 段階 2: `Fog.hlsl`（種類 16: 光の筋の解像度、16 ステップ、高さの指数分布、太陽は 4 ステップごとに影のレイ、空の光は SH から、HG 2 ローブ）。`PrepareFog`（方向と距離。空は 20 km まで）。`RTShadowPass` は Native fog のとき光の筋の代わりに `TraceFog` を同じテクスチャ・同じフィルターで使い、合成は `result × fog.a + fog.rgb × 露出`（空の画素にも）。`MapFog.UpdateNative` がマップの霧／霞／トラックの霧の値を `NativeParams`（消散係数・基準高さ・スケール高さ）にして、HDRP の全体の霧は平均自由行程 100 km で実質オフ（HDRP の体積フォグは局所フォグとタイヤスモーク用に残る）。設定 `NativeFog`（移行 43 でオン、Native sky の下に依存スイッチ）。
-  - 段階 3: **方針の修正**。直接光の計算そのもの（BRDF）は HDRP の Lit と同じで、置き換えても見た目は同じなのに半透明物（ガラス・パーティクル）が暗くなる副作用が大きい。そこで「太陽の光の色と強さを独自エンジンの大気から決める」ことを段階 3 とした: `SunController.AtmosphereTransmittance`（Sky.hlsli と同じ定数で、太陽方向の光学的厚さを CPU で 32 ステップ）。Native sky のとき、色温度の代わりに透過率の色、強さ = 大気の外の照度 × 透過率 × 円盤の沈み。影は既に RT、雲の影もある。ランプは HDRP の物理単位のまま。
-- **3D の霧・ガラス・パーティクル（05:29 .ksm、05:30 DLL、05:31 バンドル、すべてインストール済み。ゲームで未確認）**: ユーザーの承認で「1 3D の霧 → 2 ガラス → 3 パーティクル」を実装。
-  - 3D の霧: `FogVolume.hlsl`（種類 17、160×90×64 のフロクセル、奥行き 0.5〜3000 m の指数分割。セルごとに太陽（影のレイ 1 本、セル内の位置を毎フレーム変える）・空（SH）・ローカルライト（ヘッドライト・街灯、HDRP の減衰とスポット、影なし）の散乱と消散係数）。ブリッジ: `PrepareFogVolume`（列ごとの視線、ビュー深度 1 に正規化）、`FogReproject`（前フレームのカメラ位置と VP で再投影、今のフレーム 10%、3D テクスチャ 2 枚を交互）、`FogIntegrate`（列ごとに積分、各スライスの奥の端の値）。参照は `ShaderLibrary/NFX_FogCommon.hlsl`（`NFX_Fog(uv, ビュー深度, 距離, 方向)`: 3 km までは格子、その先 20 km までは影なしの解析的な霞）。グローバル `_NFX_FogVolume` `_NFX_FogVolumeParams`（x 霧、y 独自の空の光）`_NFX_FogHeight` `_NFX_FogSun(Dir)` `_NFX_SkyLight`（SkyProbe、[7] に空の平均輝度を追加 → バッファ 8 要素）。Native fog オンのとき 2D の `Fog.hlsl` と光の筋は使わない（コードは残してある）。
-  - ガラス: `Glass.hlsl` の出力 w に「フレネル + 2×距離(m)」を詰める（`RTGlassPass` のテクスチャを 32 bit に）。`GlassComposite` で、映り込みの分（フレネル）にだけガラスまでの霧を掛ける（透けて見える分は奥の面で霧済み）。
-  - パーティクル: `NFX_Particle.shader` の Frag を包んで霧を掛ける（発光は暗くするだけ）。空の光 `_NFX_PSky` を独自の空の SH（真上の放射照度 = π×SH(上)）に置き換え、霧があるときは距離による減衰をやめる。
-  - 未対応: ゲーム自身の半透明シェーダー（CarX のガラス以外の半透明物・パーティクル）。MapParticles のように NatureFX のシェーダーへ差し替える必要がある。
-- **不具合（ユーザー）: 雲のなめらかさを入れてから雲がとても小さくなった** → 推定: `CloudTemporal` の再投影（HDRP の `UNITY_MATRIX_PREV_VP` と uv の上下の決まり）がずれていて、雲のある所に前フレームの空が混ざり、3×3 の min/max クランプで雲が芯だけに削られていた。修正: 前フレームのカメラの回転（`worldToCameraMatrix` の行）と画角を C# から渡して手で投影、クランプは分散クリッピング（平均 ± 1.5σ）。05:29〜05:31 にインストール、ゲームで未確認。
-- **不具合（ユーザー）: 夜なのに空が白い（Native fog をオフにすると直る）** → 推定: `FogVolume.hlsl` のランプの距離の下限が 0.1 m で、ランプ（ヘッドライト・街灯）を含むセルが何百倍にも明るくなり、格子の補間と夜の自動露出で画面に広がった。修正: 距離² の下限をランプの大きさ（`LightSpot.y`）とセルの大きさ（奥行き × 0.13）の大きい方に。05:34 に NativeShaders の .cso を配置（Developer > Reload shaders で反映、DLL への埋め込みはゲームを閉じてから `build_native.ps1`）。ゲームで未確認。
-- 夜空の白さはユーザーの画像で解消を確認（空は黒く、街灯の光の帯が霧に出る）。
-- **不具合（ユーザー）: 光源が四角い（遠くの街灯のにじみ）、夜なのに車などが白い** → (1) 霧の格子のセル中心だけでランプのにじみを拾っていた: `PrepareFogVolume` が列の中心と隣の列・行への差分（3 float4）を書き、`FogVolume.hlsl` はセルの中の位置を縦横にも毎フレームずらす（履歴で平均）。(2) 独自エンジンの空は太陽の光だけ（月・星なし）で、夜に空の光が 0 → HDRP の月明かりの空の光を引いて暗くなり、自動露出が上がりきってランプで白く飛ぶ: `RTShadowPass.skyDay_`（太陽 y −0.1〜0 で 0〜1）で、夜は独自の空の光を使わず HDRP の空の光に戻す（合成の skyDelta に掛ける、プローブの差し替え・パーティクルの空の光も昼だけ）。05:4x に .ksm・NativeShaders、バンドルはビルド中。ゲームで未確認。
-- **大気を RT から独立（ユーザーの要望「RT 関係なしに独自エンジンへ」）、月・星も独自エンジンへ（.ksm・DLL・バンドルすべてインストール済み、ゲームで未確認）**:
-  - `Rendering/AtmospherePass.cs`: 2 つのインスタンス。トレース（AfterOpaqueAndSky ボリュームの先頭: BeginFrame → TraceSky（空・雲・雲の履歴・雲の影・空の光）→ 3D の霧）と合成（同じボリュームの最後: `NFX_Atmosphere.shader` で空の画素（空・太陽/月の円盤・星・雲）と全画素の霧）。RT の影のパスは `AtmospherePass.Shared`（雲の影・空の光の割合）を読むだけ。RT の合成シェーダーからは霧の適用を削除（空の描画は `_NFX_SkyParams.x = 0` で無効）。`RTShadowPass` に残った空・霧の古いフィールドは未使用（後で削除してよい）。
-  - `NativeEngine.Enabled` は Native sky でもオン（RT の設定がすべてオフでもシーンを作る: 霧の太陽の影のレイに必要）。`UpdateRayTracing` も大気だけで動く。
-  - 月: `SunController.UpdateSkyLight` が独自エンジンの光を決める（太陽、太陽が −2° より下で月が出ていれば月）。`SkyLightAbove`（大気の外の照度: 月は地上の照度 ÷ 大気の透過率）。`RayTracingEffects` の RT の太陽もこの光にした → 夜は月の影がレイトレースになる、空は月に照らされた大気になる、雲・霧も月の光。月なしの夜は HDRP の空の光に戻す。
-  - 星: `MapNight.StarTexture`（物理単位の星のキューブマップ）と回転を合成で直接描く（視線方向の大気の透過率と雲で暗く）。HDRP の夜空を重ねるのはやめた。
-- **ロードマップのステップ A（不透明物の照明を独自エンジンへ）着手（.ksm・バンドル・DLL すべてインストール済み、ゲームで未確認）**:
-  - A1: 設定 `NativeLighting`（移行 44 でオン、F8 の Sky カード）。`Rendering/EngineLighting.cs` の `Shadows/Ambient/Reflections/LocalLights/LampShadows/GlassReflections(s)` が「RT のトグル || NativeLighting」を返し、`RayTracingEffects`・`VolumeOverhaul`・`NatureFXMod` はこれを読む。GI はバウンス・マルチバウンスもオン。
-  - A2: `NFX_SunExact.shader` に 2 つ目のパス `LampsExact`（HDRP の Lit の BSDF で `_LightDatas` の全パンクチュアルライト、シャドウマップなし）。`RTShadowPass.DrawExactSun` が `lampsExact_` に描く。合成は「エンジンの遮られた照度 ÷ 同じ式の遮られていない照度（`LampsLuminance`、`_NFX_Lamp*` 配列）」の割合を、HDRP のランプの正確な光（鏡面も）に掛けて引く。NatureFX にしかない光（負の割合）は従来どおり拡散で足す。
-  - 次: A3（空の鏡面反射を独自の空で: HDRP の反射プローブ／空の反射の代わり）、A4（HDRP の照明そのものを置き換える G バッファからの完全な再計算）を計画書に。
-- 11-01 ユーザー確認: RT をすべてオフでも影・GI・反射・空・霧が動く ✓、夜の白さ ✓、遠くの光の四角さ「大分マシ」。**雲が小さいまま・星が見えない** → 真因の推定: 雲のなめらかさではなく、`NFX_Atmosphere` が空の画素にも 20 km の霞（霧の尾）を掛けていて、遠く（地平線寄り）の雲と星が隠れていた（独自の空はもともと大気の霞を含むので二重）。修正: 空の画素は格子（3 km）の霧だけ（`NFX_FogAt`）。バンドルは reload/naturefx-20261101-060236.bundle（Reload shaders で反映可）。ゲームで未確認。
-- 月明かり: 「大部分が HDRP にフォールバックしていそう、地面が明るい、一部暗い所が正常に見える」→ 説明: 暗い所は月のレイトレースの影、明るい所は月の直接光（SunController の月は約 2 lux）を自動露出が昼並みに持ち上げたもの。提案中: 月を物理的な明るさ（満月 0.25 lux 前後）にする／夜は目が順応しきらないよう露出の上限を設ける。
-- **A3（独自エンジンの空を HDRP の空として渡す）（.ksm・バンドル・DLL すべてインストール済み、ゲームで未確認）**: ユーザーの指摘「夜の反射に朝っぽい空が映る」= HDRP の空（月で照らされた PBS）が反射プローブと空の映り込みに使われていた。`SkyRadiance.hlsli`（SkyAmbient から切り出した方向ごとの空の輝度: スカイビュー＋雲＋地面）、`SkyCube.hlsl`（種類 18: 64²×6 面、Unity の面の順）、ブリッジの `SkyCubeUnpack`（RWTexture2DArray でキューブの RT へ）。`NativeEngine.TraceSky` の最後に（空の値があるうちに）作る。`AtmospherePass.SkyCube`（R16G16B16A16 のキューブ RT）。`VolumeOverhaul.UpdateSky(..., engineSky)` が HDRISky（Multiplier 1、Realtime 0.2 秒）にする。HDRP の環境光も独自の空になるので、合成の skyDelta（1c の差し替え）は使わない（`Shared.SkyLight = 0`）。太陽・月の円盤はキューブに入れない（HDRP のライトの鏡面と重なるため）。星もまだ入れていない。
-- 11-01 ユーザー: A3 は「結構いい感じ」。対応（06:2x、.ksm のみ、ゲーム起動中。DLL・バンドルの変更なし）: (1) 夜が暗すぎて Darkest scene を 1.0 EV にしないと見えない → 移行 45 で初期値のまま（8 EV）の人だけ 1.0 に。(2) 星が見えない → 設定 `StarBrightness`（初期 4 倍、0〜20、物理的な明るさに対する倍率: 目の夜間視力にカメラの露出は届かない）と F8 の「Stars:」状態。(3) 天候の変化が遅い → 設定 `WeatherChangeTime`（初期 30 秒、5〜300）: `WeatherController` のプリセット間の遷移と、`CloudController` の雲量の追従（以前は 90 秒 + 180 秒）を同じ時間に。(4) 昼の鏡の反射の空が真っ黒 → `MapProbes` がキューブがまだ黒いうちに撮ったままだった: 空のキューブが変わったら 2 秒後に撮り直し、以後 20 秒ごとに撮り直す。
-- **不要な設定の削除（11-01）**: どこからも読まれていなかった `RainStreaks`・`LensDrops`・`HeatHaze`（スライダーだけ残っていた）、`CarGlossyPaint`（no longer used）、`RTNativeSun`（移行 22 だけが読んでいた → `RTBackend = 0`）を削除。Native をオフにしたときの代替として残しているもの: `RTShafts`/`ShaftDensity`（光の筋）、`SunTemperature`、`RealisticShadows`/`SunSize` など。
-- ロードマップ B（影と反射を常に独自エンジン）は A1 でほぼ完了（Native lighting で HDRP の太陽・ランプのシャドウマップ、SSR、SSGI/SSAO、接触影がオフ、反射プローブは A3 で独自の空）。
-- **ロードマップ C（局所フォグとタイヤスモークを 3D の霧へ）（.ksm・DLL インストール済み、ゲームで未確認）**: `AtmospherePass.GatherBoxes` が有効な `LocalVolumetricFog`（マップの霧の箱・タイヤスモーク）を近い順に 64 個まで集め、4 float4（中心＋消散係数、軸/半サイズ＋アルベド）にして霧の Surface バッファの列データの後ろへ（`cmd.SetBufferData`）。`FogVolume.hlsl` の `BoxesSigma` が箱の中で外側 1/5 で濃くなる密度に雲の Worley ノイズ（数 m）を掛けて足す（Screen に空のデータ、ReflParams.x 箱の数・y 時間）。Native fog のとき HDRP の体積フォグとカメラの Volumetrics の上書きは使わない（`NatureFXMod`）。HDRP の箱のマスクテクスチャ・フェード設定は使っていない（独自のノイズ）。
-- **反射の空がまだ黒い（昼）** → 推定: Unity のキューブの RenderTexture にコンピュートシェーダー（RWTexture2DArray）で書けていなかった。修正: `NativeEngine.TraceSkyCube` は 6 スライスの Tex2DArray（`skyFaces_`）に書いて、`cmd.CopyTexture` で面ごとにキューブへ。キューブの RT は enableRandomWrite なし。ゲームで未確認。
-- **設定の整理（ユーザーの要望）**: サイドバーを GENERAL / SKY & LIGHT（新設 Sky & fog・Lighting、Shadows、Ambient light & GI、Reflections、Exposure & tone）/ WORLD（Sun & time、Weather、Nature、Road & cars、Map）/ ADVANCED（Shader rebuild、Settings、Developer）に。Weather タブの Sky カードを Sky & fog タブ（Sky・Clouds and stars・Fog の 3 カード）へ、Native lighting を Lighting タブへ、天候の変化時間を Weather カードへ。Sun タブの HDRP 専用の項目（色温度・ヘッドライトの光の筋・太陽の光の筋・HDRP の柔らかい影）は Native が担当中はグレー（「HDRP only」カード）。RT の各タブには「Native lighting がオンなら動いている」の注記と、詳細をグレーにしない（`EngineLighting`）。
-- **反射の空がまだ黒い（コピー方式の後も）**。手がかり: Weather カードの night が「no stars (the track's sky is not physically based)」→ HDRP の空は HDRI に切り替わっている（`Sky type` の表示はトラックの元の種類を出していただけ → 修正: `VolumeOverhaul.SkyState` は HDRP が実際に描いている種類と HDRI のテクスチャ名を出す）。キューブの中身を確かめるため、`AtmospherePass.ReadCube` が 2 秒ごとに真上（面 2）と地平線（面 4）の texel を AsyncGPUReadback して F8 の Sky カード「Cube for HDRP:」に出す。黒（0）ならキューブの生成側、値があるなら HDRP の HDRI の読み方か反射プローブ側が原因。
-- **タイヤスモークに違和感（出方と拡散）** → 箱を「外側 1/5 で薄くなる箱＋6 m の Worley」にしていたのが原因と推定。修正: 箱は 5 float4 に（5 つ目: フェードの割合・ノイズの大きさ・丸い（HDRP の Exponential）かどうか）。Exponential の箱は楕円体（半径方向に smoothstep）、フェードは HDRP の positive/negativeFade の平均、ノイズは size / textureTiling の大きさで上へゆっくり流れる。箱があるときは霧の履歴の今のフレームの割合を 0.1 → 0.3（動くスモークが尾を引かない）。06:4x に .ksm・DLL インストール。ゲームで未確認。
-- 読み戻しの結果（夜）: HDRP は `HDRI NFX_SkyCube` を描いている、キューブは「0」（夜は暗すぎて 2 桁表示で 0 → 指数表記 G3 に変更）。夜なのに鏡に昼の青空 → **NatureFX の反射プローブ（MapProbes）が古い空のまま**（撮り直しが効いていない）。対応: Native sky の間は MapProbes を使わない（HDRP の空の映り込みは独自の空、近くは RT の反射）。06:5x .ksm。ゲームで未確認。なお月の「大気の外 0.001 lx」はトラックの太陽の強さ（物理単位でない）× 0.00002 のため。
-- タイヤスモーク: 丸い塊に直した後も「現実っぽくない、消え方も」。霧の格子（160×90×64）でスモークを表すのは解像度と動きの面で無理がある → 提案中: 専用のスモーク（柔らかいパーティクル、独自エンジンの光と霧で照らす、カールノイズの流れ、年齢で広がり薄くなる）。
-- **夜の地面の大きな暗い領域（走ると場所が変わる）**: 雲の影・月の影ではない（ユーザーが両方 0 で確認）。原因: ドリフトで出たタイヤスモークの箱が 3D の霧で濃い吸収体になり、夜は照らす光がほとんどないので真っ黒な煙になっていた。
-- **タイヤスモークを専用のパーティクルで作り直し（ユーザーの決定: HDRP には戻さない）（06:51 .ksm、06:53 バンドル、インストール済み、ゲームで未確認）**: `TireSmoke.CreateParticles(bundle)`（`NatureFXMod` が Rain の後に作る、Reload shaders で作り直し）で Unity の ParticleSystem（ワールド空間、4000 個、大きさは最初に速く広がる曲線、アルファは素早く出てゆっくり消える、空気抵抗、カールノイズ、回転、上向き 0.35 と風の力）。発生は従来の `Spawn`（タイヤの滑り・濡れた路面の水しぶき）から 1 回に 2〜3 個 `Emit`。`NFX_Particle.shader` の mode 5（`ParticleAtlas.ModeSmoke`）: 丸い減衰 × `_NFX_NoiseTex` の 2 オクターブの流れるノイズ、深度で地面や車に柔らかく溶ける、球の法線で太陽／月の側が明るく、逆光と多重散乱、空の光（独自の空の SH）、ランプ。3D の霧は Frag の包みで掛かる。霧の箱からは `NatureFX.Puff` を除外。
-- 夜の暗い地面は直った（ユーザー）。スモークは「分解能が足りない」→ 1 回の発生を煙 8 個・しぶき 4 個に、大きさ 0.55 倍、散らばり 0.4 m・初速のばらつき 0.9、最大 12000 個、発生間隔を半分、シェーダーのノイズを 3 オクターブで細かく。
-- 反射の空はまだ黒（MapProbes を止めた後も）。RT の反射は空に抜けたレイで HDRP の反射をそのまま残す（Reflection.hlsl: 外れは result 0 → 合成で HDRP の色）→ 鏡の空は HDRP の空の映り込み（キューブから HDRP が作る）。**昼の「Cube for HDRP」の値待ち**: 0 ならキューブ生成側（TraceSkyCube / SkyCubeUnpack / CopyTexture）、値があれば HDRP が RenderTexture のキューブを HDRI として使えていない（その場合は Cubemap アセットへ CopyTexture するか、HDRI をやめて HDRP の空をカスタムの Sky にする）。
-- **タイヤの熱による物理ベースの煙（ユーザーの要望）（07:0x .ksm、ゲームで未確認）**: `TrackMap.WheelContact` に `SlipSpeed`（横滑りと、ホイールの回転（`up` の軸まわりの角度変化）× 半径と地面の速さの差の合成、m/s。回転が一度も見えないホイールは縦の滑りなし）と `Load`（質量 × g ÷ 輪の数）。`TireSmoke.TyreSmokeRate`: トレッド表面温度（熱容量 150 J/K）を摩擦の仕事率（μ 1.0（濡れ 0.6）× 荷重 × 滑り速度 × 0.6）で加熱し、空気（20 + 2×速度）・路面と芯（60）・水（600×濡れ）W/K で冷却。煙は 160°C から 300°C で最大、(割合)² × 滑り速度/8。外気温は雪で −2°C、雨で −5°C。F8 の Road & cars に「hottest tread」の表示。
-- 昼の読み戻し: キューブは up (0.177, 0.382, 0.899) nits、地平線 (1.05, 0.968, 0.874)（太陽は大気の外 33.1 lx = トラックの太陽の値）→ **キューブは正常**。HDRP も HDRI NFX_SkyCube を描いている。なのに鏡の空は黒 → HDRP がキューブから空の光・映り込みを作り直していないか、別の（暗い）反射プローブが効いている。切り分け: `AtmospherePass.ReadProbes` が HDRP の環境光プローブ（`HdrpBindings.AmbientProbe`）と独自の SkyProbe の真上の値を F8 の Sky カード「Sky light:」に出す（07:1x .ksm）。
-- **未解決 3: ときどきゲームが落ちる**。`Player.log`（LocalLow/CarX Technologies/Drift Racing Online、前回は `Player-prev.log`）では 2 回とも `CreateCommittedResource ... failed (887a0005)`、`Device Remove Reason 0x887a0006`（DXGI_ERROR_DEVICE_HUNG = GPU のタイムアウト）。VRAM は 7.0/11.2 GB で不足ではない。マップを読み込んで十数分走った後で、直前のログはプローブのエラーで埋まっていて手がかりなし。RT のパスは `IsScreenCamera` でプローブのカメラを飛ばしている。プローブ修正後も落ちるなら、独自エンジン（NRD・GI キャッシュ・揺れる葉）を一つずつ切って切り分ける。
-
-## 0.8 コードレビュー第 2 回（2026-11-02）の結果
-
-`docs/review-2026-11-02.md` に一覧（クラッシュ 13 件、描画 20 件、性能 15 件、修正済み／未修正）。要点:
-
-- **未解決 3（ときどき落ちる）の原因が分かった**: 落ちる直前は毎回「DLSS モード切替 ＋ 解像度 1916x997 → 3840x2054」で、(X1) `ScreenSize` が表示解像度のまま、画面色バッファは描画解像度で確保されるため、反射・ガラスのルート SRV を 9 倍先まで範囲外読み → GPU ページフォルト（DLAA では一致するので出なかった）。(X2) 4K では Mod の画面サイズ依存の確保だけで約 4 GB になり予算（10.85 GB）に届く。(X3) `WaitRenderIdle` が 5 秒で諦めた後に DLSS フィーチャを解放していた。3 つとも修正済み。
-- ほかに必ず起きる例外（`TireSmoke` の `shadowCursor_` が約 5 時間で int 溢れ → `Update` 全停止）、描画スレッドとメインスレッドの競合（記録〜サブミットの窓で BLAS 解放、状態文字列の同期なし読み）、描画イベントのリング 64 → 256、DLSS の `MVLowRes` フラグ欠落、3D 霧の再投影でカメラ移動を二重加算、DLSS 入力の jittered 行列、トラックの霧が一度も読まれていなかった件、Native sky オフ時の共有状態の残り、履歴テクスチャ再確保時のリセット漏れ、月の影の二重掛け、低木がシーン切替で破棄済みメッシュを描く件、スライダードラッグ中の低木の毎フレーム再生成、各種リークを修正。
-- **すべて未インストール・ゲーム未確認**。.ksm（Release）、DLL（`build_native.ps1`、ゲームを閉じて）、バンドル（`NFX_NativeBridge.compute`・`NFX_SunExact.shader` は RT の合成シェーダーなので数分）の 3 つを入れ替える。C# は Debug ビルド、C++ は `cl /Zs`、native の `Clouds.hlsl`/`Glass.hlsl` は dxc が通っている。
-- 未修正で判断がいるもの: GI の夜のクランプ基準（R15）、ライトの単位（R16、HDRP 16 の `SetIntensity` の確認が先）、アップスケール中に PostPass が走らないフレーム（R17）、タイヤスモークの CPU/GPU コスト（P7）、3D 霧のライト総当たり（P8）、ジオメトリごとのコミット済みリソース（P9）、各パスの画面コピーの共有（P5）、トレースバッファのストライド（P6）。
-
-## 0.9 レビュー後の 7 項目の設計メモ（2026-11-02）
-
-`docs/plan-review-followups.md`: 夜の GI のクランプ基準、ライトの単位、タイヤスモークのコスト、3D 霧のライト絞り込み（タイル × 奥行き帯のビットマスク）、ジオメトリのチャンク・サブアロケーション、各パスの画面コピーの共有、トレースバッファのストライド削減（4K で −726 MB）。それぞれ現状のコード位置・具体案・リスク・ゲームでの確認方法つき。**実装は別セッションで**（着手順の目安は冒頭）。ライトの単位は HDRP 16 のソースで確認済み: レガシー `Light.intensity` は常に内部単位（点・スポットは candela）で描画もそれを読むので不具合ではなく、戻し方の整合だけ。
-
-## 1. インストール済みのもの（ゲームに入っている）
-
-| 物 | 状態 |
-|---|---|
-| Mod 本体 `NatureFX.ksm` | 11-01 02:46 の Release ビルド（レビューの C# 修正と `_NFX_NoiseTex` の生成を含む）。インストール済み |
-| `NFXNative.dll` | 11-01 02:47 のビルド（レビューのネイティブ修正を含む）。インストール済み |
-| テストマップ `test_map.knmap` | 苗木の小枝・街灯のガラス修正版（10-31 19:28、`KN_Base/maps`） |
-| シェーダーバンドル | アンチタイリング入り（11-01 01:51、シェーダーエラーなし、`variant_054 lost _NORMALMAP` の既知警告 1 件のみ）。ゲームのフォルダにコピー済み。**法線マップが傾くバグ（レビュー B1）を含む**: 次のフルビルドで直る。そのビルドのバンドルは `_NFX_NoiseTex` を作る新しい .ksm とセットで入れる |
-
----
-
-## 2. 直近の作業と、ゲームでの確認状況
-
-### 確認済み（ユーザーが確認）
-- Light shafts を有効にすると夜空が明るくなる問題 → 直った。
-
-### 実装済み・ゲームで未確認（ユーザーに確認してもらう項目）
-| 項目 | 何を見るか | 主なファイル |
+| 成果物 | ソース | 配置先（ゲームのフォルダ） |
 |---|---|---|
-| **アンチタイリング（ヘックス・タイリング）** | テストマップの道路・路肩・林床・苔の岩・U 字溝で模様の繰り返しや継ぎ目が消えているか。F8 > Shader rebuild の「Anti-tiling」スライダー（0 で全体オフ） | `unity/.../ShaderLibrary/NFX_AntiTiling.hlsl`、`NFX_LitData.hlsl`、`GenerateNatureFXShaders.cs`（`_NFX_Surface`）、`Map/MaterialProfiles.cs`（`antitiling=` `variation=` `variation_size=`）、`Nature/AccumulationController.cs`（`_NFX_AntiTiling`） |
-| 広い範囲の色むら（`variation=`） | アスファルト・コンクリート・岩・土で数十 m 単位の明るさむら | 同上 |
-| 星 | 明るさとサイズが現実的か（等級から照度、9000 個、天の川・大気光） | `Map/MapNight.cs` の `Stars()` |
-| フォグ | 霧のライトがブロック状に見えないか（品質 2、スライス分布 0.55、デノイズ Both） | `Map/MapFog.cs` |
-| ヘッドライトの「謎のフィルタ」 | 車の前のもや（volumetricDimmer を ×4 から ×1.5 に） | `Rendering/HeadlightController.cs` |
-| 光芒の合成 | 空の画素を飛ばし、透過率を掛けて足す | `Shaders/NFX_RTShadow.shader`、`Rendering/RTShadowPass.cs` |
-| マーカー表示 | Map Markers の表示が崩れないか（ラベルの重なり回避、近い面でのクリップ） | `Map/MarkerOverlay.cs` |
-| Foliage too の FPS | 揺れる葉 BLAS の更新を 64 個/フレームに制限した効果 | `native/NFXNative/src/Wind.inl` |
-| 紫色のパーティクル | マップの ParticleSystem で HDRP のパスがないマテリアルを差し替え | `Map/MapParticles.cs` |
-| 夜の空が白い | カメラごとのボリュームスタックで空の種類を読み、深夜は PhysicallyBasedSky に | `Rendering/VolumeOverhaul.cs`（`Stack()`、`SkyState`） |
-| 苗木（fir_sapling / pine_sapling_small） | 小枝が描かれているか、街灯のガラス | `tools/kino_sdk/NfxDataTestMap.cs`、`tools/kino_sdk/polyhaven_import.py` |
+| Mod 本体 `NatureFX.ksm`（C#、net472） | `src/NatureFX` | `kino/mods/` |
+| シェーダーバンドル `naturefx.bundle` | `unity/Assets/NatureFX` | `kino/mods/NatureFX/` |
+| 独自エンジン `NFXNative.dll`（C++ / D3D12） | `native/NFXNative` | `kino/mods/NatureFX/`（ほかに `nvngx_dlss.dll`、`nvngx_dlssd.dll`、`DLSS-LICENSE.txt`、`D3D12/D3D12Core.dll`） |
 
-その他、`docs/map-extension-plan.md` の段階 1.5〜5（天候ゾーン、光源マーカー、葉の色、立体の草、デカール・水・煙など）も実装済み・ゲームで未確認。
+### 1.1 役割分担
 
----
+高度な描画は独自エンジンが担い、HDRP の利用は最小限にとどめる方針である。
 
-## 3. 次にやること
+| 担当 | 内容 |
+|---|---|
+| 独自エンジン（NFXNative） | Unity の D3D12 デバイスとキューを共有し、独自の BLAS / TLAS とトレース用シェーダーですべてのレイトレースを行う。Unity のレイトレーシング機能は使用しない。担当範囲は、表面、太陽の影、環境光、GI（ラディアンスキャッシュ）、ランプの影とランプマスク、光の筋、反射、ガラス、空（透過率、多重散乱、sky view、空のプローブ、キューブ）、雲と雲の影、霧（2D と 3D）、透明面用の太陽マップ、地面マップ、揺れる葉の BLAS 更新である。NRD と DLSS も本 DLL 内で Unity のキューに積む。 |
+| C# のカスタムパス | 入力の準備（`NFX_NativeBridge.compute`）、トレースの要求（`NativeEngine`）、結果の合成（`NFX_RTShadow` / `NFX_RTReflect` / `NFX_Atmosphere`）、独自の後処理（`NFX_Post`）、DLSS / 独自 TAA（`Dlaa`）、雨、煙、パーティクル |
+| HDRP に残る処理 | 深度、G バッファ、モーションベクトル（マテリアルのラスタライズ）、遅延ライティングのパス（独自照明の使用中はほぼ何も加算しない）、半透明（レイヤー 7 で HDRP の太陽とランプを受ける）、UI、最終パス |
 
-### 3.1 バンドルの確認と報告（すぐ）
-0 章のとおりエラーを確認し、ユーザーに「再起動（またはReload shaders）して 2 章の項目を見てください」と伝える。
+### 1.2 1 フレームの処理順序
 
-### 3.2 シェル法の苔・草（ユーザー承認済み、アンチタイリングの確認後に着手）
-ユーザーの依頼: 「大量のコケや草をパフォーマンスを落とさずに使える技術（髪の毛等）」。ユーザーに説明した設計:
+1. `BeforeRendering`: `AmbientFeedPass`（`OwnLighting.cs`）が独自の空のプローブを HDRP の `_AmbientProbeData` に設定する。
+2. HDRP: 深度、G バッファ、遅延ライティングを処理する。HDRP の太陽、ランプ、空の光は 0 に設定している（2 章参照）。
+3. `AfterOpaqueAndSky`: `RayTracingEffects` のグローバル CustomPassVolume で、次の順に実行する。
+   1. `AtmospherePass`（トレース）: 空のテーブル、雲、雲の影、空のプローブ、3D の霧
+   2. `RTShadowPass`: 表面をトレースし、太陽の影、環境光 / GI、ランプの影とマスクを求める。次に G バッファを再描画して太陽とランプの正確な光を計算する（`NFX_SunExact`、`RTExactSun`）。続いて NRD（SIGMA / REBLUR）を適用し、合成で太陽、ランプ、空の光を影付きで加算する。`RTFullRelight` では HDRP の画素を分解して再構成する。
+   3. `RTReflectionPass`: 反射をトレースし、REBLUR_SPECULAR を経て合成する。粗い面には独自の空のプローブを使う。
+   4. `AtmospherePass`（合成）: 空の画素、霧
+4. HDRP: 半透明、パーティクルを描画する。
+5. `BeforePostProcess`: `RTGlassPass`（独自のガラス）、車の雨（`CarRain`）、暗所の見え方（`LensEffects`）、写真モードを処理し、最後に `PostProcess`（優先度 −1000）を実行する。
+   - `PostProcess` の処理順序は、DLSS（DLAA またはアップスケール）または独自 TAA、モーションブラーと被写界深度、測光（64×36）、ブルーム、レンズフレア、露出・ホワイトバランス・トーンカーブである。
+6. HDRP の後処理: 独自の後処理の使用中は実質的に無効である。トーンマップ、ブルーム、色調整、フレア、ビネット等はフレーム設定で無効にし、TAA は使用しない。DLSS のアップスケール中は HDRP の最終パスのマテリアルを `NFX_UpscaledFinal` に差し替え、表示解像度の独自の画像を出力する。
 
-- **仕組み**: 地面のメッシュを法線方向に少しずつ浮かせて 8〜24 枚重ねて描く。各層はノイズで決めた「毛の断面」以外を clip する。
-- **シェーダー**: 生成している Lit の複製として `NatureFX/Shell` の変種を作る（`NFX_SHELL` の define）。HDRP の通常マテリアルの複製なので影・照明・RT・雪や濡れがそのまま効く。
-  - 層の番号は MaterialPropertyBlock の `_NFX_ShellLayer` で渡し、同じメッシュを層の数だけ描く（`Graphics.RenderMesh` 系、`ForestRenderer` / `GrassRenderer` のやり方を参考に）。
-  - 根元ほど暗く（毛の間の陰影）。草は上の層ほど風で揺らす（`NFX_Wind.hlsl`）。
-- **重さ**: 距離で層の数を減らす / 遠くは描かない。
-- **指定**: マップのプロファイルに `[shells]` セクションを作り、素材名の正規表現で「苔・芝・短い草」を指定する（`MapProfile.cs` / `MaterialProfiles.cs` の書式に合わせる）。`docs/map-authoring.md` にも書式を追記する。
-- **注意**:
-  - 新しいシェーダー変種はバンドルの変種リスト（`unity/variants/NatureFX_variants.txt`、記録した変種）に入らないと使えない。`BuildNatureFXBundle.cs` で確実に入るようにする。
-  - 共通 hlsl を変えるとまた数時間のビルドになる。シェル用のコードは `NFX_SHELL` の中だけに置き、なるべく新しい hlsl ファイルにまとめる。
-  - テストマップ（`NfxDataTestMap.cs`）に確認用の苔の岩・芝の区画を足し、`[shells]` を書く。
+### 1.3 独自エンジンの呼び出し
 
-### 3.3 コミット
-ユーザーがゲームで確認したら、コミットしてよいか聞く。変更が多いので、機能ごとに分けたコミットを提案する（マップ拡張の段階 1.5〜5、夜空・星、フォグ・光芒、アンチタイリング、テストマップと素材の取り込み、揺れる葉の負荷）。`NatureFX_maykr.kmc` は含めない。
-
----
-
-## 4. ハマりどころ（今回の作業で分かったこと）
-
-- **HDRP のボリューム**: `VolumeManager.instance.stack` は既定値だけを持つ（空の種類 0 と出た）。カメラごとの値は `HDCamera.GetOrCreate(cam).volumeStack`。`VolumeOverhaul.Stack()` を使う。
-- **SampleUVMapping のフック**: `NFX_AntiTiling.hlsl` は HDRP の `__SAMPLEUVMAPPING_HLSL__` を先に定義して自前版に差し替える。`SURFACE_GRADIENT` は LitData.hlsl がこのファイルの後に定義するので、`#ifdef SURFACE_GRADIENT` に頼ったフィールドは置かない。
-- **アンチタイリングを既定でオンにしない理由**: 白線が描き込まれた道路テクスチャや、1 枚絵のスキャン素材はずらすと壊れる。素材ごとに `antitiling=1` でオプトイン。
-- **Unity の OBJ 読み込み**（materialImportMode None）は usemtl ごとのグループを 1 つのサブメッシュにまとめる → `polyhaven_import.py` はマテリアルごとに OBJ を分け、マニフェストの obj は `|` 区切り。頂点の多いモデルは UInt32 インデックスで読む。
-- **Poly Haven の小枝**: glTF では OPAQUE でも、隣に `_alpha_` テクスチャがあれば cutoff 0.5 にする。
-- **揺れる葉の BLAS 更新**は共有のスクラッチで直列になるので、全部を毎フレーム更新すると重い（Wind.inl の `kWindBudget`）。
-- **バンドルのビルド時間**: 今は 2136 バリアント。`AGENT.md` の「40〜50 分」より長い。共通 hlsl を変えたときは数時間見込む。
+- C# から DLL へは `CommandBuffer.IssuePluginEvent(AndData)` の描画イベントで呼び出す。イベント番号は、1 キューのテスト、3 トレース（`TraceEventData`、種類は `kTraceKinds` = 22）、5 NRD SIGMA、6 NRD REBLUR 拡散（モード 2 はランプ）、7 REBLUR 鏡面、8 シェーダーの再読み込み、9 DLSS である。
+- 受け渡すデータは、`NrdEventData` 328 バイト、`DlssEventData` 192 バイト（`static_assert` あり）、フレーム定数 `Frame` である。`Frame` は `NFXCommon.hlsli` で定義し、ローカルライトを末尾に置く。`NFX_MAX_LOCAL_LIGHTS` は 128（= `LocalLights.Max`）、`kConstantSlot` は 8448 である。C# 側の書き込み位置と必ず一致させる。
+- トレースバッファの詰め方は、`NfxPack.hlsli` と `NFX_NativeBridge.compute` で同じ式を使う。片方だけを変更してはならない。
+- トレースは DXR 1.1（インラインのコンピュート）のみである。DXR 1.0（パイプライン方式）は 2026-11 に削除した（`Settings.RTBackend` は旧設定の読み込み用に残っているが使用しない）。独自エンジンが使えない環境では NatureFX 全体が動作しない（`NatureFXMod.offReason_`）。動作中に独自エンジンが止まった場合は、NatureFX 全体をそのセッションの間だけ無効にする（`WatchEngine`）。独自エンジンの各部（空、霧、天空光、太陽光、ランプ、照明、パーティクル、ガラス、ポストプロセス、レイトレースの影・環境光・GI・反射）は常に有効で、切り替えはない（`Settings.FixOwnEngine` が毎フレーム固定する）。独自 BSDF と、開発者向けの比較用スイッチ（NRD の信号ごとの切り替え、DLSS の試験、HDRP の TAAU との比較など）は削除した。DXR 1.2（SM 6.9、SER / OMM）は、Agility SDK 1.619 の独立したデバイス上で太陽の影のみを試験している（`RTDxr12Sun`、既定オフ）。
+- DLL が持つ機能は、`NFX_Native_Info` の `features:` 文字列（own-glass lamp-mask dlss dlss-rr sun-map ground-map ground-cover）で示す。C# 側は `NativeEngine.Supports(...)` でこれを確認し、古い DLL でも動作するようにする。
+- GPU が停止した場合は、DLL と同じフォルダに `NFXNative-gpu-hang.txt`（ブレッドクラム）が出力される。NGX のログは `NFX_ngx.log` に出力される。
 
 ---
 
-## 5. 場所のまとめ
+## 2. HDRP 機能の置き換え（OwnLighting と CameraVolumetrics）
 
-| 物 | 場所 |
+NatureFX は独自エンジンを前提に、全体が動作するか、まったく動作しないかのどちらかである（`NatureFXMod`）。
+
+- DX11、独自エンジンが使えない環境（DXR 1.1 非対応、`NFXNative.dll` がない）、前回のシーン構築中のクラッシュでは、何も変更せずに理由を表示する（`needsDx12_` / `offReason_`）。
+- 動作中に独自エンジンが 20 秒以上止まった場合（そのマップで一度動作した後）や、バンドルに `NFX_NativeBridge` がない場合は、そのセッションの間 NatureFX 全体を無効にする（`WatchEngine`）。設定は保存せず、終了時に元へ戻す。
+- 独自エンジンの各部の設定（`NativeSky`、`NativeFog`、`NativeLighting`、`OwnSkyLighting`、`OwnSunLight`、`OwnLampLight`、`OwnTransparentLight`、`NativeParticles`、`NativeGlass`、`NativePost`、RT の影・環境光・GI・反射・ランプ・ガラスの有効スイッチ）は、`Settings.FixOwnEngine` が毎フレーム有効に固定する。F8 とデバッグページには表示しない。
+- 各合成が数フレーム（30 フレーム）動かなかった場合だけ、その部分を HDRP の機能で埋める（`OwnLighting` の Grace）。カメラの切り替え直後などに画面が暗くなるのを防ぐためであり、設定で HDRP に切り替える経路はない。
+
+| HDRP の機能 | 停止する条件 | 実装箇所 |
+|---|---|---|
+| 空の光（indirect diffuse ×0）、空の映り込み（reflection ×0）、空の描画（種類 none、キューブを生成しない） | 各合成が動作している | `OwnLighting.Ambient` / `Reflections` / `Sky`、`VolumeOverhaul`（IndirectLightingController） |
+| 太陽の光 | 太陽を、どの物体も属さないレンダリングレイヤー（1<<30）に移す | `OwnLighting.Sun`、`RTShadowPass.CheckOwnSun` |
+| 点光源とスポットライトの光 | ランプマスクの動作中 | `OwnLighting.Lamps` |
+| 半透明への照明 | HDRP の太陽とランプをレイヤー 7 に移し、全マテリアルが半透明であるレンダラーにのみビット 7 を付ける | `OwnLighting.UpdateRenderers` |
+| 体積霧、体積雲、大気散乱、Fog | 独自エンジンの動作中は常時 | `NatureFXMod` の `HdrpFogOff` / `HdrpCloudsOff` / `HdrpScatterOff`、`MapFog`（HDRP の霧はオフにするのみ） |
+| SSR、反射プローブ、プレーナー反射、空の反射 | `OwnLighting.Reflections` | `HdrpSsrOff` ほか |
+| SSAO、SSGI | `OwnLighting.Ambient` | `HdrpSsaoOff` / `HdrpSsgiOff` |
+| コンタクトシャドウ | 影の合成が動作している | `HdrpContactOff` |
+| シャドウマップ、シャドウマスク | 太陽とランプの両方が独自 | `HdrpShadowMapsOff` / `HdrpShadowmaskOff`、`RayTracingEffects`（影を持つほかの平行光源も対象） |
+| ブルーム、スクリーン空間のフレア、データ駆動のフレア、色調整、トーンマップ、ビネット、色収差、粒状、歪み、Panini | 独自の後処理（`PostProcess.Active`） | `HdrpBloomOff` / `HdrpFlareOff` / `HdrpPostOff` |
+| 被写界深度、モーションブラー | 独自の後処理で使用するとき | `PostProcess`（フレーム設定） |
+| TAA | 独自の後処理の使用中は常時（DLSS または独自 TAA） | `Dlaa` |
+| 自動露出 | 常時。NatureFX の露出を使う（HDRP の Exposure は Fixed で上書き） | `PostProcess` |
+| ゲームが描画する影の板 | RT の太陽の影が動作している | `FakeShadows` |
+| トラックの ReflectionProbe | 常時（ロード時に一度だけ旧来の空で撮影されているため）。マップの反射プローブ（`MapProbes`）は作成しない | `SceneProbes` |
+
+- `CameraVolumetrics` は、カメラのフレーム設定のうち該当する 1 項目のみを上書きし、不要になった時点で元に戻す。終了時（`OnDestroy`）にはすべての項目を元に戻す。
+- 太陽は `Units.PhysicalScale` 倍して現実の明るさに合わせている。CarX の太陽は約 π lux であり、ランプ、ヘッドライト、発光は HDRP の現実の単位で扱う。露出の EV は現実の EV である。
+- 独自 BSDF（`OwnBrdf`）は削除した。
+- 独自エンジンが HDRP から受け取る値は、合成に必要なもの（露出、マップの反射の倍率、深度・法線・G バッファ、最終パスの差し替え）とマップのデータに限る。詳細は [ROADMAP.md](ROADMAP.md) 1.2a に記載している。
+- ヘッドライトは、ゲームのライトを光らせず（`lightDimmer` 0）、NatureFX 専用のライト（`NatureFX.Headlight`）をその位置に置いて照らす。ゲームはアクセル操作のたびにライトの値を書き換えるため、ゲームのライトでは保持できなかった（`HeadlightController`）。
+- 独自エンジンが使うランプの明るさは、NatureFX が持つ値を使う（`HeadlightController.Intensity`。ヘッドライト、マップの街灯の点灯度合い、ブレーキの赤熱など）。HDRP の減光値や単位変換は読まない。
+- 半透明物体の 3D 霧は、NatureFX のシェーダーでは前方パス内で掛ける（生成される `NFX_ShaderPassForward.hlsl` の `NFX_FogForwardLighting`）。ゲームのシェーダーのままの半透明物体だけを描き直して掛ける（`TransparentFog`）。霧が 1 km で 2% 未満で局所の霧の箱がない場合は描き直しを省く。
+
+---
+
+## 3. ビルドと動作確認
+
+コマンドは `AGENT.md` の「ビルド」と README に記載している。主な注意点は次のとおりである。
+
+- クラウドのセッションには dotnet、dxc、Unity がない。クラウドで行った変更はコンパイル未確認としてユーザーに引き渡し、3 つの成果物のビルドを依頼する。
+- シェーダーバンドルのビルドログ `<Unity プロジェクト>/Logs/naturefx_build.log` では、必ず次の内容を確認する。
+  ```bash
+  grep -a "Shader error" $L | sort | uniq -c
+  grep -a "lost keywords\|variant materials" $L
+  ```
+  シェーダーにコンパイルエラーがあると、そのシェーダーはエラー表示なしにバンドルから除外される。過去には、合成で `NFX_COAT_ROUGHNESS` が未定義だったために影の合成全体が消えた事例がある。`variant_054 (NatureFX/LitAccumulation) lost keywords: _NORMALMAP` は既知の警告である。
+- フルビルドの所要時間は約 30 分である（変種の絞り込み後）。共通の hlsl（`NFX_Accumulation.hlsl` など）を変更すると、全バリアントの再コンパイルが必要になる。RT の合成シェーダーのみの変更であれば数分で済む。
+- 変種の絞り込みは次の手順で行う。ゲームが `kino/config/NatureFX/game_hdrp/game_variant_profile.txt` を出力する（`Tools/VariantProfileDump.cs`）。このファイルを `unity/variants/` にコピーすると、`VariantProfileStripper` がこれを使用する（`unity/variants/README.md`）。製品ビルドの Unity は変種のログを出力しないため、Unity 側の記録は利用できない。
+- 新しい .ksm は `_NFX_NoiseTex`（`ShaderGlobals.EnsureNoiseTexture`）を生成する。このテクスチャがないとバンドルのノイズが一定値になり、濡れや水たまりの模様が表示されない。
+- 再起動せずに確認する場合は、デバッグページの developer タブ > Reload shaders を使う（`reload/` の新しいバンドルと `NativeShaders/*.cso` を読み込む）。C#、C++、構造体の配置を変更した場合は再起動が必要である。
+- 作業者はゲームの表示を直接確認できない。変更のたびに、確認する場所と内容（F8 のタブ、デバッグページの行、`kino/output.log` の行）を具体的にユーザーへ伝える。Unity のエラー（カーネルの次元の不一致、UAV のフラグなど）は `kino/output.log` ではなく Unity の `Player.log` に出力される。
+
+---
+
+## 4. 設定と既定値
+
+`Settings.cs` は、`ISettings`（KSL が自動保存する）、`SettingsDefaults`（同じメンバーの既定値を保持する）、`ApplyFirstRun` と `Migrate` で構成される。
+
+- 既定値を変更する場合は、必ず新しい移行処理を追加する（`if (d.ConfigVersion < N) { ...; d.ConfigVersion = N; }`）。`Migrate` はユーザーの設定と `Defaults` の両方に適用されるため、F8 の「既定値に戻す」（`UserPresets.ResetAll`）と右クリックのリセットも移行後の値に従う。ユーザーが変更した値を保持する必要がある場合は、元の既定値のままであることを条件に加える（移行 45 を参照）。
+- 現在の ConfigVersion は 82 である。29 は欠番である。移行 82 は、廃止した天候プリセットの番号を付け替える（旧 5 Snow・6 Autumn は 1 Clear に、旧 7 Fog は 5 に移す）。
+- 次の機能は廃止した（ユーザー決定）。雪（積雪、雪の厚み、降雪、ブラックアイス、車の雪、雪の轍）、落ち葉（積もる葉、舞い落ちる葉、冬の落葉）、ほこり（路面と車）、時間経過による蓄積、季節の色（`Seasons`、紅葉、ススキの穂）、路面のゴムと摩耗（`_NFX_Road`、タイヤ痕のゴム）、素材の経年変化（`[materials]` の moss / rust / stain / wear / dirt）、接地のなじませ（`groundblend`）、草木の下の地面、塗る汚れ（`[paint]`、`MapPaint`）、デトリタス（`Detritus`）。天候プリセットは Manual / Clear / Overcast / Rain / Storm / Fog である。
+- 廃止した機能の設定（`Snow`、`Leaves`、`Dust`、`SnowDepth`、`AccumulateOverTime`、`AccumulationRate`、`Season`、`RubberAmount`、`RoadWear`、`MapGroundDetail`、`Detritus`）は、古い設定ファイルを読み込めるように `ISettings` に残しているが、どこからも参照しない。デバッグページには表示しない（`DevControls.Retired`）。
+- 雨に関する機能は残している。濡れは `AccumulationController` が管理し、雨の間は雨量に応じて濡れ、雨がやむと約 2 分で天候の値まで乾く（`_NFX_Accumulation.w`。x、y、z は常に 0）。タイヤ跡マップ（`TrackMap`）は、ドライライン（g）、草の押し倒し（b）、車輪の接地情報のために残している（r のゴムは常に 0）。地面マップ（`GroundMap`）は、草木のカードの根元（`NFX_ApplyFoliageFoot`）のために残している。車の泥（`CarDirt`）も残している。
+- `RTOverlay` は現在使用していないが、設定ファイルとの互換性のために残している。計測オーバーレイはデバッグページへ移した。
+
+### 4.1 主要な既定値（移行適用後）
+
+| 分野 | 既定値 |
+|---|---|
+| 独自エンジン | 各部は常に有効（`Settings.FixOwnEngine`） |
+| RT | DXR 1.1 のみ（DXR 1.0 は削除、`RTBackend` は不使用）、`RTDenoiser` 2（NRD、移行 77）、`RTTraceScale` 0（半解像度）。GI（20 m）、反射（品質 Quality、粗さ 0.8、150 m）、光の筋、ランプマスク、`RTExactSun`、`RTFullRelight`、透明面の影、揺れる葉の影はオン。葉の透過 0.35（移行 81）。`RTDxr12Sun` はオフ |
+| 空 | 星の明るさ 15 倍（移行 83） |
+| 色 | 葉の色の補正 `FoliageColor` 1（移行 79）、マップの素材の実測反射率への補正 `CalibrateAlbedo` オン（移行 80） |
+| 空の光 | `SkyLightStrength` 1、`SkyLightSaturation` 0.5（実測の空の青さ）、`MoonBrightness` 0.1（現実の満月に近い値） |
+| 後処理 | `PostBloom` 0.02、トーンは `TonemapMode` 2（AgX、移行 79）、コントラスト 8・彩度 0、`WhiteBalance` 0.6（夜は半分だけ順応） |
+| 露出 | `ExposureMode` 1（目の順応）、`AutoExposureMin` 2 EV / `Max` 16 EV、`NightDarkness` 1、`FixedExposure` 14 EV（Fixed 選択時、移行 76） |
+| DLSS | `Dlaa` オン、`DlssQuality` 0（DLAA）、`DlssRayReconstruction` オフ |
+| レンズ | `MotionBlur` 0.5（180°）、`DofFStop` 2.8、`DepthOfField` オフ、`LensFlare` / `LensStreaks` 0.3、`NightVision` 0.8 |
+| 時刻 | `SunOverride` オフ、`TimeOfDay` 14、`TimePasses` オフ（速さ 60 倍）、`SyncGameNight` オン |
+| 車 | `HeadlightType` 3（LED）、`HeadlightStandard` 0（日本）、`HeadlightAim` 0.6°、`OilFilm` 0（移行 74。設定項目は存続）、タイヤスモーク 1、赤熱・泥（`CarDirt`）・クロームのホイール オン |
+| シェーダーリビルド | `ReplaceShaders` / `FullReplacement` / `RebuildFoliage` オン、`AntiTiling` 1（マップが `antitiling=` を指定した素材のみ） |
+| マップ | `UseMapProfile` / `MapEffects` オン、草 1・60 m、藪 1・25 m |
+| 開発 | `DebugPage` オン（移行 78、`127.0.0.1:8765`）、`WriteMaterialInventory` オフ、`TextureStreamingBudget` 0（ゲームの値） |
+
+### 4.2 F8 とデバッグページ
+
+- F8 のタブ構成は README の表に記載している（`NatureFXWindow.cs`）。Developer タブには、デバッグページのスイッチと状態表示のみを置く。
+- 開発用のスイッチと機能は `Tools/DevControls.cs`（デバッグページの developer タブ）に集約している。内容は次のとおりである。比較用の切り替えスイッチ（NRD の信号ごと、DLSS のテスト、HDRP の TAAU、GI のランプ基準など）は削除し、値は既定値に固定している。
+  - RT の確認用表示（影のみ、正確な太陽の光、環境光 / GI のみ、アルベドチェック、履歴のリセット、What is this?）
+  - Reload shaders
+  - テクスチャ予算
+  - シェーダーのダンプ、ルールの再読み込み、変種の記録、マテリアル一覧
+  - 計測のスイッチ（CPU、NVML）
+- デバッグページの settings タブは、F8 の全設定を扱う。項目一覧、前提条件（F8 の `BeginDependent`）、説明は `tools/gen_settings_controls.py` が F8 ウィンドウのコードと `Settings.cs` のコメントから生成する（`Tools/SettingsControls.g.cs`、`SettingsMeta.g.cs`）。日本語の文言は `tools/settings_ja.json` に記述する。F8 を変更した場合はこのスクリプトを実行する。使わなくなった設定は `DevControls.Retired` に加えて表示しない。
+- デバッグページ（`Tools/DebugPage.cs`、`DebugPageHtml.cs`）は TcpListener をループバックのみで開く。スナップショットはページを開いている間に限り、メインスレッドで 1 秒ごとに取得する。CPU と GPU の計測は別スレッドで行う（`CpuStats`、`GpuStats`）。NVML によるクロック、電力、温度の取得は、ドライバーによって GPU が停止するため既定でオフにしている。DLSS（NGX）が確保するメモリは VRAM の内訳に含まれない。
+
+---
+
+## 5. 既知の問題と未確認の項目
+
+### 5.1 ゲーム上で未確認の項目
+
+最終コミット `efc4012` までの次の変更は、ユーザーによるゲーム上での確認記録がない。次回ゲームを起動した際に確認を依頼する。これより前の未確認の項目（DLSS 切り替え時のクラッシュ対策、長時間動作とマップ切り替え、マップ拡張の表示など）は、[ROADMAP.md](ROADMAP.md) の「ゲーム上で未確認の項目」に記載している。
+
+| 項目 | 確認内容 | 主な実装箇所 |
+|---|---|---|
+| 独自の後処理の使用中に HDRP の後処理、TAA、Fog を使用しない | 昼夜と雨で画面が崩れないこと。HDRP のフレアやビネットが重ならないこと | `NatureFXMod`（`HdrpPostOff`）、`PostProcess` |
+| 独自 TAA | DLSS をオフにしたときの輪郭とゴースト | `PostProcess`（Taa）、`Dlaa.OwnTaa` |
+| DLSS アップスケールの独自経路 | Quality〜Ultra perf. での UI、解像度、ずれ（HDRP の TAAU 経路は削除した） | `Dlaa`、`NFX_UpscaledFinal.shader` |
+| 露出 Fixed（14 EV）と目の順応、暗い場面 | F8 Exposure & tone の Current exposure。夜の街灯の下 | `PostProcess`、`Settings.FixedExposure` |
+| トーンと色（AgX、コントラスト 8、ホワイトバランス、空の光の色 0.5、葉の色の補正、素材の反射率の補正） | 夕方やランプの下での色かぶり、日陰の青さ、草木と路面の明るさ | `PostProcess`、`NativeEngine.SkyLightSaturation`、`MaterialProfiles.Calibrate` |
+| オールオアナッシング、独自エンジンの固定、DX11・DXR 1.0・独自 BSDF・比較スイッチの削除 | ビルドが通ること。DX11 で起動したときの表示。各機能が従来どおりであること | `NatureFXMod`（`WatchEngine`）、`Settings.FixOwnEngine`、`NFXNative.cpp` |
+| ヘッドライトの専用ライト | アクセル操作で暗くならないこと、光軸、純正の光が出ないこと | `HeadlightController` |
+| 半透明物体の霧（シェーダー内） | 柵などに霧が掛かること、二重に白くならないこと | `NFX_FogCommon.hlsl`、`GenerateNatureFXShaders.cs`、`TransparentFog` |
+| 遠景の森の表示距離と板の向き | 90 m より近くで板が見えないこと | `NFX_LitData.hlsl`、`ForestRenderer` |
+| 雨（空気、雨粒、路面、車の 4 段階） | 雨天時の視程、雨粒の影と光、路面が濡れていく過程と水膜・波紋、車の水滴と水しぶき | `MapFog`、`Precipitation`、`AccumulationController`、`CarRain`、`TireSmoke` |
+| 粒子の太陽の影（透明面用の太陽マップ） | 日陰にある雨粒と煙が暗くなること | `NFX_Particle.shader`、`SunShadowMap` |
+| 3D の霧の空の光（空が見える割合に応じる）、GI の空 0.15 | 屋根の下や室内に白いもやが出ないこと | `FogVolume.hlsl`、`GI.hlsl` |
+| ヘッドライトのカットオフの色のにじみ、欧米の配光 | 夜の路面上のカットオフ | `HeadlightController` |
+| 既定値の移行 75〜78 | 既定値に戻したときに DXR 1.1、NRD、デバッグページがオンになること | `Settings.cs` |
+| 雪、落ち葉、ほこり、季節、路面のゴム、経年変化、接地、塗る汚れ、デトリタスの廃止 | ビルドが通ること。雨の濡れ、水たまり、波紋、ドライライン、車の水滴と泥、葉の色の補正、草木の根元が従来どおりであること。古い設定（天候 Snow / Autumn / Fog）が Clear / Fog として読み込まれること | `NFX_Accumulation.hlsl`、`NFX_LitData.hlsl`、`AccumulationController`、`WeatherController`、`Settings.cs`（移行 82） |
+
+### 5.2 未解決の問題と制限事項
+
+- 33 ms のフレームが散発的に発生する。原因は未調査である。デバッグページの performance > slow frames で該当区間を確認する。
+- DLSS Ray Reconstruction は、アップスケールと併用すると画面の揺れ、光のノイズ、GPU ハング（`DXGI_ERROR_DEVICE_HUNG`）が発生したため、DLAA のときのみ使用する。RR の対象は太陽の影のみである。反射は RR では粗い面に白い粒が出たため、REBLUR を使う。
+- ランプの影は 1 画素あたり負荷の大きい 4 灯までであり、5 灯目以降は影を落とさない。ランプマスクは半解像度である。
+- 合成後に HDRP が描画する半透明について、HDRP が透明パスの前に `_AmbientProbeData` を再設定する場合、空の光は黒のままになる。この点は未確認である。
+- 独自ガラスは手前の 1 枚と奥の 2 枚までを扱う。HDRP がガラスに付ける効果は失われる。車の雨粒は `CarRain` が描画するため残る。
+- 雨について次の項目は未対応である。塗装自体の濡れ（ゲームの Shader Graph）、屋根の下の乾燥、雲から降る雨の筋。
+- HDRP の固定確保領域（クッキーのアトラス 85 MB、カスケード影 36 MB、プローブのアトラス）は実行中に縮小できない。縮小にはパイプラインアセットの再生成が必要であり、危険を伴うため見送っている。
+- テクスチャのストリーミング予算はほとんど効果がない。ストリーミング対象は 70 MB 前後であり、残りはストリーミングされない。
+- その他の残作業（シェル法の苔・草、レビュー指摘の未修正分、車のシェーダーリビルド、性能、DXR 1.2 側など）は [ROADMAP.md](ROADMAP.md) に記載している。
+
+---
+
+## 6. 注意点（現時点で有効なもの）
+
+### 6.1 HDRP / Unity
+
+- `VolumeManager.instance.stack` は既定値のみを保持する。カメラごとの値は `HDCamera.GetOrCreate(cam).volumeStack` を経由し、`VolumeOverhaul.Stack()` で取得する。
+- HDRP は `beginCameraRendering` より前にカメラの行列と動的解像度を確定する。ジッターは `beginContextRendering` / `endContextRendering` で設定する（`Dlaa`）。
+- ライトの `affectDiffuse` と `affectSpecular` を両方オフにすると、HDRP はそのライトを一覧から除外し、正確な太陽のパスが太陽を参照できなくなる。このため太陽は、どの物体も属さないレンダリングレイヤーに移している（`OwnLighting`）。HDRP のライトレイヤーが無効なアセットではレイヤーを参照できないため、`RTShadowPass.CheckOwnSun` が太陽の消失を監視し、消失した場合はそのセッションの間 HDRP の太陽に戻す。
+- HDRP の自動露出は、独自の後処理の画像には使用しない。トーンマップ済みの画像を測光して下限まで露出を上げ、画面が真っ白になった事例がある。露出は常に NatureFX が測光する。
+- カスタムパスの時点では、HDRP の G バッファは別用途に再利用されており、内容が残っていない。このため正確な光のパスでは、不透明物の GBuffer パスを再描画する（デカールのバッファも中立のものを使う）。
+- トラックの ReflectionProbe は、ロード時に一度だけその時点の空で撮影される。過去には夜に昼の空が映り込んだ。このため常に無効にしている（`SceneProbes`）。
+- CarX の HDRP のコンピュートシェーダー、GPU カリング、GPU タイヤスモークには DX12 用のカーネルがない。これらは `Dx12Fix`、`GpuCullingDx12`、`TireSmokeDx12` で補っている。
+- コンピュートシェーダーで書き込むテクスチャには `enableRandomWrite` が必要である。指定がないと書き込みがエラーなしに破棄され、過去には DLSS の結果が一度も画面に出なかった。`SharedColor` には指定済みである。
+- `TEXTURE2D_X`（配列）の引数に `Texture2D.blackTexture` を渡すと、次元の不一致によりカーネル全体の実行が省略される。このエラーは `Player.log` に出力される。
+- RTHandle の余白には古い内容が残る。後処理での読み取りは、画像の内側 1 テクセルまでに制限している（画面端のにじみ対策）。
+- ゲームの起動直後（最初のシーンの読み込み中）に DLSS を開始すると、そのセッションの間、メニューの UI やモデルがちらつく。このため `Dlaa` は、シーンを一定時間トレースした後（RT を使わない場合は起動 1 分後）に最初の DLSS を開始する。
+- ゲームは夜の照明を追加シーンで切り替える。NatureFX 側でも切り替えると両者が競合し、読み込みが繰り返された。このため切り替えの間隔を 8 秒以上空けている（`GameDayNight`）。
+- ゲームはヘッドライトの値（強さ 4775 cd、レイヤー、オン/オフ）をアクセル操作のたびに書き換える。`Light.intensity` を直接書くため、HDRP の setter を止めても防げない。このため NatureFX は専用のライトで照らし、ゲームのライトは減光値 0 にする（`HeadlightController.OwnLamp` / `Silence`）。
+- `MaterialInventory.Write` はすべてのテクスチャを読み戻して PNG に保存するため、数百 MB の VRAM を一時的に消費し、フレームの引っかかりが生じる。このため、指定された場合（`WriteMaterialInventory`）にのみ実行する。
+- `NFX_AntiTiling.hlsl` は `__SAMPLEUVMAPPING_HLSL__` を先に定義して、HDRP の SampleUVMapping を差し替える。`SURFACE_GRADIENT` はこのファイルより後で定義されるため、これに依存するフィールドを置いてはならない。
+- アンチタイリングは素材ごとに明示的に有効化する方式である。白線入りの道路や 1 枚絵のスキャン素材は、ずらすと表示が崩れるためである。
+
+### 6.2 独自エンジン
+
+- 合成で光を差し引く場合は、色チャンネルごとにクランプせず、明るさの比率で処理する。ランプの影が運ぶ NatureFX 固有の光は負の値であるため、アップサンプルや合成で 0 に切り捨ててはならない。
+- 作業用メモリの確保と解放は描画スレッドで行わない。`WaitRenderIdle` の後にのみ行う。BLAS は退役させてから解放する。
+- 揺れる葉の BLAS 更新は、1 フレームあたり `kWindBudget`（64）本までを順番に処理する（`Wind.inl`）。
+- `windows.h` は `small` を `char` として定義しているため、変数名に使用しない。
+- ペイロード、アルベドの α の詰め方、クリアコートの判定は、`AGENT.md` の「実装上の注意」に記載している。
+
+---
+
+## 7. ファイル構成
+
+| 分野 | 主なファイル |
+|---|---|
+| 入口・毎フレームの処理 | `src/NatureFX/NatureFXMod.cs`（HDRP の機能の切り替えも含む）、`Settings.cs`、`UserPresets.cs` |
+| UI | `NatureFXWindow.cs`（F8）、`SettingsUI.cs`（KSL メニュー）、`Ui/` |
+| 独自エンジンとの連携 | `Rendering/NativeEngine.cs`、`RayTracingScene.cs`（シーンの収集）、`RayTracingEffects.cs`（パスの構成）、`LocalLights.cs`、`Capabilities.cs` |
+| RT のパス | `Rendering/RTShadowPass.cs`、`RTReflectionPass.cs`、`RTGlassPass.cs`、`RTSurfaceTrace.cs`、`SunShadowMap.cs`、`GroundMap.cs`、`HistoryGuard.cs`、`SharedColor.cs` |
+| HDRP 機能の置き換え | `Rendering/OwnLighting.cs`、`CameraVolumetrics.cs`、`VolumeOverhaul.cs`、`OwnGlass.cs`、`SceneProbes.cs`、`FakeShadows.cs`、`Units.cs` |
+| 空・霧・雲・時刻 | `Rendering/AtmospherePass.cs`、`CloudController.cs`、`SunController.cs`、`GameDayNight.cs`、`Map/MapFog.cs`、`Map/MapNight.cs` |
+| 後処理・露出・AA | `Rendering/PostProcess.cs`、`Dlaa.cs`、`ExposureProbe.cs`、`LensEffects.cs`、`PhotoMode.cs` |
+| 天候・自然 | `Nature/WeatherController.cs`、`AccumulationController.cs`、`WindController.cs`、`TrackMap.cs`、`Rendering/Precipitation.cs` |
+| 車 | `Rendering/HeadlightController.cs`、`TireSmoke.cs`、`CarRain.cs`、`CarGlow.cs`、`CarFinish.cs`、`GameParticles.cs`、`ParticleLighting.cs` |
+| シェーダーリビルド | `Nature/MaterialReplacer.cs`、`ShaderBundle.cs`、`Rebuild/`、`Map/MaterialProfiles.cs` |
+| マップ拡張 | `Map/`、`Nature/GrassRenderer.cs`、`ForestRenderer.cs`、`ShrubRenderer.cs`（書式は [map-authoring.md](map-authoring.md)） |
+| 開発ツール | `Tools/DebugPage.cs`、`DebugPageHtml.cs`、`DevControls.cs`、`SettingsControls.g.cs` / `SettingsMeta.g.cs`（`tools/gen_settings_controls.py` と `tools/settings_ja.json` から生成）、`CpuTimings.cs`、`CpuStats.cs`、`GpuStats.cs`、`SceneShaderDumper.cs`、`VariantProfileDump.cs` |
+| 独自エンジン | `native/NFXNative/src/NFXNative.cpp`、`Nrd.inl`、`Dlss.inl`、`Wind.inl`、`RtDevice.inl`（DXR 1.2）、`shaders/`（`NFXCommon.hlsli`、`NfxPack.hlsli`、トレースごとの .hlsl） |
+| シェーダーバンドル | `unity/Assets/NatureFX/Shaders/`（合成、後処理、パーティクル、連携）、`ShaderLibrary/`（Lit に組み込む hlsl）、`Editor/`（生成、ビルド、変種の削減） |
+| ビルド | `tools/build_bundle.sh`、`tools/build_native.ps1`、`tools/build_dxr12_probe.ps1`、`unity/variants/` |
+
+### 7.1 リポジトリ外の場所（ユーザーの PC）
+
+| 対象 | 場所 |
 |---|---|
 | リポジトリ | `C:\Users\kppn1223\Documents\carx\mods\NatureFX` |
-| Unity のバンドル用プロジェクト | `C:\Users\kppn1223\NatureFX-Unity` |
-| Kino Content SDK（テストマップ） | `C:/Users/kppn1223/Desktop/kino_content_sdk`（スクリプトは `Assets/Editor/NatureFX/` にコピーしてからビルド） |
+| シェーダーバンドル用の Unity プロジェクト | `C:\Users\kppn1223\NatureFX-Unity`（ログは `Logs\naturefx_build.log`） |
 | ゲーム | `C:\Program Files (x86)\Steam\steamapps\common\CarX Drift Racing Online`（ログは `kino/output.log`） |
-| 外部の依存・素材 | `%USERPROFILE%\NatureFX-Deps`（Poly Haven の素材は `polyhaven\`。素材一覧とライセンスは `docs/testmap-assets.md`、合計約 377 MB） |
-| 計画書 | `docs/map-extension-plan.md`（マップ拡張）、`docs/shader-rebuild-plan.md`、`docs/map-authoring.md`（プロファイルの書式） |
-- **反射に映る空（11-01 07:12 .ksm インストール、ゲームで未確認）**: 夜の読み戻しで HDRP の空の光 (6.7e-6, 1.29e-5, 2.64e-5) と独自 (6.46e-6, 1.27e-5, 2.63e-5) が一致 → HDRP の空は正しい。夜の鏡に昼の空が映る・再起動ごとに変わる原因はトラック自身の ReflectionProbe（ロード時に一度だけ、その時の HDRP の空で撮られる）。`Rendering/SceneProbes.cs`: Native sky の間はトラックの ReflectionProbe（`NatureFX.` で始まらないもの）を 2 秒ごとに探して無効にし、オフで戻す。F8 Sky カードに「Track reflection probes:」行。バンドル（reload/ の 07:00 のスモーク細分化）はゲーム終了後に本体へ。
-- **タイヤスモークが出ない（ユーザー、11-01）**: (1) 入っているバンドル（06:53）は煙のシェーダー（NFX_Particle の mode 5、06:58 更新）より古い。最新は reload/ の 07:00（F8 > Developer > Reload shaders か、ゲーム終了後に本体へコピー）。(2) 熱モデルが煙の温度に届いていなかった: 接地中のタイヤにも空気での冷却（0.4/s）を二重にかけていた → 接地中は TyreSmokeRate の冷却だけ。冷却 45+1.5v W/K、荷重は 2000〜6000 N に制限、煙は 140→260°C（smoothstep）、滑り 6 m/s で最大。縦の滑りの路面速度は、回転するホイールの forward ではなく車軸×路面の法線で。.ksm インストール済み、ゲームで未確認。
-- 11-01 ユーザー: 反射は「完璧に治ってそう」。グリップ時も煙が出る → `TrackMap` の滑りに不感帯（横 1 m/s + 5 %、縦 2 m/s + 25 % 未満は 0）。.ksm インストール済み。
-- **地面の光の伸び（濡れた路面のランプの映り込み）が障害物越しに見える** → 合成はランプの遮られた割合を n·l だけの重みで求めていたので、拡散はほぼ無いが映り込みの強い遠くのランプが遮られても割合がほとんど変わらなかった。`NFXCommon.hlsli LampWeight`（n·l ＋ GGX α0.3・F0 0.04 の鏡面）を `LocalShadows.hlsl` の重みに（`NFX_FLAG_LAMP_SPECULAR`、`NativeEngine.LampSpecular` = RTShadowPass の exactUsed_）、合成の `LampsLuminance` も同じ重み。DLL は build/ に 07:32（ゲーム起動中でコピー失敗）、バンドルはビルド中。.ksm・DLL・バンドルの 3 つがそろうまで起動しないこと（フラグは古い DLL だと無視されるだけで壊れはしない）。
-- 07:35 に DLL とバンドル（07:34）を本体へ。.ksm（07:31）とそろった。ゲームで未確認。
-- **ロードマップ A4 の第 1 段: ランプごとの影マスク（11-01、.ksm 07:5x インストール、DLL は build/ にあり（ゲーム起動中でコピー失敗）、バンドルはビルド中。ゲームで未確認）**: 前の「LampWeight で遮られた割合を出す」案は、割合が全ランプ共通なので根本的には直らない → 置き換え。
-  - `native/NFXNative/shaders/LampMask.hlsl`（種類 19、`kTraceKinds = 20`）: 半解像度の画素ごとに、HDRP のランプ（LightColor.w 1）のうち `LampWeight`（n·l ＋鏡面）が重い 4 つを選び、1 本ずつ光源の形の中のランダムな点へレイ。出力 float4 = 小さな整数を正確に持つ float（x ランプ 0 + 256×ランプ 1、y 2・3、255 はなし、z w 可視度 0..255 の組）。
-  - `NativeEngine.TraceLampMask`（TraceLocal の面を使い回し、R32G32B32A32 の `lampMask_` へ Unpack4）。`NFX_FLAG_LAMP_MASK`（2）のとき LocalShadows は NatureFX が足す光（w 2）だけ。
-  - `NFX_SunExact` の LampsExact パス（MRT）: HDRP の各ランプを `_NFX_LampPos` と位置（0.2 m 以内）で 4 つのスロットに対応づけ、ランプごとに exact × (1 − 可視度) を足す → `lampsExact_` は「影が取り去る光」。履歴（フル解像度、可視度は 12 bit の組）をモーションベクトルで再投影し、同じランプのスロットどうしで混ぜる（今のフレーム 0.12）。全 0 のマスクは「マスクなし」（古い DLL）。
-  - 合成: `_NFX_SunExact.y` = マスク使用中 → removed = lampsExact + min(LocalShadows 分, 0)。
-  - `RTShadowPass.DrawExactLamps`（トレースの後。マスクなしのときは従来どおり DrawExactSun でランプの exact）。設定 `RTLampMasks`（移行 46 で true）、Shadows タブ「Per-lamp shadows」。
-  - 制限: 5 つ目以降のランプは影なし（一番弱いもの）。マスクは半解像度の最寄りの画素（縁は 2×2 のブロック、時間方向で平均）。
-  - 07:44 に .ksm（07:42）・DLL・バンドルの 3 つをインストール（シェーダーエラーなし）。ゲームで未確認。
-- **テストマップの組み直し（11-01、ユーザーの依頼「ルールを作りテストしやすく、素材はリアルに」）**: ルールと配置は docs/testmap-layout.md。Poly Haven CC0 を 18 点追加（253 MB、承認済み、docs/testmap-assets.md）。
-  - `tools/kino_sdk/NfxTestBays.cs`（新規、partial）: 区画の表 `BayTable`（ID・左右・行・見出し・説明・作る関数）。区画はローカル座標（入口が原点、+Z が奥）。各区画に舗装・通りからのエプロン・駐車枠・カテゴリ色の枠・看板・ColorChecker の校正ボード。面は UV がメートルの箱（`MetricCube`）にスキャン素材。S1 スキッドパッド（x −110、z −80、半径 35 m、古タイヤ）、D0 データ（マップ内データのマーカー 1 種ずつ）、遠景の森は z 820。
-  - `NfxDataTestMap.cs`: 旧区画の関数を削除、地面は 1.4 km の grass_ground、看板はカテゴリ色の見出し・発光 120 nits、プロファイルに nfxbay_ の [rules]/[materials]、霧と雪のゾーンの blend 8。
-  - `NfxPreview.RenderBays`: 各区画の駐車枠からの画像（エディターのプレビューは空が暗く、日陰が真っ黒になる。ゲームでは空の光が入る）。
-  - .knmap（518 MB）を 08:12 に `KN_Base/maps/test_map.knmap` へ上書き（マップはゲーム起動中でも上書きして反映できる）。ゲームで未確認。
-- **A4 の残り・D・E（11-01、ユーザー「A4 を全て終わらせて E まで」）。.ksm・バンドル（08:24、シェーダーエラーなし）インストール済み、DLL は 07:44 のまま（変更なし）。ゲームで未確認**:
-  - **A4 フルリライト**（設定 `RTFullRelight`、移行 47、Shadows タブ「Full relight」）: 合成が HDRP の画素を正確に分解して組み直す。GBuffer3（自前の再描画、`_NFX_GBuffer3Tex`）= 焼き込みの空の光＋発光（空の光は HDRP のプローブ×拡散色の推定で上限を取り、残りを発光とする）、太陽 = SunExact（影なし）、ランプ = LampsExact の第 3 出力 `lampsTotal_`（影なしの全ランプ）、残り = 映り込みなど。結果 = 発光 ＋ 空の光×空の見える割合 ＋ 独自の空との差 ＋ 太陽×影 ＋ ランプ（全体 − 遮られた分）＋ NatureFX だけのランプ ＋ 残り×（GI でないとき空の割合）＋ GI の跳ね返り ＋ 葉の透過（`LeafGlow` に切り出し）。`_NFX_SunExact.z` で切り替え。ランプがあってマスクがないときは従来の補正。
-  - A4 の段階 2（太陽を独自の BRDF で）は行わない判断: SunExact は HDRP の BSDF を G バッファから正確に評価しており、書き直しても同じ式になるだけ。影・空の光・GI・反射は独自エンジンのもの。
-  - **D 独自の後処理**（`Rendering/PostProcess.cs`、`NFX_Post.shader`、設定 `NativePost`・`PostBloom`、移行 48、Exposure & tone タブ「Own post-processing」）: BeforePostProcess の最後（優先度 −1000）で、測光（64×36 の log2 輝度、AsyncGPUReadback）→ C# の目の順応（中央重み、下 30 %・上 5 % を除く、EV100 = log2 L + 3）→ HDRP の Fixed 露出に渡す。ブルーム（6 段、13 タップの縮小、最初は Karis 平均、テントの拡大、しきい値なしで全体の 4 %）、トーンカーブ（ACES フィット・Khronos PBR Neutral・AgX・なし。設定の Filmic (GT) が AgX）、コントラストと彩度。HDRP のトーンマッピング（None）・ブルーム（0）・色調整（0）は優先度 10001 のボリュームで止める。HDRP に残るのは TAA・被写界深度・モーションブラー・レンズフレア（トーンマップ後の画に掛かるので、フレアは弱くなる可能性）。
-  - **E ゲームのパーティクル**（`Rendering/GameParticles.cs`、設定 `NativeParticles`、移行 49、Lighting タブ「The game's particles」）: 半透明（加算・発光・メッシュ以外）の ParticleSystemRenderer のマテリアルを NatureFX/Particle のモード 6（元のテクスチャ・色・UV、柔らかい球として独自エンジンの太陽/月・空・ランプで照らし、3D の霧に入れる）に差し替え。3 秒ごとに探し、オフで元に戻す。
-  - E のガラスを描き切る部分はまだ: ガラスの色と不透明度は HDRP のマテリアルにあり、独自エンジンの記録にないため、ゲームでガラスのマテリアルを調べてから。今は反射（RT）と屈折は独自、ガラスの照明だけ HDRP。
-- **E のガラス: 独自エンジンでガラスを描き切る（11-01、ユーザー「ガラスも進めて」）。.ksm インストール済み、DLL は build/（08:35）、バンドルは reload/naturefx-20261101-083711.bundle（シェーダーエラーなし）。どちらもゲーム起動中でコピー待ち。3 つがそろうまで起動しないこと（古い DLL だと HDRP のガラスが消えたまま反射の差分しか描かれない）**:
-  - `Glass.hlsl` の `NFX_FLAG_OWN_GLASS`（4）: 透過 = (1 − フレネル) × lerp(1, ガラスの色, 不透明度)（不透明度 = 記録の alphaScale × 色マップのアルファ、`NFXCommon GlassOpacity`）、映り込み = 滑らかなガラスはトレース、粗いガラスと届かない先は空の SH、太陽のきらめき（GGX、最小粗さ 0.02、`SunVisible`）、固いガラスの屈折は透過を掛けて差分。出力 w は負で −(1 + 透過 rgb 各 5 bit + 32768 × ガラスまでの m)。
-  - `NFX_RTReflect` GlassComposite: w が負なら 色（ガラスの奥）× 透過 ＋ 映り込み（ガラスまでの 3D の霧を掛ける）。
-  - `Rendering/OwnGlass.cs`: RayTracingScene が見つけたガラスのスロット（レンダラーとマテリアルの番号、`OwnGlass.Slots`）に `Hidden/NatureFX/Invisible`（`NFX_Invisible.shader`、HDRP が描かないライトモードだけ）を入れる。シーンは `OwnGlass.Originals` で元のマテリアルを読む。ガラスのパスが 30 フレーム以内に動いたときだけ（`RTGlassPass.LastRun`）。設定 `NativeGlass`（移行 50）、Lighting タブ「Glass」。
-  - 制限: 一番手前のガラスだけ（奥のガラスは描かれない）。ガラスに付く HDRP の雨粒などの効果はなくなる可能性。
-- **不具合（ユーザーの画像、ガレージ画面）: 車体が透けて見える** → ガレージの車の塗装は Transparent キューの不透明な面（アルファ 1）で、`RayTracingScene.Glass` の「滑らかなら glass」に当たり、OwnGlass が HDRP から隠してガラスとして描いていた（そのとき DLL は古く、差分だけ描かれて透けた）。修正: ベースカラーのアルファが 0.95 以上ならガラスではない（ガラスの語を名前に持つものは従来どおり）。さらに DLL の `NFX_Native_Info` に "features: own-glass lamp-mask" を足し、`NativeEngine.Supports("own-glass")` のときだけ HDRP のガラスを隠す（Mod が DLL より新しくても壊れない）。.ksm 08:3x インストール、DLL build/ 08:39、バンドル reload/083711 はコピー待ち。
-  - 08:4x に DLL（08:39 ビルド）とバンドル（083711）を本体へ。.ksm（08:39）とそろった。ゲームで未確認。
-- **11-01 ユーザー: 車体の映り込みに艶がない（ぼけている）、タイヤスモークが車体を貫通する**:
-  - 映り込み: クリアコートはトレースでは粗さ 0.04 の鏡面だが、NRD の REBLUR_SPECULAR を通すと鋭さが落ちていたと推定。`NrdSpecUnpack.hlsl`: 粗さ 0.05 未満はトレースの結果をそのまま、0.05〜0.1 で REBLUR の結果へ移る（鏡面はレイ 1 本でノイズがほぼない）。DLL build/ 08:43（ゲーム起動中でコピー待ち）、NativeShaders は入れ済み（Developer > Reload shaders で反映）。
-  - タイヤスモーク: パーティクルに衝突（World、3D、High 品質＝動く車のコライダーにも当たる、半径 0.12×大きさ、減衰 0.7、跳ね 0.05）。出る位置をタイヤの外側へ 0.3 m・進む向きの後ろへ 0.35 m。.ksm インストール済み（再起動で反映）。12000 粒の High の衝突は CPU の負荷になりうる（要確認）。
-  - 08:4x に DLL（08:43）を本体へ。.ksm・バンドルとそろった。
-- 11-01 ユーザー: 車体の映り込みは「完璧」。ただし RT のざらつきがゆず肌に見える → `Reflection.hlsl`: α ≤ 0.003（クリアコートなどの鏡面）は GGX を引かず正確な鏡の向き、濡れた路面の引き伸ばしも掛けない（車の屋根にも掛かっていた）。画面外の当たりの陰影は `ShadeReflectedHitSmooth`（空のレイ 4 本の層別平均、`NFXReflect.hlsli`）。DLL build/ 08:48（ゲーム起動中でコピー待ち）、NativeShaders は入れ済み（Reload shaders で反映）。
-- 11-01 ユーザー: クロームの塗装もぴかぴかに → クロームの判定（トレースした面の金属度 ≥ 0.85、粗さ ≤ 0.25、クリアコートでない）: `NFX_NativeBridge` PrepareReflection で粗さを 0.03 まで（α 0.002 → Reflection.hlsl の鏡面扱い・NRD を通さない）、メッシュの法線で映す、フレネルは粗さ 0 の EnvBRDF。`NFX_RTReflect` の `ReflRoughness` も同じ規則（合成の重みと自前のぼかし）。バンドルは reload/naturefx-20261101-085156.bundle（エラーなし、コピー待ち）、DLL は build/ 08:48（コピー待ち）。
-- **タイヤスモークを物理寄りに（11-01、ユーザー「障害物を避ける、風と同期、影」）**: .ksm インストール済み、バンドル reload/naturefx-20261101-085737.bundle（エラーなし）、DLL build/ 08:48 とともにコピー待ち。
-  - 風: 抵抗を空気との相対速度に比例（limitVelocity の drag 1.5/s、大きさ・速度の掛け算なし）＋ 力 = drag × 風 → 約 0.7 秒で風と同じ速度に。浮力 0.8 m/s²（寿命で 1 → 0.1）。渦（curl noise）の強さは 0.5 + 0.12 × 風速。
-  - 障害物: 前回の衝突（World・High）のまま。
-  - 影: `TireSmoke.UpdateShadows` が毎フレーム 2000 粒ずつ太陽へ RaycastCommand（ジョブ）、Custom1.x（1 = 影、0.6 で寄せる）。頂点ストリームに Custom1X（TEXCOORD0.w）、`NFX_Particle` の煙で太陽の光に (1 − 影)。F8 の Tyre smoke の行に影の中の粒の数。
-  - まだ: 煙が地面や車に落とす影（独自エンジンの太陽の影のトレースは煙を知らない）、煙どうしの自己遮蔽。
-- **ゲームの夜のライトが NatureFX の時刻で点かない（11-01、ユーザー）**: ゲームは `DayNightController`（Assembly-CSharp、逆コンパイルは scratchpad/decomp_daynight のみ）がレースの夜モードで一度だけ夜の照明シナリオ（追加シーン）を読み、`IDayNightBehaviour`（DayNightLightBehaviour: ライトの GameObject を SetActive）を切り替える。`Rendering/GameDayNight.cs`: リフレクションで `instance`・`IsDayLight`・`isReady`・`isTimeoutToChangeModeOver`・`SetDayNightMode(bool)` を使い、太陽の高さ 2° 未満で夜、4° 超で昼（ヒステリシス）。NatureFX が時刻を動かしていないときはゲームの元の選択に戻す。設定 `SyncGameNight`（移行 51）、Sun & time タブ「The game's night lights」と状態の行。切り替えで追加シーンが読まれ、NatureFX の再スキャン（RT のシーン作り直し）が 2 秒後に走る。.ksm インストール済み、ゲームで未確認。夜のシナリオが太陽のライトを差し替えるトラックでの挙動は要確認。
-  - 09:0x に DLL（08:48: 鏡面の映り込み）とバンドル（085737: クローム・煙の影）を本体へ。.ksm とそろった。
-- **11-01 ユーザー: クローム・ざらつきは「完璧」、煙はまだ少し不自然、未実装を全部、月夜はユーザーが調整できるように**（すべて 09:1x に .ksm・DLL・バンドルをインストール、ゲームで未確認）:
-  - 月: 設定 `MoonBrightness`（移行 52 で 1.5、0〜10、Sun & time タブ「Moon brightness」）。月のライトの強さに掛かり、独自エンジンの空・霧もそれに従う。
-  - 煙の影のマップ（`TireSmoke.UpdateSmokeShadow`、1 フレームおき）: 粒を太陽の向きに 128×128（0.4 m）の格子へ投影し、光学的厚さ（1.4 × アルファ、半径内で (1 − r²)²）と太陽の向きの最近・最遠を記録。`NFX_FogCommon NFX_SmokeTransmittance`: その点と太陽の間の割合だけ減衰。合成（地面・車の太陽の光）と煙の粒（自己遮蔽、奥ほど暗い）で使う。
-  - 煙が広がるほど薄く: 不透明度の時間変化を 1 → 0.6（0.15）→ 0.32（0.3）→ 0.16（0.6）→ 0 に（大きさの 2 乗に反比例する程度）。
-  - ガラスの重なり（`Glass.hlsl` の `GlassPane`）: 一番手前の奥にあるガラスを最大 2 枚まで（映り込みは空の SH）、同じインスタンスの 10 cm 以内は同じ板の裏面として飛ばす。透過は掛け合わせ、光は手前の透過を掛けて足す。
-  - ガラスの雨粒: CarRain が車の面ごとに描くので残る。判定は `OwnGlass.Originals` の元のマテリアルで。
-  - **ユーザーの画像: 白い輪郭とライトアップされた所の残像** → ランプごとの影マスクが原因と推定。LampsExact: 周りの 4 つのマスク画素から深度が一番近いものを選ぶ（縁で背景のマスクを拾っていた）。履歴は 3×3 のマスク画素の同じランプの可視度の範囲に収める（動くヘッドライトの跡が残らない）、今のフレームの割合 0.12 → 0.2。
-- **レンズフレアを独自の後処理へ（11-01、ユーザー）**: `NFX_Post.shader` の Flare パス（ブルームの 1/4 解像度の段から）: しきい値（露出後 3.0、中間の灰の約 30 倍）を超えた光から、ゴースト 5 つ（中心を挟んで倍率 −0.45/−0.9/0.3/0.65/−1.4、コーティングの色、端で弱まる、色収差）、中心のまわりのハロー、横の光の筋（12 タップ）。Final でトーンカーブの前に足す。強さは `LensEffects.FlareGhosts`（Lens flare × 夜 × 雨、従来の効き方）と `FlareStreaks`。`PostProcess.Active` の間は HDRP の ScreenSpaceLensFlare を止める。.ksm インストール済み、バンドルは reload/naturefx-20261101-091925.bundle（エラーなし、コピー待ち）。ゲームで未確認。
-- **ヘッドライトを本物のロービームに（11-01、ユーザー「まぶしすぎる、現実と違う、LED・HID・ハロゲンを選びたい」）**: `HeadlightController` が前を向く赤くない車のスポットライト（重い Rigidbody の下）を、種類ごとの値に: ハロゲン 18 000 cd・3200 K、HID 36 000 cd・4300 K（カットオフの縁に青紫）、LED 30 000 cd・5800 K（1 灯の下向きの最大光度）。配光はクッキー（256²、80° の範囲）: 水平のカットオフ（水平線の 0.6° 下、左側は 15° で 1° 上まで上がる、左側通行）、その数度下にホットスポット、横に広い拡散、上は 1.5 % の漏れ光。元の値は覚えておいて「Game」で戻す。設定 `HeadlightType`（移行 53 で LED）、Road & cars タブ「Headlights」。.ksm インストール済み、ゲームで未確認。独自エンジンの霧・煙・ランプの影の重みはクッキーを知らない（円錐のまま）。ゲームが光の値を毎フレーム書き換える場合は 5 秒ごとの再適用まで戻る。
-- **11-01 ユーザーの画像: 煙はだいぶ良いが影がおかしい**（地面に 0.4 m の階段、煙の中に太陽の向きの斜めの縞）→ `NFX_SmokeTransmittance` を 4 マスの双線形に（マスごとに透過率を出してから混ぜる）。煙の自己遮蔽は画素ごとではなく粒の中心で 1 回（CPU の同じ双線形 `TireSmoke.SmokeTransmittance`、Custom1.y = 遮られる割合、0.5 で寄せる、頂点ストリーム Custom1XY → TEXCOORD1.x）。09:3x に .ksm とバンドル（レンズフレアも含む）をインストール、DLL は 09:15 のもの。ゲームで未確認。
-- **レンズフレアの作り直し（ユーザー: 主張が激しい、形がきれいでない）**: 画像の反転をやめ、光源ごとのゴーストに: 太陽（月）と ParticleLighting の近くのランプ 8 灯を画面に投影し、ブルームの 1/4 段のその位置の明るさ（しきい値 2.0、隠れていれば 0）で、中心を通る線上に絞りの六角形のゴースト 6 つ（縁がくっきり、縁は分散で色ずれ、大きいほど薄い、1 つあたり光の約 1/10000）、光条 6 本（Lens streaks）。ハローと横の筋はやめた。Final で描く（Flare パスは削除）。バンドルは reload/naturefx-20261101-094004.bundle（コピー待ち）。
-- **ヘッドライトの光軸とハイビーム（ユーザー: 光軸調整が必要、照らし方が現実っぽくない、ハイビーム）**: 光の向きをゲームのライトの傾きではなく車体から決める（ロービームは `HeadlightAim`° 下、移行 54 で 0.6°、Road & cars タブ「Beam aim」）。ハイビーム: カットオフなしで軸に集まる配光（ホットスポット ±5°×±2.5°、広がり、手前は少し）、ロービームの 2.5 倍、自分の車（カメラに一番近い重い車）だけ。F7（Kino.Input）か Headlights カードのスイッチ（保存しない）。元の localRotation も覚えて「Game」で戻す。.ksm インストール済み、ゲームで未確認。
-  - 09:4x にバンドル（094004、新しいフレア）を本体へ。.ksm・DLL とそろった。
-- **11-01 ユーザーの依頼 4 件**（.ksm インストール済み、DLL build/ 09:47・バンドル reload/naturefx-20261101-094947.bundle はゲーム起動中でコピー待ち、NativeShaders は入れ済み。ゲームで未確認）:
-  - ヘッドライトの値の保持: 毎フレーム、各ヘッドライトのクッキー・広がり・強さ（1 % 以内）・向き（0.05° 以内）が当てたままかを見て、違えばそのライトだけ当て直す（`Holds` / `ApplyBeam`）。
-  - 配光を独自エンジンとパーティクルへ: `HeadlightController.Beams`（ライト → 1 ロー / 2 ハイ）。LocalLights が `LightSpot.z` に、ParticleLighting が `_NFX_PLightBeams` に。`NFX_BeamPattern`（クッキーと同じ式、ランプの上は世界の上）を NFXCommon の `LocalLightIlluminance`（ランプの影の重み・ランプマスク・GI の当たり）、FogVolume の霧の中の光、`NFX_FogCommon`（パーティクルの `LampLight`）で掛ける。
-  - 煙の影をランプにも: `TireSmoke.UpdateSmokeVolume`（1 フレームおき、太陽のマップと交互）が 48×24×48・1 m の 3D 格子に消散係数（1.4 × α / 直径、(1 − r²) で広げる）と煙の箱を入れる。`NFX_SmokeLampTransmittance`: 点からランプまでを煙の箱で切り、6 段の三線形の読み。LampsExact で各 HDRP ランプの可視度に掛ける（フルリライトのランプの光も減る）、パーティクルの LampLight にも。
-  - 奥のガラスの映り込みもトレース（`GlassPane` の trace を true）。
-  - 09:5x に DLL（09:47）とバンドル（094947）を本体へ。.ksm とそろった。
-- **11-01 ユーザーの依頼 4 件**（.ksm インストール済み、DLL build/ 09:56・バンドル reload/naturefx-20261101-095814.bundle はコピー待ち、NativeShaders は入れ済み。ゲームで未確認）:
-  - 霧の中の光の筋に煙の影: 煙の 3D 格子をヘッダー 3 float4（原点と 1/セル、煙の箱）＋ 4 セルずつの float4 にして（`TireSmoke.FogSmoke`）、霧の Surface バッファの箱の後ろ（FogW×FogH×3 + 64×5）へ。`FogVolume.hlsl SmokeTransmittance`（4 段、箱で切る、ReflParams.z = 1）を太陽（30 m 先まで）とランプの光に掛ける。
-  - 夜の照明で太陽が差し替わる場合: `GameDayNight` が切り替えの 0.5 秒後（読み込み済み）に `SunController.Refresh` し、ほかの平行光源（名前が NatureFX で始まらないもの）を消す（昼・NatureFX が時刻を動かさないときに戻す）。太陽が消えた間は昼へ戻さず、見つかるまで Refresh。
-  - ヘッドライトの傾き: `HeadlightController.Roll`（水平の枠からのロール角、ラジアン）を LocalLights の `LightSpot.w`、ParticleLighting の `_NFX_PLightBeams.y` に。`NFX_BeamPattern(kind, forward, dir, roll)` は上方向をそのロールで回す。
-  - レンズフレアをより自然に: ゴースト 5 つ（ほとんどは縁のやわらかい丸、1 つだけ六角形、色はほぼ無彩色、縁だけ分散、1 つあたり 1/20000）、画面の端ほど弱く（周辺減光）、光源のまわりのやわらかいにじみ、光条は太く短く長さに揺らぎ。
-- **11-01 ユーザーの確認結果**: ヘッドライト・カットオフ・煙の影（ランプ）・奥のガラス・ランプの影の修正・テストマップは OK。月のスライダーが最大でも真っ暗、夜の照明の読み込みが遅い、ガラスと雨粒がリアルでない、ゲームのパーティクルは確認方法が分からない。
-  - **月が暗い本当の原因 = 単位**: CarX のトラックの太陽は約 3 lux（HDRP 既定の π 程度、昼の空の天頂が約 0.18 nit）で、現実の約 3 万分の 1。月は太陽の比で 0.001 lux になり、目の順応の下限（ゲームの単位で 1 EV）に届かなかった。`Rendering/Units.cs`: 現実の単位 / ゲームの単位 = 100 000 / トラックの元の太陽（1000 未満のときだけ）、`SunController.Refresh` と `Update` で更新。目の順応の下限・上限は現実の EV（`PostProcess` と `VolumeOverhaul` で換算、移行 55 で −2 / 16）、Exposure の表示も現実の EV。現実の値で入れていたヘッドライトの cd と MapLights のプリセットの lm をゲームの単位に（÷ PhysicalScale）。月の明るさは 0〜20 倍。
-  - 夜の照明: 切り替えを太陽 6° 未満（昼は 8° 超）に早め、切り替え中の追加シーンの読み込みは再スキャンを 0.3 秒後に（`GameDayNight.Switching`）。
-  - 10:04 に DLL（09:56）とバンドル（095814）を本体へ。.ksm は 10:1x。ゲームで未確認。
-- **雨粒を水らしく（11-01、ユーザー「雨粒の形と広がり方、物理液体のように」）**: `NFX_CarRain.shader` を作り直し: 小さな粒（2.5 cm のマスに 1 つ、落ちて育ち乾く、形は少し楕円、雨が強いほど早く入れ替わる）、流れる大きな粒（7 cm の筋、涙形で尾が上流、左右にふらつく、斜面ほど速い、後ろに乾いていく小粒の跡、通り道の小粒を拭う）。流れの向き = 面に沿った重力 ＋ 車の速度の空気（速度の 2 乗、約 70 km/h でフロントガラスの重力と釣り合う、`_NFX_CarAir` を車ごとに）。水平な面は流れず玉、速いと小粒が飛ぶ。見え方: 水滴の面の法線で屈折（1.33、0.6 m 先を画面から読む＝反転して見える）、縁の全反射の暗さ、空の映り込み、太陽のきらめき。注入を BeforePostProcess（優先度 −100、独自のガラスの後）へ。.ksm・バンドル（10:2x）インストール済み。ゲームで未確認。
-- **11-01 ユーザーの画像: 夜の雨で街灯とライトが霧の中で大きく白飛び** → 前の単位の修正の読み違い。CarX は太陽だけが小さい単位（約 π lux）で、ランプ・ヘッドライト・発光面は HDRP の現実の単位だった。それを全部小さいとみなして目の順応の下限を下げたため、現実の値の光が白飛びした。修正: 逆に太陽（と独自エンジンの空・月）を `Units.PhysicalScale` 倍して現実の日差しへ（`SunController.physical_`、NatureFX がオンのとき。`Restore` は必ずトラックの元の値へ戻す：Refresh が強くなった太陽を元の値として読むと再スキャンごとに 3 万倍が重なるため）。ヘッドライトの cd・MapLights の lm・露出の換算は元（現実の値のまま）に戻した。目の順応の下限・上限は現実の EV（移行 55 の −2 / 16 はそのまま）。フルリライトの空の光は G バッファの焼き込み（弱い太陽で焼いたライトマップ）ではなく HDRP のプローブ（= 独自の空、A3）× 拡散色 × 空の割合。画像の白い点は雨粒（星ではない、星は雲の透過率を掛けている）。.ksm インストール済み、バンドルは reload/naturefx-20261101-102655.bundle（エラーなし、コピー待ち）。ゲームで未確認。
-- **11-01 ユーザーの画像（夕方、車の横に大きな黄色いにじみと光条、白いひし形）**: (1) 独自のレンズフレアが車のランプを全方向の光源として扱い、照らされた路面やライトの縁の明るさを拾っていた → ランプごとに「カメラへ出す光」（スポットの円錐 × ヘッドライトの配光 `FlareBeam`）を掛ける（ParticleLighting の `_NFX_PLightColors/Dirs/Beams`）、しきい値 2 → 4、光源のまわりのにじみ 2.5e-4/0.012 → 6e-5/0.006。(2) 白いひし形 = ゲームのパーティクルの差し替えでアルファのないテクスチャが四角に → `GameParticles` がアルファの有無を調べ、ない場合は `_NFX_PTiles.z = 1` で明るさを被覆率に。.ksm インストール済み、バンドル reload/naturefx-20261101-103110.bundle（エラーなし、前回の照らし直しの修正も含む）はコピー待ち。ゲームで未確認。
-  - 10:3x にバンドル（103110）を本体へ。.ksm・DLL とそろった。
-- **11-01 ユーザー: 時刻の変更やトラックの読み込みでシーン読み込みのループ** → `GameDayNight` がゲームと綱引きしていたと推定（読み込みのあとゲームがレースの昼／夜を適用し直し、NatureFX がまた切り替える）。対策: 切り替えの間は 8 秒以上空ける、トラックの読み込み直後は 8 秒待つ、ゲームが自分で戻したら（期待した状態と違う）30 秒待つ、そのトラックで 3 回戻されたらゲームに任せる（状態の行とログに出す）。.ksm インストール済み、ゲームで未確認。
-- 11-01 ユーザー: Moon brightness を 0.001〜0.1 に → 対数目盛のスライダー（log10 で −3〜−1、下に倍率と地面の lux）、SunController でも 0.001〜0.1 に制限、移行 56 で 0.1（1 倍 = 月明かり約 2 lux なので 0.1 倍でほぼ現実の満月）。.ksm インストール済み、ゲームで未確認。
-- 11-01 ユーザーの画像（L2 ガレージの中が明るく床が青い、ネオンと GI の部屋が光らない）: 太陽を現実の明るさにしたことで、フルリライトの「残り」（主に HDRP の空の映り込み、HDRP は屋根の下でも青空を映す）が屋根の下で目立った → 残りに常に空の見える割合（ambientFactor）を掛ける（GI のときも）。ネオン・GI の色のにじみは昼の空の光より桁違いに弱いので、漏れが止まれば屋根の下で見えるはず。バンドル reload/naturefx-20261101-105210.bundle（エラーなし、コピー待ち）。ゲームで未確認。
-  - 10:5x にバンドル（105210）を本体へ。.ksm・DLL とそろった。
-- 11-01 ユーザーの画像（夜のネオンの小屋）: 床と球はピンクに染まっている（照らす処理は効いている）が、ネオンと看板のまわりのにじみが巨大 → 独自のブルームが 6 段を同じ重さで足していた。広い段ほど 0.55 倍ずつ弱く（`BloomFalloff`、Final で重みの合計で割る）。バンドルは reload/（コピー待ち）。
-- 11-01 ユーザー: 床がネオンの色に染まらない → 不具合: RTShadow の `Upsample` が結果を 0 以上に切り捨てていて、ランプの影（3）が運ぶ「NatureFX だけの光（発光面）が足す光」（負の値）が毎回消えていた。ランプの影だけ切り捨てない。バンドルは reload/ または本体（このビルドの出力を参照）。ゲームで未確認。
-- 11:23 にバンドル（111424: 発光面の光・ブルーム）を本体へ。.ksm（10:45）・DLL（10:04）とそろった。コミット 240d337 を push 済み。
-- **11-01 DLAA（NVIDIA DLSS）で HDRP の TAA を置き換え（ビルド済み・DLL 未インストール・ゲームで未確認）**: ユーザーの選択は「独自エンジンで DLAA から」。`Dlss.inl`（NGX の初期化、機能の作成、パック → 評価 → アンパック）、`DlssPack/Unpack.hlsl`、ブリッジの `PrepareDlss`/`UnpackDlss`、`NativeEngine.Dlss`、`Rendering/Dlaa.cs`（ジッター、TAA を None に、DLSS が動かなければ TAA に戻す）。PostPass の最初で実行。設定 `Dlaa`（移行 57 で on、Own post-processing のカードにスイッチ）。11:4x 時点でゲームが起動中のため、DLL（build/ 11:39）と nvngx_dlss.dll は未コピー。.ksm（11:41）は入った（古い DLL は features に dlss がないので TAA のまま）。バンドルは reload/naturefx-20261101-114330.bundle。確認すること: ジッターの符号（違うと細部が揺れる・ぼける）、空の動き（カメラから計算）、車の動き、Status 行。
-  - 11:45 に DLL・nvngx_dlss.dll・DLSS-LICENSE.txt・バンドル（114330）を本体へ。.ksm（11:41）とそろった。
-  - ユーザー: DLAA を外すと綺麗（DLAA の方が汚い）。症状は未確認。Developer に DLAA カード（ジッターの符号 4 通り、動き HDRP+カメラ/カメラのみ/なし、ジッター量）を追加。.ksm 11:51、バンドル reload/115257（起動後に Reload shaders）。
-  - ユーザーの画像: Status は DLAA at 1916x997（動いている）が輪郭がじゃぎじゃぎ → ジッターが絵に入っていない。HDRP は beginCameraRendering の前にカメラの行列を取るので、beginContextRendering / endContextRendering でずらすように変更（.ksm 再ビルド）。
-  - ユーザー: ジッター 1 で改善したが輪郭がじらじら（符号 4 通りどれも同じ）→ 動きベクトルを自前に: Dlaa がジッターなしの行列（今と前フレーム）を渡し、PrepareDlss がカメラの動きを計算、HDRP の動きはそれ自身の行列でのカメラ分を引いた残り（0.5 px 超）だけ足す。DLSS の MVJittered を外した（DLL 12:03 build/、未コピー: ゲーム起動中）。.ksm 再ビルド、バンドル reload/120447。
-  - DLL（12:03 ビルド）とバンドル（120447）を本体へコピー。.ksm とそろった。
-  - 揺れが直らない → Player.log に「_NFX_NativeTarget ... wasnt created with the UAV usage flag」: PostPass の source_ がランダム書き込みなしで、UnpackDlss の書き戻しが捨てられていた（DLSS の結果が一度も絵に出ていなかった）。enableRandomWrite: true に（.ksm 再ビルド）。
-  - ユーザー: DLAA で綺麗になった（確認済み）。既定のジッターの符号（-x -y、HDRP の DLSS と同じ）・動き（カメラ + 自分で動く物）のまま。次の候補: アップスケール（DLSS の品質モード、HDRP の動的解像度）、Ray Reconstruction。
-- **11-01 DLSS のアップスケール（ビルド・インストール済み 12:20、ゲームで未確認）**: ユーザー「アップスケールと Ray Reconstruction を」。設定 DlssQuality（0 DLAA、1 Quality 67%、2 Balanced 58%、3 Performance 50%、4 Ultra perf 33%）。アップスケール時: Dlaa が HDRP アセットの動的解像度（m_RenderPipelineSettings をリフレクションで、Software・TAAU・forceResolution・useMipBias）を有効にし、カメラを TAA・allowDynamicResolution に、HDRP の m_TemporalAAMaterial のシェーダーを NFX_Upscaled に差し替え（TAAU パスが _NFX_UpscaledFinal をそのまま描く。DoF 後の 2 回目の TAA は taaAntiFlicker を 0 にして 3.5 で見分け、入力を素通し）。ジッターは HDRP の taaJitter。PostPass は DLSS で表示解像度の fullSource_ へ、ブルーム・トーンも表示解像度の専用テクスチャ（_NFX_PostPlain=1 で _RTHandleScale を掛けない）で fullFinal_ へ。DlssEventData 56 バイト（出力バッファ・出力サイズ・品質）。次は Ray Reconstruction。
-  - ユーザー: Ultra perf. で DLSS 640x334 to 1916x997、ずれなし、GPU 使用率が大きく下がった（アップスケール確認済み）。
-- **11-01 DLSS Ray Reconstruction（ビルド・インストール済み、ゲームで未確認）**: 設定 DlssRayReconstruction（既定 off、DLSS の下にスイッチ）。RR 中は太陽の影（SIGMA・自前フィルターなし、Filter(blend 1, 0 段)）と反射（REBLUR・自前フィルターなし）を生のまま合成し、DLSS-RR がまとめてノイズ除去。環境光・GI・ランプの影は 1/4 解像度なので従来のまま。ガイド: NFX_SunExact の DlssGuides パス（拡散アルベド・specularFGD）を RTShadowPass が描く（ExactFrame/GuidesFrame）、法線と粗さは HDRP の法線バッファ（PrepareDlss で 2 つ目の uint4、粗さは色の alpha）。ネイティブは DlssPackGuides.hlsl と NGX_D3D12_CREATE/EVALUATE_DLSSD_EXT（Roughness packed、HW depth）、行列はジッターなしの worldToView と GPU 射影（列優先）。DlssEventData 192 バイト、NFX_Native_DlssCaps（-1 未初期化、1 SR、2 RR）、features に dlss-rr。nvngx_dlssd.dll も同梱。途中で PC が再起動したが、スクリプトの再適用で復旧。
-  - ユーザー: RR で動くが UI のちらつき・謎の光・がたつき、設定を何度か変えると画面がノイズに壊れた → Player.log: _NFX_DlssGuideDiffuse の次元違い（RR オフ時の代わりに Texture2D.blackTexture、カーネルは TEXTURE2D_X = 配列）で PrepareDlss ごと飛ばされ、DLSS が空のバッファを拡大していた。TextureXR.GetBlackTexture() に（.ksm 12:48）。UI のちらつき・謎の光・がたつきは切り分け待ち。
-  - ユーザー: RR オンで Quality/Balanced などにすると光のノイズと画面の揺れ。ジッターの符号を試している途中でゲームが落ちた（Player.log: Device Remove Reason 0x887a0006 = DXGI_ERROR_DEVICE_HUNG、VRAM は 4.7/11.2 GB で不足ではない）。対策: RR は DLAA のときだけ（アップスケール中は自動で通常の DLSS、Status に表示）、ガイドのバッファは一度確保したら使い回す（.ksm 12:54）。RR とアップスケールの組み合わせの原因は未解明。
-  - ユーザー: DLAA ＋ RR は問題なし、ノイズ等も出ない（確認済み）。残り: RR ＋ アップスケールの揺れ・光のノイズ・GPU ハングの原因調査。
-- **11-01 RR ＋ アップスケールの調査**: NGX のログを NFX_ngx.log（NFXNative.dll の隣、起動ごとに作り直し）へ（LoggingInfo、レベル ON）。Developer の DLAA カードに「Ray Reconstruction with upscaling (test)」（Dlaa.DevRayReconstructionUpscaling、保存しない）。DLL は build/ 12:59（ゲーム起動中で未コピー）、.ksm は入った。
-  - ユーザーのフォトモード比較（RR と従来）: RR だと床・タイヤの側面に白い粒（粗い面の反射のファイアフライ）。反射は RR でも REBLUR（鏡面は REBLUR でも生のまま）に戻した。RR が受け持つのは太陽の影だけ。.ksm 再ビルド済み、DLL（NGX ログ入り、build/ 12:59）はゲーム起動中で未コピー。
-  - 結論（ユーザーと合意）: RR はガラス（独自エンジンが後から描くので G-buffer のガイドに入らない）や粗い面にノイズが残り、DLAA より重い。NRD より軽く高画質にはならない → おすすめは NRD ＋ DLSS Quality、RR は既定オフのオプションとして残す。RR ＋ アップスケールの調査は保留。
-- **11-01 アップスケール時の動く影のノイズ**: ユーザー: Quality でバンパーの影が動くとノイズだらけ、DLAA では出ない、RR オフ。SIGMA オフ（自前フィルター）でも車の動きベクトルのパスのオン・オフでも変わらず → ノイズ除去ではない。切り分け用に Developer の DLAA カードへ「Upscale with HDRP's TAAU instead (test)」（Dlaa.DevHdrpTaau: 同じ低解像度を HDRP の TAAU で拡大、PostPass は DLSS を使わない）。.ksm 13:22。
-  - ユーザー: TAAU のテストでも同じノイズ → DLSS ではなく低い解像度のせい。対策: SunShadow.hlsl を 1 ピクセル複数レイに（Flags の bit 8..10 = 本数 - 1、平均。x 見えた割合、y 遮った割合 × 距離＝ガラスと同じ表し方）。Dlaa がアップスケール中に NativeEngine.SunSamples = round(1/share^2)（Quality 2、Balanced 3、Performance 以下 4）。.ksm 済み、DLL（build/ 13:30）は起動中で未コピー、NativeShaders/SunShadow.cso は入った。
-  - ユーザー: UI のちらつき（メニューと F8 のウィンドウが一瞬消える）が RR を入れた頃から稀に。今は起きていない。IMGUI も消えるので、何かがフレームの最後に画面全体を描いている可能性。再現条件待ち。
-- **11-01 設定画面の整理（.ksm・DLL インストール済み、ゲームで未確認）**: サイドバー: GENERAL（Overview）/ LIGHT & SKY（Sun & time, Sky & fog, Lighting & shadows, Ambient light & GI, Reflections & glass）/ CAMERA（Exposure & tone, DLSS, Lens & eye）/ WORLD（Weather, Nature, Road, Cars, Map）/ ADVANCED（Ray tracing, Shader rebuild, Settings, Developer）。サイドバーはスクロール可。移動: ヘッドライト・車の塗装→Cars、レンズ・夜の目・被写界深度→Lens & eye、DLSS→DLSS、自前のガラス→Reflections & glass、光の筋と HDRP の霧→Sky & fog、ゲームのパーティクルと HDRP の影→Lighting & shadows、レイトレースのエンジン設定とコスト計測→Ray tracing、デバッグ表示（影だけ・正確な太陽光・GI だけ・What is this・履歴リセット）→Developer。重複を削除（Shader rebuild のタイヤ痕・路面・路面の摩耗→Road、Settings のシェーダー置き換え）。雪の深さは Rain and snow に。DLL（NGX ログ・影の複数レイ）も同時に入れた。
-- **11-01 UI のちらつき**: 起動直後から、DLSS の設定は無関係。ユーザー: Every material（全置き換え）をオフにすると直る。メニューで置き換えていたのは Assetto Corsa Showroom（KSL のガレージ）・IconGenerator シーン（アイコン用の床・照明 Lamps/Cube 60 個・地面）・Kino.LiveryGroups.Background。IconGenerator シーンと Kino.LiveryGroups を置き換えの対象外に（MaterialReplacer.Classify、理由 menu pictures）。.ksm 再ビルド、ゲームで未確認。
-  - ユーザー: Every material オンでもちらつかない（確認済み）。
-- ユーザー: アップスケール中の動く影のノイズも大丈夫（影の複数レイ、確認済み）。
-- **11-01 UI とモデルのちらつき（再発）**: NatureFX オフで収まる。DLSS オフで起動すると出ない、DLSS オンで起動すると出る（途中で DLSS を切っても収まらない、とユーザー）。NVIDIA App・コントロールパネルは入っていない（ドライバーのフレーム生成ではない）。NFX_ngx.log: 機能の作成は起動時の 1 回だけ（RR）、警告なし。調査用のログを追加: Dlaa の「DLSS diagnostics」（各コンテキストが描くカメラ、Camera.main の切り替わり、ジッターしたのに DLSS を通らなかったフレーム、メイン以外のカメラでの自前の後処理）。NGX ログは共有読み取りで開くように。.ksm・DLL インストール済み。
-  - 調査結果: 診断ログは異常なし（カメラは GarageCamera だけ、ジッターの抜けなし）、NGX ログも警告なし。ユーザー: 崩れ方は UI のボタンなどが一部消える・黒や別の色（画面全体が古い画になるのではない）。DLSS オフで起動 → 途中でオン → ちらつかない（トラック往復でも出ない）。DLSS オンで起動したときだけ出て、そのまま残る。→ ゲームの起動中に DLSS（NGX の初期化・ジッター・TAA オフ）を始めると、ゲームの初期化の何かが狂う。仕組みは未解明。対策: Dlaa.Settled（独自エンジンのシーンが準備できてから 10 秒、レイトレースなしなら起動から 60 秒）まで DLSS を始めない。.ksm 再ビルド、ゲームで未確認。
-  - ユーザー: DLSS オンのまま起動してもちらつかない（確認済み）。
-- **11-01 車の動きベクトルと、自前の被写界深度・モーションブラー（.ksm・バンドル インストール済み、ゲームで未確認）**: (1) RayTracingScene.SetCarMotionVectors が動く車のレンダラーの motionVectorGenerationMode も Object に（元の値は保存して戻す）、NRD だけでなく DLSS 使用中も。(2) NFX_Post に MotionBlur（動きに沿って 16 サンプル、シャッターは 1 フレームに対する割合、手前でほとんど動かない面は除外）と DepthOfField（薄いレンズの CoC: 24 mm センサー・FOV からの焦点距離・F 値・ピント距離 = LensEffects.FocusDistance、40 タップ、手前のぼけは後ろに広がり、奥のぼけは手前に広がらない）。動きはブリッジの PrepareMotion（DLSS が走ったフレームはその バッファのジッターなしの動き、ほかは HDRP の動きベクトル）。順番は DLSS → モーションブラー → 被写界深度 → 露出・ブルーム・トーン。HDRP のモーションブラーと被写界深度はカメラのフレーム設定で止める（PostProcess.HdrpBlur、元に戻す）。設定 MotionBlur（0.5）・DofFStop（2.8）、移行 58、Lens & eye ページ。
-- **11-01 シェーダー置き換えの段階 3・4（.ksm・バンドル インストール済み、ゲームで未確認）**: 段階 3: GameParticles が加算合成のパーティクル（_BlendMode 1、DstBlend One、名前 additive/glow/fire/flame/spark。premultiplied は除く）も NFX_Particle のモード 7（テクスチャの光 × 色 × _Emission cd/m² × 露出、加算、霧では減光のみ）に。明るさ: 火花 20000、炎・排気 5000、ほか 1500 cd/m²。段階 4: 不透明な Unlit（看板・画面）を LitAccumulation に置き換え、GenericTranslator が元の色・テクスチャを 250 cd/m² の発光に（地の色は 4%）。DerivedLitKeywords に _EMISSIVE_COLOR_MAP、NatureFX_variants.txt に発光の変種を追加（GBuffer Fragment 1824→2016）。透明な物（ガーランド等）は対象外: 画面に深度がなく、レイトレースの影を後から合成できない（シェーダー内でレイが要る）。
-  - ユーザー: 車の動きベクトル・モーションブラー・被写界深度・段階 3・4、一旦 OK（確認済み）。
-- **11-01 透明な物にレイトレースの太陽の影（DLL インストール済み、.ksm 済み、バンドルはビルド中、ゲームで未確認）**: (1) 独自エンジンのトレースの種類 20 SunMap（SunMap.hlsl）: 太陽の方向に垂直な格子（1024×1024、20 cm、約 200 m）の各マスから、太陽の方向 300 m 上から下へ Closest（アルファテストあり）の距離を書く。SunShadowMap.cs が 1 フレーム 64 行ずつ裏の地図へ（16 フレームで 1 枚）、できたら表と入れ替え、次の地図はそのときのカメラ（16 マス単位にスナップ）と太陽で。グローバル _NFX_SunMap（float）、_NFX_SunMapOrigin（中心、w マスの大きさ。0 = なし）、_NFX_SunMapDir（太陽、w マス数）、_NFX_SunMapParams（x 300 m、y バイアス 0.2 m）。features に sun-map。(2) GenerateNatureFXShaders が HDRP の ShaderPassForward.hlsl をコピーして、ライトループの直後に NFX_TransparentSunShadow（NFX_TransparentShadow.hlsl: 4 マスの判定の双線形で見える割合、太陽の DirectionalLight だけ ShadeSurface_Directional で計算し直し、影の分を引く）を _SURFACE_TYPE_TRANSPARENT のときだけ入れた Generated/NFX_ShaderPassForward.hlsl を作り、NatureFX/* の Forward パスがそれを使う。(3) 置き換え: HDRP の Shader Graph の透明（_SurfaceType がある、glass・water 以外）も LitAccumulation の透明に（_SurfaceType・_BlendMode などを引き継ぎ、キーワード _SURFACE_TYPE_TRANSPARENT・_ENABLE_FOG_ON_TRANSPARENT）。設定 RTTransparentShadows（移行 59、Lighting & shadows に状態表示）。
-  - バンドルも 17:33 にインストール（Forward パスの差し替えはエラーなしでコンパイル）。
-  - ユーザー: 透明な物の影、大丈夫（確認済み）。
-- 11-01 ユーザー: シェーダー置き換えの段階 2（車）は一旦スキップ。RR ＋ アップスケールの調査もやめた。
-- **11-01 ヘッドライト（ユーザーの画像: 夜の峠で手前の路面が白飛び、地面がぎらぎら、白い靄、走り出すと設定がリセット）**: (1) 露出: MeteredEV で明るい上位 10% が中間の灰より 3 段を超えないように（暗い夜の画面で露出が下限まで開き、照らされた路面が白飛びしていた）。(2) ロービームの手前の光: fill の減り方を 9° から 3.5° に（8° 下で最大の約 5%）、C# のクッキー・NFXCommon・NFX_FogCommon・NFX_Post の 4 か所。(3) ライトの探索を 5 秒から 1 秒ごとに（走り出すときにゲームがライトを作り直す・有効にする間、ゲーム自身のビームが見えていた想定）。.ksm 済み、DLL は build/ 18:02（起動中で未コピー）、NativeShaders は入れ済み、バンドルは reload へビルド中。
-  - DLL（18:02）とバンドル（180401）を本体へ。.ksm とそろった。
-  - ユーザー: 視点変更（走り出し？）でヘッドライトが元に戻る、手前はまだ白飛び、物理にのっとった実装に → 配光を ECE R149 class B の測定点に近づけた: 山を 1.2° 下に（上側の幅 1.2°、下側 2.2°）、手前の fill 0.25（4 か所）。露出の上限を 2 段に。車体（Rigidbody）の子でないスポットライトも、自分の車の 8 m 以内で同じ向きなら車のヘッドライトとして扱い、ログに名前（視点ごとのライトの想定、未確認）。.ksm 済み、DLL build/ 18:12 未コピー、NativeShaders 済み、バンドル reload/181427。
-  - ユーザー: ハイビームや HID などに切り替えても、しばらくすると元に戻る。白飛びと地面のギラギラも残る → Holds が色温度・色・届く距離も見て、変わっていればかけ直す（ゲームが何を書き換えたかをログに 12 回まで: Headlights: the game set ... again）。ギラギラはランプごとの影のマスク（Per-lamp shadows、1 ピクセル 1 本のレイ）の可能性 → ユーザーにオフで試してもらう。白飛びは露出の表示を見てもらう。
-  - ユーザー: Per-lamp shadows オフでもギラギラは変わらない。白飛びの場面の露出は -0.02 EV100（下限 0 EV に張り付き）→ 照らされた路面が画面の 10% 未満で、上位 10% の基準が効いていなかった。上位 3% が中間の灰より 2.5 段を超えないように。ギラギラは反射（ざらついた路面の 1 本のレイがヘッドライトのレンズに当たるファイアフライ）を疑う → 反射オフで試してもらう。
-  - DLL（18:12）とバンドル（181427: ECE 配光）を本体へ。.ksm 18:29（上位 3% の露出）とそろった。ユーザー: ギラギラは白飛びが直れば消えるはず。
-  - ユーザー: かなり良い。残り: 白い靄（霧はないので不要）、LED・HID の光の視差（カットオフの色のにじみと解釈）、色温度を変えたい → (1) FogVolume: ランプの光は天気の霧・箱・煙では全部、遠景のかすみ（トラックの短い霧距離）は澄んだ空気（MapFog.LampAirSigma 1e-4、天気の霧なら無制限、ReflParams.w）までしか散らない。(2) クッキー: HID と LED（プロジェクター）でカットオフの上に青紫、下にほのかな琥珀（HID 0.3、LED 0.18）。(3) 設定 HeadlightKelvin（0 = 種類の標準、2700〜8000 K、Cars のヘッドライト）。.ksm 済み、DLL build/ 未コピー（起動中）、NativeShaders/FogVolume.cso 済み（Reload shaders で反映）。
-  - ユーザー: Track 拡張機能に、接地のなじませ・高さを使った混ぜ方・頂点カラーで塗る汚れ・細かいもの（デトリタス）の散布を → 地面の地図（独自エンジンのトレース種別 21 `GroundMap.hlsl`、機能名 `ground-map`）。インスタンスマスクに 0x04（地面: terrain か、動かない幅 6 m 以上の平たいメッシュ）と 0x08（路面: 名前に road/asphalt/tarmac）を足し、真下へのレイで 1024×1024 セル（12.5 cm、128 m）を 1 フレーム 64 行ずつ。`Rendering/GroundMap.cs` が `_NFX_GroundMap`（セルごとに色+高さ、法線+種類）を配る。シェーダー `NFX_Ground.hlsl`: (1) NFX_ApplyGroundBlend（`_NFX_Surface.w`、0 = マップの `[defaults] groundblend`、< 0 で切る）(2) NFX_HeightFill（`NFXSurface.height`。`_NFX_Surface2.x` で高さマップ、なければ明るさ×2.2。苔・汚れ・ほこり・落ち葉・雪）(3) NFX_ApplyPaint（`Map/MapPaint.cs`、プロファイルの `[paint]` を CPU で 512² のテクスチャに描く。頂点カラーの代わりに位置で指定）。(4) `Map/Detritus.cs`: ブリッジの `ScatterDetritus` が路面と地面の境目に置き、読み戻して種類ごとに 1 つのメッシュ（石・葉・小枝の手作りの形）、LitAccumulation で描く。設定 MapGroundDetail・Detritus（移行 60）、F8 > Map > Ground detail。C# はビルド済み、DLL は build/（起動中で未コピー）、バンドルもビルド。未確認。
-  - ユーザー: 草のつなぎ目が気になる → (1) 地面の地図に草木の覆い: インスタンスマスク 0x10（抜きか風で揺れる物、NFX_FOLIAGE_MASK）、GroundMap.hlsl が地面の上 3 m 以内で草木に当たったセルの kind に +0.4（機能名 ground-cover）。NFX_Ground.hlsl NFX_GroundCover（0.35 m と 0.8 m の 2 重の輪）→ NFX_ApplyGroundCover: 草むらの下と周りの地面を暗く湿った落ち葉の色に。(2) NFX_ApplyFoliageFoot: 抜きのある草木のカードの地面から 35 cm を暗く地面の色へ、下 7 cm をばらばらに消す（全パスで同じ clip）。
-  - 藪（ShrubRenderer、docs/map-authoring.md 5.6）: nocol_nfx_shrubproto_<名前>（nfxproto_lod0 / cloud / impostor）と nocol_nfx_shrub_<名前+名前>。スキャンは近い 40 本まで、雲 3 倍まで、インポスター 300 m。動きベクトルは Camera（Object だと画面全体が流れた）、HDRP の影は切る。独自エンジンには板の束を全部。焼き: tools/kino_sdk/bake_shrub_lods.py（Blender 5.2）→ shrubs_to_png.py。SDK: NfxShrubs.cs、テストマップ区画 N4。NFX_Impostor.hlsl（_NFX_Impostor）。
-  - フレーム落ち: Detritus は 1 つのメッシュに組み直していた（24 m ごとに数百万頂点）→ インスタンス描画、1 フレーム 4000 個ずつ。MapPaint の描き直しは別スレッド。
-  - ヘッドライト: 手前の塊と横の縁 → fill を /2.0（8° 下で 2 % 未満）、横 h/22、±38° で 0 に、カットオフの縁 0.5°（4 か所）。
+| 外部の依存物・素材 | `%USERPROFILE%\NatureFX-Deps`（NRD、DLSS、Agility SDK 1.619、dxc 1.9、Poly Haven の素材） |

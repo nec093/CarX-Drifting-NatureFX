@@ -4,8 +4,8 @@ using UnityEngine.Rendering;
 namespace NatureFX.Rendering {
 	// The ground seen from above around the camera (NFXNative GroundMap.hlsl): Cells x Cells of CellSize m, each its
 	// colour, height, normal and kind (road or ground), from one ray straight down onto the ground instances (terrain,
-	// wide flat meshes; NativeEngine flags them). What the map's ground blend (objects take the ground's colour where
-	// they stand in it), painted dirt and debris read (NFX_Ground.hlsl, Detritus). Traced a band of rows a frame into
+	// wide flat meshes; NativeEngine flags them). What the foot of the plants' cards reads (NFX_Ground.hlsl
+	// NFX_ApplyFoliageFoot: shaded and the ground's colour where they stand in it). Traced a band of rows a frame into
 	// the back map; when it is whole the maps swap and the next one starts where the camera is then.
 	public static class GroundMap {
 		public const int Cells = 1024;
@@ -15,7 +15,6 @@ namespace NatureFX.Rendering {
 
 		private static readonly int MapId = Shader.PropertyToID("_NFX_GroundMap");
 		private static readonly int ParamsId = Shader.PropertyToID("_NFX_GroundMapParams");
-		private static readonly int BlendId = Shader.PropertyToID("_NFX_GroundBlendDefault");
 
 		private static GraphicsBuffer front_, back_;
 		private static Vector4 frontParams_, backOrigin_;
@@ -28,9 +27,8 @@ namespace NatureFX.Rendering {
 		public static int Generation { get; private set; }
 		public static string Status { get; private set; } = "off";
 
-		// Shadow pass, after NativeEngine.BeginFrame: the next band of rows, and the finished map for this frame.
-		// blend: the ground blend's height (m) where a material does not say
-		public static void Update(CommandBuffer cmd, Camera cam, bool on, float blend) {
+		// Shadow pass, after NativeEngine.BeginFrame: the next band of rows, and the finished map for this frame
+		public static void Update(CommandBuffer cmd, Camera cam, bool on) {
 			if (!on || !NativeEngine.Supports("ground-map")) {
 				cmd.SetGlobalVector(ParamsId, Vector4.zero);
 				frontParams_ = Vector4.zero;
@@ -63,9 +61,8 @@ namespace NatureFX.Rendering {
 			}
 			cmd.SetGlobalBuffer(MapId, front_);
 			cmd.SetGlobalVector(ParamsId, frontParams_);
-			cmd.SetGlobalFloat(BlendId, blend);
 			Status = frontParams_.w > 0.0f
-				? $"{Cells}x{Cells} cells of {CellSize * 100.0f:0.#} cm ({Cells * CellSize:0} m) around the camera, ground blend {blend:0.00} m"
+				? $"{Cells}x{Cells} cells of {CellSize * 100.0f:0.#} cm ({Cells * CellSize:0} m) around the camera"
 				: "tracing the first map";
 		}
 

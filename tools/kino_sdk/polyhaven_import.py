@@ -1,8 +1,8 @@
-# Prepares the Poly Haven CC0 assets of the test map (docs/testmap-assets.md) for the Kino Content SDK, which has no
+# Prepares Poly Haven CC0 assets for the Kino Content SDK, which has no
 # glTF importer: every glTF node with a mesh becomes an OBJ (its own local geometry, one group per material), the
 # textures become what HDRP/Lit reads (base colour with the plants' alpha cut in, OpenGL normal maps as they are, and a
 # mask map: R metal, G AO, B detail, A smoothness from Poly Haven's ARM or AO + roughness), and nfx_assets.json lists
-# it all for NfxDataTestMap.cs.
+# it all for the SDK's map scripts.
 #
 #   python tools/kino_sdk/polyhaven_import.py <polyhaven download folder> <SDK>/Assets/Content/NfxAssets
 import json, os, shutil, struct, sys

@@ -4,9 +4,9 @@
 // here the ray is traced and what it hits is shaded: from the camera colour where the hit is on screen and not
 // glossy, else with sky (occluded), sun (with a GGX highlight), the local lights (shadowed) and, for smooth hits,
 // one more bounce.
-// Surface: 3 float4 per pixel (origin xyz, GGX alpha (< 0: nothing to trace); normal xyz, packed full resolution
-// pixel; Fresnel rgb, exposure multiplier). Output: 2 float4 per pixel (Fresnel * radiance rgb (pre-exposed),
-// luminance of the Fresnel; distance to the reflected point (0: nothing reflected), unused...).
+// Surface: 2 uint4 per pixel (NfxReflSurface in NfxPack.hlsli: origin, pixel; normal, Fresnel, GGX alpha (< 0:
+// nothing to trace), exposure multiplier). Output: a uint4 per pixel (NfxPackReflResult: Fresnel * radiance rgb
+// (pre-exposed) and the luminance of the Fresnel as halves; the distance to the reflected point (0: nothing reflected)).
 // Compiled into Reflection.h.
 #include "NFXReflect.hlsli"
 
@@ -15,20 +15,18 @@ NFX_ENTRY(id)
     if (id.x >= Width || id.y >= Height)
         return;
     uint index = id.y * Width + id.x;
-    float4 a = asfloat(Surface.Load4(index * 48));
-    float4 b = asfloat(Surface.Load4(index * 48 + 16));
-    float4 c = asfloat(Surface.Load4(index * 48 + 32));
+    NfxReflSurface surface = NfxUnpackReflSurface(Surface.Load4(index * 32), Surface.Load4(index * 32 + 16));
     float4 result = 0;
     float dist = 0.0;
-    if (a.w >= 0.0)
+    if (surface.alpha >= 0.0)
     {
-        float3 origin = a.xyz;
-        float3 n = b.xyz;
-        uint2 pixel = UnpackPixel(b.w);
-        float3 fresnel = c.rgb;
-        float exposure = c.w;
+        float3 origin = surface.origin;
+        float3 n = surface.normal;
+        uint2 pixel = UnpackPixel(asfloat(surface.pixel));
+        float3 fresnel = surface.fresnel;
+        float exposure = surface.exposure;
         float3 V = normalize(Camera - origin);
-        float alpha = max(a.w, 0.002);
+        float alpha = max(surface.alpha, 0.002);
         float3 H;
         // a wet road: the water film over the bumps of the asphalt stretches every reflection along the view (the
         // long streaks of lamps and headlights at night), and keeps it narrow across
@@ -100,6 +98,5 @@ NFX_ENTRY(id)
             dist = hit.t;
         }
     }
-    Output.Store4(index * 32, asuint(result));
-    Output.Store4(index * 32 + 16, asuint(float4(dist, 0.0, 0.0, 0.0)));
+    Output.Store4(index * 16, NfxPackReflResult(result, dist));
 }

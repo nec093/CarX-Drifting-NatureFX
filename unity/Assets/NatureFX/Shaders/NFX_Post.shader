@@ -35,10 +35,14 @@ Shader "Hidden/NatureFX/Post"
     float4 _NFX_PostTargetSize;     // the target: xy size, zw 1 / size
     float4 _NFX_PostParams;         // x bloom share, y exposure compensation (EV), z contrast (-1..1), w saturation (-1..1)
     float4 _NFX_PostMode;           // x tone curve: 0 ACES, 1 Neutral, 2 AgX, 3 none; y bloom levels
+    float4 _NFX_PostWhite;          // rgb the eye's white balance (gains on the scene's light, luminance kept)
 
     float _NFX_PostPlain;           // 1: the textures are the display resolution's own (DLSS upscaling), not scaled RTHandles
 
-    #define SampleRT(tex, uv) SAMPLE_TEXTURE2D_X_LOD(tex, s_linear_clamp_sampler, (uv) * (_NFX_PostPlain > 0.5 ? float2(1.0, 1.0) : _RTHandleScale.xy), 0)
+    // kept a texel inside the picture: an RTHandle is larger than what is drawn in it, and a read past the edge (motion
+    // blur, the bloom's wide taps) took whatever an earlier, larger frame left there (bright smears along the edges at
+    // night when the view turned). _NFX_PostSourceSize is the texture read (PostPass sets it before each pass)
+    #define SampleRT(tex, uv) SAMPLE_TEXTURE2D_X_LOD(tex, s_linear_clamp_sampler, clamp(uv, _NFX_PostSourceSize.zw, 1.0 - _NFX_PostSourceSize.zw) * (_NFX_PostPlain > 0.5 ? float2(1.0, 1.0) : _RTHandleScale.xy), 0)
 
     float2 TargetUV(Varyings v)
     {
@@ -46,11 +50,15 @@ Shader "Hidden/NatureFX/Post"
     }
 
     // --- meter: each grid cell the mean of 4 x 4 samples' log2 luminance (cd/m²)
+    // x the cell's mean log2 luminance; yzw the mean colour of what is not sky (cd/m²), 0 where all is sky: the light the
+    // surfaces return, which the eye's white balance adapts to (PostProcess.WhiteBalance)
     float4 Meter(Varyings v) : SV_Target
     {
         float2 uv0 = (floor(v.positionCS.xy)) * _NFX_PostTargetSize.zw;
         float exposure = max(GetCurrentExposureMultiplier(), 1e-10);
         float sum = 0.0;
+        float3 surfaces = 0.0;
+        float count = 0.0;
         for (int y = 0; y < 4; ++y)
         {
             for (int x = 0; x < 4; ++x)
@@ -59,9 +67,15 @@ Shader "Hidden/NatureFX/Post"
                 float3 c = SampleRT(_NFX_PostSource, uv).rgb;
                 float L = dot(c, float3(0.2126, 0.7152, 0.0722)) / exposure;
                 sum += log2(max(L, 1e-5));
+                uint2 px = min((uint2)(saturate(uv) * _ScreenSize.xy), (uint2)_ScreenSize.xy - 1);
+                if (LoadCameraDepth(px) != UNITY_RAW_FAR_CLIP_VALUE && all(isfinite(c)))
+                {
+                    surfaces += max(c, 0.0) / exposure;
+                    count += 1.0;
+                }
             }
         }
-        return float4(sum / 16.0, 0.0, 0.0, 1.0);
+        return float4(sum / 16.0, count > 0.0 ? surfaces / count : (float3)0.0);
     }
 
     // --- bloom: 13 tap down (Jimenez 2014); the first level weights by 1 / (1 + luma) (Karis) against fireflies
@@ -154,8 +168,8 @@ Shader "Hidden/NatureFX/Post"
         float below = cut - a;
         float edge = saturate(below / 0.5 + 0.5);
         float spread = a < -1.2 ? 2.2 : 1.2; // the peak 1.2° down: slower below it than above
-        float hotSpot = exp(-(h / 9.0) * (h / 9.0) - ((a + 1.2) / spread) * ((a + 1.2) / spread));
-        float fill = exp(-(h / 22.0) * (h / 22.0)) * exp(-max(0.0, below - 1.0) / 2.0) * 0.25 * saturate((38.0 - sqrt(h * h + a * a)) / 8.0);
+        float hotSpot = exp(-(h / 12.0) * (h / 12.0) - ((a + 1.2) / spread) * ((a + 1.2) / spread));
+        float fill = exp(-(h / 34.0) * (h / 34.0)) * exp(-max(0.0, below - 1.0) / 2.0) * 0.3 * saturate((53.0 - sqrt(h * h + a * a)) / 10.0);
         return lerp(0.015, min(1.0, hotSpot + fill), edge);
     }
 
@@ -332,6 +346,9 @@ Shader "Hidden/NatureFX/Post"
         if (_NFX_PostFlare.w > 0.5)
             c += LensFlare(uv);
         c = max(c, 0.0) * exp2(_NFX_PostParams.y);
+        // the eye's white balance: the light around taken partly as white (sunset, shade under a blue sky, lamps)
+        if (any(_NFX_PostWhite.rgb > 0.0))
+            c *= _NFX_PostWhite.rgb;
         int mode = (int)_NFX_PostMode.x;
         float3 d = mode == 0 ? AcesFitted(c) : mode == 1 ? PbrNeutral(c) : mode == 2 ? AgX(c) : saturate(c);
         // contrast about mid grey (in a perceptual space), then saturation
@@ -447,6 +464,60 @@ Shader "Hidden/NatureFX/Post"
         return w > 1e-3 ? float4(sum / w, 1.0) : float4(c0, 1.0);
     }
 
+    // --- the own TAA (Dlaa.OwnTaa: the camera jittered, HDRP's TAA off): this frame's picture against its history
+    // reprojected by the motion vectors, the history held to this frame's 3 x 3 neighbourhood (mean and spread in
+    // YCoCg, Salvi's variance clipping), blended with weights that tame bright pixels (Karis)
+    TEXTURE2D_X(_NFX_PostHistory);
+    float4 _NFX_PostTaa;            // x 1 the history is valid, yz this frame's jitter (uv)
+
+    float3 ToYCoCg(float3 c)
+    {
+        return float3(dot(c, float3(0.25, 0.5, 0.25)), dot(c, float3(0.5, 0.0, -0.5)), dot(c, float3(-0.25, 0.5, -0.25)));
+    }
+
+    float3 FromYCoCg(float3 c)
+    {
+        return float3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z);
+    }
+
+    float4 Taa(Varyings v) : SV_Target
+    {
+        float2 uv = TargetUV(v);
+        float2 texel = _NFX_PostSourceSize.zw;
+        float3 current = max(SampleRT(_NFX_PostSource, uv).rgb, 0.0);
+        float3 m1 = 0.0, m2 = 0.0;
+        [unroll]
+        for (int y = -1; y <= 1; ++y)
+        {
+            [unroll]
+            for (int x = -1; x <= 1; ++x)
+            {
+                float3 s = ToYCoCg(max(SampleRT(_NFX_PostSource, uv + float2(x, y) * texel).rgb, 0.0));
+                m1 += s;
+                m2 += s * s;
+            }
+        }
+        m1 /= 9.0;
+        float3 sigma = sqrt(max(m2 / 9.0 - m1 * m1, 0.0));
+        float2 previous = uv + MotionAt(uv);
+        if (_NFX_PostTaa.x < 0.5 || any(previous < 0.0) || any(previous > 1.0))
+            return float4(current, 1.0);
+        float3 history = ToYCoCg(max(SampleRT(_NFX_PostHistory, previous).rgb, 0.0));
+        // clipped towards the neighbourhood's mean into its box (mean +- 1.25 sigma)
+        float3 lo = m1 - 1.25 * sigma, hi = m1 + 1.25 * sigma;
+        float3 centre = 0.5 * (hi + lo), extent = 0.5 * (hi - lo) + 1e-5;
+        float3 offset = history - centre;
+        float3 units = abs(offset / extent);
+        float k = max(units.x, max(units.y, units.z));
+        history = FromYCoCg(k > 1.0 ? centre + offset / k : history);
+        // a moving picture keeps less of its history (less ghosting), a still one more (smoother)
+        float speed = length(MotionAt(uv) * _NFX_PostSourceSize.xy);
+        float keep = lerp(0.92, 0.8, saturate(speed / 8.0));
+        float wc = (1.0 - keep) / (1.0 + dot(current, float3(0.2126, 0.7152, 0.0722)));
+        float wh = keep / (1.0 + dot(history, float3(0.2126, 0.7152, 0.0722)));
+        return float4((current * wc + history * wh) / (wc + wh), 1.0);
+    }
+
     ENDHLSL
 
     SubShader
@@ -481,6 +552,10 @@ Shader "Hidden/NatureFX/Post"
         Pass { Name "DepthOfField" HLSLPROGRAM
             #pragma vertex Vert
             #pragma fragment DepthOfField
+            ENDHLSL }
+        Pass { Name "Taa" HLSLPROGRAM
+            #pragma vertex Vert
+            #pragma fragment Taa
             ENDHLSL }
 
     }

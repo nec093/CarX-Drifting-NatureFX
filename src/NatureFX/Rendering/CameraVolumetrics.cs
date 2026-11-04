@@ -11,6 +11,8 @@ namespace NatureFX.Rendering {
 	public class CameraVolumetrics {
 		private readonly FrameSettingsField field_;
 		private readonly string what_;
+		private readonly bool value_;  // what the field is set to while needed: on (an effect NatureFX needs), or off (one
+		                               // the own engine has replaced, HDRP need not run it)
 		private Camera camera_;
 		private bool overridden_;
 		private bool hadMaskBit_;
@@ -19,9 +21,10 @@ namespace NatureFX.Rendering {
 		private static int active_;
 		private static bool hadCustom_; // the game's own value, from before the first override
 
-		public CameraVolumetrics(FrameSettingsField field, string what) {
+		public CameraVolumetrics(FrameSettingsField field, string what, bool value = true) {
 			field_ = field;
 			what_ = what;
+			value_ = value;
 		}
 
 		// what the camera does now, for the Map tab
@@ -37,7 +40,7 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			bool on = HDCamera.GetOrCreate(camera_).frameSettings.IsEnabled(field_);
-			if (needed && !on && !overridden_) {
+			if (needed && on != value_ && !overridden_) {
 				var data = camera_.GetComponent<HDAdditionalCameraData>();
 				if (data == null) {
 					State = "camera has no HDRP data";
@@ -50,14 +53,15 @@ namespace NatureFX.Rendering {
 				hadValue_ = data.renderingPathCustomFrameSettings.IsEnabled(field_);
 				data.customRenderingSettings = true;
 				data.renderingPathCustomFrameSettingsOverrideMask.mask[(uint)field_] = true;
-				data.renderingPathCustomFrameSettings.SetEnabled(field_, true);
+				data.renderingPathCustomFrameSettings.SetEnabled(field_, value_);
 				overridden_ = true;
 				++active_;
-				Kino.Log.Info($"[NatureFX] The game camera had {field_} off: switched on for {what_}");
+				Kino.Log.Info(value_ ? $"[NatureFX] The game camera had {field_} off: switched on for {what_}"
+				                     : $"[NatureFX] {field_} off on the game camera: {what_}");
 			} else if (!needed && overridden_) {
 				Restore();
 			}
-			State = overridden_ ? $"{field_} on (switched on by NatureFX)" : on ? $"{field_} on" : $"{field_} off";
+			State = overridden_ ? $"{field_} {(value_ ? "on" : "off")} (by NatureFX: {what_})" : on ? $"{field_} on" : $"{field_} off";
 		}
 
 		public void Restore() {

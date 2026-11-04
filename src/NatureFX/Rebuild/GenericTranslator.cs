@@ -1,7 +1,7 @@
 using UnityEngine;
 
 namespace NatureFX.Rebuild {
-	// The catch-all of the shader rebuild (docs/shader-rebuild-plan.md, stage 0): any game material the specific
+	// The catch-all of the shader rebuild (stage 0): any game material the specific
 	// translators do not know becomes a NatureFX Lit material, its colour map, tint, normal map, metalness,
 	// smoothness, alpha clip and emission found by the usual property names. HDRP/Lit sources already use the
 	// target's names and only change shader.
@@ -57,7 +57,12 @@ namespace NatureFX.Rebuild {
 			} else if (src.TryFloat(out float roughness, "_Roughness")) {
 				m.SetFloat("_Smoothness", Mathf.Clamp01(1.0f - roughness));
 			} else if (!litNames) {
-				m.SetFloat("_Smoothness", 0.3f);
+				// a see-through surface whose shader names no smoothness is a pane (shop windows, a Shader Graph glass):
+				// polished, as the ray tracing reads such glass. 0.3 made it frosted: the own glass blurred all behind it
+				// (the showroom's windows after a reload, once the scene's proxies were made from the switched material)
+				bool seeThrough = src.RenderQueue > (int)UnityEngine.Rendering.RenderQueue.GeometryLast
+				                  || src.TryFloat(out float surfaceType, "_SurfaceType") && surfaceType > 0.5f;
+				m.SetFloat("_Smoothness", seeThrough ? 0.95f : 0.3f);
 			}
 
 			// a transparent HDRP Shader Graph: its surface type and blend, as HDRP/Lit names them (ValidateMaterial then

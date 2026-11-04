@@ -18,11 +18,11 @@ namespace NatureFX.Rendering {
 		private RTHandle color_;
 
 		protected override void Setup(ScriptableRenderContext renderContext, CommandBuffer cmd) {
-			color_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension,
-				colorFormat: GraphicsFormat.R16G16B16A16_SFloat, useDynamicScale: true, name: "NFX_CarRain_Color");
+			color_ = SharedColor.Acquire();
 		}
 
 		protected override void Execute(CustomPassContext ctx) {
+			using var cpuTime = NatureFX.Tools.CpuTimings.Scope("pass: car rain"); // (the debug page)
 			if (Material == null || Renderers.Count == 0 || ctx.hdCamera.camera.cameraType != CameraType.Game) {
 				return;
 			}
@@ -47,23 +47,23 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Cleanup() {
-			color_?.Release();
+			SharedColor.Release(color_);
+			color_ = null;
 		}
 	}
 
-	// Water beads, run-off and an oily sheen on cars when it rains. The car shaders themselves are untouched.
+	// Water beads, run-off, an oily sheen and mud on cars when it rains. The car shaders themselves are untouched.
 	public class CarRain {
 		public const string ShaderName = "Hidden/NatureFX/CarRain";
 
 		private static readonly int Params = Shader.PropertyToID("_NFX_CarRain");
+		private static readonly int SkyProbeId = Shader.PropertyToID("_NFX_CarSkyProbe");
+		private static readonly int SkyProbeOnId = Shader.PropertyToID("_NFX_CarSkyProbeOn");
 		private static readonly int DirtId = Shader.PropertyToID("_NFX_CarDirt");
 		private static readonly int LightId = Shader.PropertyToID("_NFX_CarLight");
 
-		// Dirt on the car nearest the camera (0..1 each): mud from driving on wet roads, dust from dusty dry ones, snow
-		// lying on top while it snows (blown off at speed). Rain washes mud and dust off slowly.
+		// Mud on the car nearest the camera (0..1): from driving on wet roads. Rain washes it off slowly.
 		public float Mud { get; private set; }
-		public float Dust { get; private set; }
-		public float Snow { get; private set; }
 		private float groundY_;
 		private const float ScanInterval = 2.0f;
 		private const float MinCarMass = 400.0f;
@@ -115,14 +115,21 @@ namespace NatureFX.Rendering {
 			var w = Weather.Current;
 			float wet = s.Enabled && s.Accumulation && s.CarRain ? Mathf.Max(w.Rain, w.Wetness * 0.7f) : 0.0f;
 			UpdateDirt(s, w);
-			pass_.enabled = wet > 0.01f || Mud + Dust + Snow > 0.01f;
+			pass_.enabled = wet > 0.01f || Mud > 0.01f;
 			if (!pass_.enabled) {
 				return;
 			}
 
 			material_.SetVector(Params, new Vector4(s.CarRainDrops, s.OilFilm, wet, Time.time));
-			material_.SetVector(DirtId, new Vector4(Mud, Dust, Snow, groundY_));
-			// light for the dirt's own shading: the sun on a panel facing it, and the sky (an eighth of the sun by day)
+			// the drops mirror the own engine's sky
+			if (NativeEngine.SkyProbe != null) {
+				material_.SetBuffer(SkyProbeId, NativeEngine.SkyProbe);
+				material_.SetFloat(SkyProbeOnId, 1.0f);
+			} else {
+				material_.SetFloat(SkyProbeOnId, 0.0f);
+			}
+			material_.SetVector(DirtId, new Vector4(Mud, 0.0f, 0.0f, groundY_));
+			// light for the mud's own shading: the sun on a panel facing it, and the sky (an eighth of the sun by day)
 			float sunLux = sun != null && sun.isActiveAndEnabled ? sun.intensity * Mathf.Max(0.0f, -sun.transform.forward.y + 0.1f) : 0.0f;
 			float sunTotal = sun != null && sun.isActiveAndEnabled ? sun.intensity : 0.0f;
 			material_.SetVector(LightId, new Vector4(sun != null ? sun.intensity * (1.0f - w.Cloud * 0.8f) : 0.0f, Mathf.Max(sunLux * 0.15f, sunTotal * 0.02f) + 0.5f, 0.0f, 0.0f));
@@ -137,7 +144,7 @@ namespace NatureFX.Rendering {
 		}
 
 		public void Wash() {
-			Mud = Dust = Snow = 0.0f;
+			Mud = 0.0f;
 		}
 
 		private void UpdateDirt(ISettings s, WeatherState w) {
@@ -157,25 +164,15 @@ namespace NatureFX.Rendering {
 			}
 			if (!on || car == null) {
 				Mud = Mathf.MoveTowards(Mud, 0.0f, dt * 0.2f);
-				Dust = Mathf.MoveTowards(Dust, 0.0f, dt * 0.2f);
-				Snow = Mathf.MoveTowards(Snow, 0.0f, dt * 0.2f);
 				return;
 			}
 			float speed = car.velocity.magnitude;
 			float driving = Mathf.Clamp01(speed / 25.0f);
 			float ground = Mathf.Max(w.Wetness, w.Rain);
-			// a few minutes of wet driving for full mud, of dusty driving for full dust
-			Mud += dt * driving * ground * 0.006f * (1.0f + w.Snow);
-			Dust += dt * driving * w.Dust * (1.0f - ground) * 0.006f;
-			// rain washes the panels: dust quickly, mud slowly
-			Dust -= dt * w.Rain * 0.02f;
+			// a few minutes of wet driving for full mud; the rain washes the panels slowly
+			Mud += dt * driving * ground * 0.006f;
 			Mud -= dt * w.Rain * 0.003f;
-			// snow settles while it lies around and the car is slow, blows off at speed
-			Snow += dt * w.Snow * Mathf.Clamp01(1.0f - speed / 12.0f) * 0.01f;
-			Snow -= dt * Mathf.Clamp01((speed - 12.0f) / 20.0f) * 0.05f + dt * (w.Snow < 0.05f ? 0.004f : 0.0f);
 			Mud = Mathf.Clamp(Mud, 0.0f, 0.9f * s.CarDirtAmount);
-			Dust = Mathf.Clamp(Dust, 0.0f, 0.8f * s.CarDirtAmount);
-			Snow = Mathf.Clamp(Snow, 0.0f, 0.9f);
 			// the ground under the car: its wheels' contacts
 			int n = 0;
 			float y = 0.0f;

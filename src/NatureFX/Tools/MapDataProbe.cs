@@ -8,8 +8,7 @@ using UnityEngine.Rendering;
 namespace NatureFX.Tools {
 	// Logs every nfx_* / nocol_nfx* object of the loaded map with what survived the .knmap build: active state,
 	// components and whether they are enabled, Transform, TextMesh text length, mesh vertex colours, colliders
-	// Kino may have added, and the test material value. Used with the NatureFX data test map
-	// (tools/kino_sdk/NfxDataTestMap.cs) to check docs/map-authoring.md chapter 0 in the real game.
+	// Kino may have added, and the test material value: checks docs/map-authoring.md chapter 0 in the real game.
 	public static class MapDataProbe {
 		private static readonly HashSet<int> logged_ = new();
 

@@ -11,7 +11,7 @@ namespace NatureFX.Rendering {
 		private const float Priority = 10000.0f;
 
 		// The volume values the game camera renders with. HDRP keeps a stack per camera; VolumeManager's own stack is
-		// never updated for it and holds the defaults (it said "sky type 0" over the test map's physically based sky).
+		// never updated for it and holds the defaults (it said "sky type 0" over a map's physically based sky).
 		public static VolumeStack Stack() {
 			var cam = Camera.main;
 			if (cam != null && cam.TryGetComponent<HDAdditionalCameraData>(out _)) {
@@ -36,6 +36,48 @@ namespace NatureFX.Rendering {
 		private Exposure exposure_;
 		private VisualEnvironment environment_;
 		private IndirectLightingController indirect_;
+
+		// a layer mask parameter of a volume component, whatever its type in this HDRP version (by reflection: a
+		// LightLayerEnumParameter or RenderingLayerMaskEnumParameter, its value an enum or a mask struct)
+		private static readonly System.Collections.Generic.Dictionary<string, (System.Reflection.FieldInfo Field, System.Reflection.MethodInfo Override, System.Type Value)> layerParams_ = new();
+		private static void SetLayers(VolumeComponent component, string name, uint mask) {
+			try {
+				if (!layerParams_.TryGetValue(name, out var p)) {
+					var field = component.GetType().GetField(name);
+					System.Reflection.MethodInfo over = null;
+					System.Type valueType = null;
+					if (field != null) {
+						var parameterType = field.FieldType;
+						var valueProp = parameterType.GetProperty("value");
+						valueType = valueProp?.PropertyType;
+						over = valueType != null ? parameterType.GetMethod("Override", new[] { valueType }) : null;
+					}
+					p = (field, over, valueType);
+					layerParams_[name] = p;
+				}
+				if (p.Field == null || p.Override == null) {
+					return;
+				}
+				object value;
+				if (p.Value.IsEnum) {
+					value = System.Enum.ToObject(p.Value, unchecked((int)mask));
+				} else if (p.Value == typeof(uint)) {
+					value = mask;
+				} else if (p.Value == typeof(int)) {
+					value = unchecked((int)mask);
+				} else {
+					// a struct with an implicit conversion from uint (RenderingLayerMask)
+					var convert = p.Value.GetMethod("op_Implicit", new[] { typeof(uint) });
+					if (convert == null) {
+						return;
+					}
+					value = convert.Invoke(null, new object[] { mask });
+				}
+				p.Override.Invoke(p.Field.GetValue(component), new[] { value });
+			} catch (System.Exception) {
+				// left as it is: the see-through surfaces get no sky light
+			}
+		}
 		private SkySettings skyDim_;          // the track's sky type in our profile, its brightness turned down at night
 		private float skyBase_ = 1.0f;        // the track's own sky brightness (multiplier), read while ours is off
 		private float lastSkyElevation_ = float.NaN;
@@ -123,13 +165,13 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			volume_.enabled = true;
-			ssr_.active = EngineLighting.Reflections(s);
+			ssr_.active = true;
 			ssr_.enabled.Override(false);
-			gi_.active = EngineLighting.Ambient(s);
+			gi_.active = true;
 			gi_.enable.Override(false);
-			ao_.active = EngineLighting.Ambient(s);
+			ao_.active = true;
 			ao_.intensity.Override(0.0f);
-			contact_.active = EngineLighting.Shadows(s);
+			contact_.active = true;
 			contact_.enable.Override(false);
 
 			tonemapping_.active = s.AcesTonemapping;
@@ -140,7 +182,9 @@ namespace NatureFX.Rendering {
 			color_.contrast.Override(s.Contrast);
 
 			// Exposure: eye adaptation (histogram metering, slow to adjust like a real eye / camera), or the game's
-			exposure_.active = s.ExposureMode != 0;
+			// HDRP's own automatic exposure only while NatureFX's (PostProcess: metered, its eye adaptation, HDRP given
+			// the result as a fixed exposure) is not running: two controllers fought over it
+			exposure_.active = s.ExposureMode != 0 && !PostProcess.OwnExposure;
 			exposure_.mode.Override(ExposureMode.AutomaticHistogram);
 			exposure_.meteringMode.Override(MeteringMode.CenterWeighted);
 			exposure_.limitMin.Override(s.AutoExposureMin);
@@ -162,6 +206,61 @@ namespace NatureFX.Rendering {
 		// ambient light and reflections are faded out after dusk, as the physically based sky does by itself, and the
 		// sky itself is darkened to a night sky (it showed a white daytime photo at midnight).
 		private HDRISky engineSky_; // A3: the own engine's sky as HDRP's (AtmospherePass.SkyCube)
+
+		// While HDRP draws the own engine's sky (a cube map of it), the track's own sky textures are drawn by nothing:
+		// the physically based sky's star cube map (CarX's "starmap": 4096 a face, uncompressed, some 300 MB) and a
+		// photo sky. They go out of video memory (Resources.UnloadAsset: Unity loads such an asset back from disk when
+		// something uses it again, as HDRP does when the own sky is switched off).
+		private readonly System.Collections.Generic.HashSet<Texture> unloadedSky_ = new();
+		private float nextSkyUnload_;
+		public static string UnloadedSky { get; private set; } = "none";
+		private readonly System.Collections.Generic.List<string> unloadedNames_ = new();
+
+		private void UnloadTrackSkyTextures(Texture keep) {
+			if (Time.unscaledTime < nextSkyUnload_) {
+				return;
+			}
+			nextSkyUnload_ = Time.unscaledTime + 5.0f;
+			// every profile loaded, not only those on the scene's volumes: a track's sky profile may be held by a
+			// volume that is off, or by the game's own scripts (the stack still showed its sky)
+			foreach (var profile in Resources.FindObjectsOfTypeAll<VolumeProfile>()) {
+				if (profile == null || profile == profile_) {
+					continue;
+				}
+				if (profile.TryGet<PhysicallyBasedSky>(out var pbs)) {
+					UnloadSky(pbs.spaceEmissionTexture.value, keep);
+				}
+				if (profile.TryGet<HDRISky>(out var hdri)) {
+					UnloadSky(hdri.hdriSky.value, keep);
+				}
+			}
+			// and what the camera's stack draws with now (whatever profile it came from)
+			var stack = VolumeOverhaul.Stack();
+			UnloadSky(stack?.GetComponent<PhysicallyBasedSky>()?.spaceEmissionTexture.value, keep);
+		}
+
+		private void UnloadSky(Texture t, Texture keep) {
+			if (t == null || t == keep || unloadedSky_.Contains(t)) {
+				return;
+			}
+			string name = t.name;
+			// only the track's assets (they can be loaded again); never one made at runtime
+			if (name.StartsWith("NFX_", System.StringComparison.Ordinal) || name.StartsWith("NatureFX", System.StringComparison.Ordinal) ||
+			    (t.hideFlags & HideFlags.DontSave) != 0) {
+				return;
+			}
+			try {
+				long mb = (long)t.width * t.height * (t is Cubemap ? 6 : 1) * 4 / 1048576;
+				Resources.UnloadAsset(t);
+				unloadedSky_.Add(t);
+				unloadedNames_.Add($"{name} ({t.GetType().Name} {t.width}x{t.height}, about {mb} MB)");
+				UnloadedSky = string.Join(", ", unloadedNames_);
+				Kino.Log.Info($"[NatureFX] Own sky: the track's sky texture {name} ({t.GetType().Name} {t.width}x{t.height}) taken out of video memory");
+			} catch (System.Exception e) {
+				unloadedSky_.Add(t); // not again
+				Kino.Log.Warning($"[NatureFX] Own sky: {name} could not be unloaded ({e.Message})");
+			}
+		}
 
 		public void UpdateSky(Light sun, bool timeOfDay, bool engineSky = false) {
 			if (sun == null || indirect_ == null) {
@@ -188,15 +287,26 @@ namespace NatureFX.Rendering {
 			// A3: with the own engine's sky running, HDRP's sky is a cube map of it (its sky reflections, reflection
 			// probes and ambient light then show the engine's sky, clouds included; by night its moon lit sky), redrawn
 			// by HDRP a few times a second; the screen's sky pixels are the engine's own (AtmospherePass)
-			var cube = engineSky ? AtmospherePass.SkyCube : null;
-			int want = cube != null ? (int)SkyType.HDRI : (int)SkyType.PhysicallyBased;
+			// OwnLighting: with the sky's light and the reflections from the own engine, HDRP draws no sky at all (type
+			// none, 0), and the own sky is no longer turned into a cube map for it (AtmospherePass.FeedHdrp)
+			bool none = engineSky && OwnLighting.Sky;
+			var cube = engineSky && !none ? AtmospherePass.SkyCube : null;
+			int want = none ? 0 : cube != null ? (int)SkyType.HDRI : (int)SkyType.PhysicallyBased;
 			if (!environment_.skyType.overrideState || environment_.skyType.value != want) {
 				nightSky_ ??= profile_.Add<PhysicallyBasedSky>();
 				engineSky_ ??= profile_.Add<HDRISky>();
-				nightSky_.active = cube == null;
+				nightSky_.active = cube == null && !none;
 				engineSky_.active = cube != null;
 				environment_.skyType.Override(want);
 				lastSkyElevation_ = float.NaN; // redraw the sky's lighting now
+			}
+			if (cube != null || none) {
+				UnloadTrackSkyTextures(cube);
+			} else if (unloadedSky_.Count > 0) {
+				// HDRP draws the track's sky again: Unity loads them back from disk as they are used
+				unloadedSky_.Clear();
+				unloadedNames_.Clear();
+				UnloadedSky = "none (HDRP draws the track's sky)";
 			}
 			if (cube != null) {
 				engineSky_.hdriSky.Override(cube);
@@ -206,7 +316,15 @@ namespace NatureFX.Rendering {
 				engineSky_.updatePeriod.Override(0.2f);
 			}
 			const float night = 0.0f;
-			indirect_.active = false;
+			// OwnLighting: HDRP's sky light (and the lightmaps' light it scales the same way) and its reflections off
+			// while the own engine's composites put them back
+			indirect_.active = OwnLighting.Ambient || OwnLighting.Reflections;
+			indirect_.indirectDiffuseLightingMultiplier.Override(OwnLighting.Ambient ? 0.0f : 1.0f);
+			indirect_.reflectionLightingMultiplier.Override(OwnLighting.Reflections ? 0.0f : 1.0f);
+			indirect_.reflectionProbeIntensityMultiplier.Override(OwnLighting.Reflections ? 0.0f : 1.0f);
+			// the see-through surfaces' layer keeps HDRP's sky light (the own sky's probe, bound by RTShadowPass): HDRP's
+			// multiplier only scales the layers named here
+			SetLayers(indirect_, "indirectDiffuseLightingLayers", OwnLighting.Transparents ? ~OwnLighting.TransparentMask : ~0u);
 			DimSky(env, night);
 			string trackName = trackSky_ >= 0 && SkyTypes() != null && SkyTypes().TryGetValue(trackSky_, out var t) ? t.Name : $"type {trackSky_}";
 			// what HDRP renders with in the end, and what the track had

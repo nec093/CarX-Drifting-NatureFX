@@ -12,6 +12,9 @@
 #include "CloudsCommon.hlsli"
 
 static const uint FogW = 160, FogH = 90, FogD = 64;
+// the lamps' light lists (NFX_FLAG_FOG_LISTS, the bridge's PrepareFogVolume): per tile of 8 x 8 columns and band of 16
+// slices a 128 bit mask (uint4) of the lights that reach into it, after the columns, the boxes and the smoke
+static const uint FogTilesX = 20, FogBands = 4, FogListBase = FogW * FogH * 4;
 static const float FogNear = 0.5, FogFar = 3000.0;
 
 float FogSigma(float y)
@@ -56,7 +59,7 @@ float BoxesSigma(float3 p, out float3 tint)
     return sum;
 }
 
-// The tyre smoke's grid (TireSmoke.UpdateSmokeVolume, after the boxes, ReflParams.z = 1): 3 float4 of header (the
+// The tyre smoke's grid (TireSmoke.UpdateSmokeVolume, after the boxes, ReflParams.z > 0): 3 float4 of header (the
 // grid's lowest corner and 1 / cell size; the smoke's box, its min and max), then the 48 x 24 x 48 cells' extinction
 // (1/m), four to a float4. The light of the sun and the lamps through it on its way to the mist: four steps along the
 // way, where it crosses the smoke's box.
@@ -75,7 +78,7 @@ float SmokeAt(uint base, float3 p, float4 origin)
 
 float SmokeTransmittance(float3 from, float3 to)
 {
-    if (ReflParams.z < 0.5)
+    if (ReflParams.z < 0.0)
         return 1.0;
     uint base = FogW * FogH * 3 + 64 * 5;
     float4 origin = asfloat(Surface.Load4(base * 16));
@@ -141,39 +144,62 @@ NFX_ENTRY(id)
             if (!Blocked(p, toSun, 2000.0, distance > CoarseDistance))
                 light += SunColor * FogPhaseMix(dot(SunDir, view)) * SmokeTransmittance(p, p + toSun * 30.0);
         }
-        light += 0.5 * (SampleSH9(float3(0.0, 1.0, 0.0)) + SampleSH9(float3(0.0, -1.0, 0.0)));
+        // the sky's light only as far as the sky is seen from here: one ray a frame towards the sky (the history averages
+        // them), covered: 0.15 of it as the GI counts a sky behind something. Unblocked, a room under a roof in a hazy
+        // map filled with the bright day sky's glow, a white veil over everything inside (fine at night: the sky dark)
+        float3 skyDir = CosineSampleHemisphere(float3(0.0, 1.0, 0.0), Hash22(uint2(x + s * 7u, y), FrameIndex, 41));
+        float skySeen = Blocked(p, skyDir, 300.0, true) ? 0.15 : 1.0;
+        light += 0.5 * (SampleSH9(float3(0.0, 1.0, 0.0)) + SampleSH9(float3(0.0, -1.0, 0.0))) * skySeen;
         float3 sunSkyLight = light;
         // lamps and headlights: their beams in the mist (HDRP's punctual light falloff, the spot's cone)
         uint count = min((uint)LightCount.x, (uint)NFX_MAX_LOCAL_LIGHTS);
-        for (uint i = 0; i < count; ++i)
+        uint4 mask = (Flags & NFX_FLAG_FOG_LISTS) != 0u
+            ? Surface.Load4((FogListBase + ((y >> 3) * FogTilesX + (x >> 3)) * FogBands + (s >> 4)) * 16)
+            : (uint4)0xFFFFFFFFu;
+        // a thread group straddling two rows of tiles (90 rows are not a multiple of 8): one list for the wave, so the
+        // light index stays uniform (the constant buffer reads are broadcast; per lane they would be serialised)
+        mask = WaveActiveBitOr(mask);
+        [loop] for (uint w = 0; w < 4u; ++w)
         {
-            float3 d = LightPos[i].xyz - p;
-            float range = LightPos[i].w;
-            float raw = dot(d, d);
-            if (raw > range * range)
-                continue;
-            float3 L = d * rsqrt(max(raw, 1e-6)); // towards the lamp
-            // no closer than the lamp's own size or this cell's (an eighth of its depth): a lamp inside a cell lit it
-            // hundreds of times over (1 / 0.1 m squared), and the grid's smooth lookup spread that over the screen:
-            // the night sky turned white under the eye's night adaptation
-            float cell = z * 0.13;
-            float d2 = max(raw, max(LightSpot[i].y * LightSpot[i].y, cell * cell));
-            float window = saturate(1.0 - d2 * d2 / (range * range * range * range));
-            float spot = 1.0;
-            if (LightDir[i].w > 0.0)
+            uint bits = mask[w];
+            while (bits != 0u)
             {
-                float a = saturate(dot(-L, LightDir[i].xyz) * LightDir[i].w + LightSpot[i].x);
-                // a headlight's cut-off in the mist too (its beam does not light the air above the road)
-                spot = a * a * NFX_BeamPattern(LightSpot[i].z, LightDir[i].xyz, -L, LightSpot[i].w);
+                uint i = w * 32u + firstbitlow(bits);
+                bits &= bits - 1u;
+                if (i >= count)
+                    break;
+                float3 d = LightPos[i].xyz - p;
+                float range = LightPos[i].w;
+                float raw = dot(d, d);
+                if (raw > range * range)
+                    continue;
+                float3 L = d * rsqrt(max(raw, 1e-6)); // towards the lamp
+                // no closer than the lamp's own size or this cell's (an eighth of its depth): a lamp inside a cell lit it
+                // hundreds of times over (1 / 0.1 m squared), and the grid's smooth lookup spread that over the screen:
+                // the night sky turned white under the eye's night adaptation
+                float cell = z * 0.13;
+                float d2 = max(raw, max(LightSpot[i].y * LightSpot[i].y, cell * cell));
+                float window = saturate(1.0 - d2 * d2 / (range * range * range * range));
+                float spot = 1.0;
+                if (LightDir[i].w > 0.0)
+                {
+                    float a = saturate(dot(-L, LightDir[i].xyz) * LightDir[i].w + LightSpot[i].x);
+                    // a headlight's cut-off in the mist too (its beam does not light the air above the road)
+                    // the cut-off as soft as this cell is wide seen from the lamp (a staircase along the beam's edge)
+                    // (a cell across: 160 x 90 over the view, about z / 60, twice that for the trilinear lookup)
+                    float soft = degrees(z * 0.033 * rsqrt(max(raw, 1e-4)));
+                    spot = a * a * NFX_BeamPatternSoft(LightSpot[i].z, LightDir[i].xyz, -L, LightSpot[i].w, soft);
+                }
+                // the tyre smoke between the mist and the lamp: the headlights' beams cut by a cloud of smoke
+                spot *= SmokeTransmittance(p, LightPos[i].xyz);
+                light += LightColor[i].rgb / d2 * window * window * spot * FogPhaseMix(dot(L, view));
             }
-            // the tyre smoke between the mist and the lamp: the headlights' beams cut by a cloud of smoke
-            spot *= SmokeTransmittance(p, LightPos[i].xyz);
-            light += LightColor[i].rgb / d2 * window * window * spot * FogPhaseMix(dot(L, view));
         }
         // the lamps scatter in what the air holds: the weather's fog, the map's fog boxes and the smoke in full, the
         // distance haze (a track's own short fog distance) no more than clear air does (ReflParams.w, 1/m): on a clear
         // night the headlights lit a white dome over the road
-        float lampSigma = boxes + min(baseSigma, ReflParams.w);
+        // Headlight beams below 1 (|ReflParams.z| - 1): the share of it all, boxes and smoke too
+        float lampSigma = (boxes + min(baseSigma, ReflParams.w)) * saturate(abs(ReflParams.z) - 1.0);
         float3 lampLight = light - sunSkyLight;
         result = float4(min((sunSkyLight * sigma + lampLight * lampSigma) * albedo, 1e7), sigma);
     }

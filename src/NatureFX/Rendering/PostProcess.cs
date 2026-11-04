@@ -42,10 +42,17 @@ namespace NatureFX.Rendering {
 		public float FlareGhosts, FlareStreaks; // the lens flare (0: none), as LensEffects weighs it
 		public float MotionBlur;           // the shutter's share of a frame (0: none)
 		public bool DepthOfField;
+		// only the meter for the eye adaptation (the own post-processing off, HDRP's draws the picture with the
+		// exposure worked out here): the exposure no longer goes back to HDRP's histogram with it
+		public bool MeterOnly;
 		public float FStop = 2.8f, Focus = 10.0f; // the lens's f-number, the focus distance (m)
 
 		// the meter's last reading: log2 luminance per cell, and when it came
 		public readonly float[] Meter = new float[MeterW * MeterH];
+		// the cells' mean colour of what is not sky (cd/m², rgb), 0 where all is sky
+		public readonly Vector3[] MeterColor = new Vector3[MeterW * MeterH];
+		public Vector4 White = Vector4.zero; // the eye's white balance gains (PostProcess), 0: none
+		private static readonly int WhiteId = Shader.PropertyToID("_NFX_PostWhite");
 		public int MeterFrame { get; private set; } = -1;
 
 		private RTHandle source_;
@@ -56,6 +63,13 @@ namespace NatureFX.Rendering {
 		private RTHandle fullSource_, fullFinal_, fullWork_;
 		// motion blur and depth of field: the motion at the render resolution, a second colour target
 		private RTHandle motion_, work_;
+		// the own TAA's history (Dlaa.OwnTaa), two in turn
+		private RTHandle taaA_, taaB_;
+		private bool taaFlip_, taaValid_;
+		private Vector3 taaLastPosition_;
+		private static readonly int HistoryId = Shader.PropertyToID("_NFX_PostHistory");
+		private static readonly int TaaId = Shader.PropertyToID("_NFX_PostTaa");
+		private const int PassTaa = 7;
 		private readonly RTHandle[] fullDown_ = new RTHandle[BloomLevels], fullUp_ = new RTHandle[BloomLevels];
 		private int fullWidth_, fullHeight_;
 		private bool pending_;
@@ -64,8 +78,8 @@ namespace NatureFX.Rendering {
 		protected override void Setup(ScriptableRenderContext renderContext, CommandBuffer cmd) {
 			// written by DLAA's UnpackDlss (a compute shader): without random write Unity refused the write and the
 			// jittered picture went on unresolved
-			source_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension,
-				colorFormat: GraphicsFormat.R16G16B16A16_SFloat, enableRandomWrite: true, useDynamicScale: true, name: "NFX_Post_Source");
+			// (the camera colour copy shared with the other composites: SharedColor has random write on)
+			source_ = SharedColor.Acquire();
 			for (int i = 0; i < BloomLevels; ++i) {
 				var scale = Vector2.one / (2 << i);
 				down_[i] = RTHandles.Alloc(scale, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.B10G11R11_UFloatPack32,
@@ -77,7 +91,7 @@ namespace NatureFX.Rendering {
 				enableRandomWrite: true, useDynamicScale: true, name: "NFX_Post_Motion");
 			work_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.R16G16B16A16_SFloat,
 				useDynamicScale: true, name: "NFX_Post_Work");
-			meter_ = new RenderTexture(MeterW, MeterH, 0, GraphicsFormat.R32_SFloat) { name = "NFX_Post_Meter", hideFlags = HideFlags.DontSave };
+			meter_ = new RenderTexture(MeterW, MeterH, 0, GraphicsFormat.R32G32B32A32_SFloat) { name = "NFX_Post_Meter", hideFlags = HideFlags.DontSave };
 			meter_.Create();
 		}
 
@@ -120,7 +134,11 @@ namespace NatureFX.Rendering {
 			ReleaseFull();
 			motion_?.Release();
 			work_?.Release();
-			source_?.Release();
+			taaA_?.Release();
+			taaB_?.Release();
+			taaA_ = taaB_ = null;
+			SharedColor.Release(source_);
+			source_ = null;
 			for (int i = 0; i < BloomLevels; ++i) {
 				down_[i]?.Release();
 				up_[i]?.Release();
@@ -140,10 +158,17 @@ namespace NatureFX.Rendering {
 		}
 
 		protected override void Execute(CustomPassContext ctx) {
+			using var cpuTime = NatureFX.Tools.CpuTimings.Scope("pass: post-processing"); // (the debug page)
 			if (Material == null || ctx.hdCamera.camera.cameraType != CameraType.Game) {
 				return;
 			}
 			var cmd = ctx.cmd;
+			if (MeterOnly) {
+				props_.Clear();
+				props_.SetFloat(PlainId, 0.0f);
+				Measure(cmd, ctx.cameraColorBuffer, ctx.hdCamera.actualWidth, ctx.hdCamera.actualHeight);
+				return;
+			}
 			Dlaa.NotePost(ctx.hdCamera.camera);
 			int renderWidth = ctx.hdCamera.actualWidth, renderHeight = ctx.hdCamera.actualHeight;
 			CustomPassUtils.Copy(ctx, ctx.cameraColorBuffer, source_);
@@ -160,6 +185,12 @@ namespace NatureFX.Rendering {
 				Dlaa.Run(ctx, source_, source_, renderWidth, renderHeight, renderWidth, renderHeight);
 			}
 			var source = upscaled ? fullSource_ : source_;
+			// the own TAA where DLSS did not run: the jittered picture against its reprojected history (HDRP's TAA off)
+			if (!upscaled && !Dlaa.RanThisFrame && Dlaa.OwnTaaFor(cam)) {
+				source = Taa(ctx, cmd, source_, renderWidth, renderHeight);
+			} else {
+				taaValid_ = false;
+			}
 			var down = upscaled ? fullDown_ : down_;
 			var up = upscaled ? fullUp_ : up_;
 			var target = upscaled ? fullFinal_ : ctx.cameraColorBuffer;
@@ -181,6 +212,7 @@ namespace NatureFX.Rendering {
 				float focal = 12.0f / Mathf.Tan(Mathf.Max(1.0f, cam.fieldOfView) * 0.5f * Mathf.Deg2Rad);
 				props_.SetVector(LensId, new Vector4(focal, Mathf.Max(0.7f, FStop), Mathf.Max(0.1f, Focus), 24.0f));
 				props_.SetVector(BlurId, new Vector4(Mathf.Clamp01(MotionBlur), 0.05f * height, 0.0f, 0.02f * height));
+				props_.SetVector(SourceSizeId, Size(width, height));
 				if (blur) {
 					props_.SetTexture(SourceId, current);
 					Draw(cmd, work, PassMotionBlur, Size(width, height));
@@ -195,26 +227,7 @@ namespace NatureFX.Rendering {
 				source = current;
 			}
 
-			// meter
-			props_.SetTexture(SourceId, source);
-			props_.SetVector(TargetSizeId, Size(MeterW, MeterH));
-			CoreUtils.SetRenderTarget(cmd, meter_, ClearFlag.None);
-			CoreUtils.DrawFullScreen(cmd, Material, props_, PassMeter);
-			if (!pending_) {
-				pending_ = true;
-				int frame = Time.frameCount;
-				cmd.RequestAsyncReadback(meter_, request => {
-					pending_ = false;
-					if (request.hasError) {
-						return;
-					}
-					var data = request.GetData<float>();
-					if (data.Length >= Meter.Length) {
-						NativeArray<float>.Copy(data, Meter, Meter.Length);
-						MeterFrame = frame;
-					}
-				});
-			}
+			Measure(cmd, source, width, height);
 
 			// bloom: down the chain, then up it
 			int levels = Bloom > 0.0f ? BloomLevels : 0;
@@ -242,14 +255,72 @@ namespace NatureFX.Rendering {
 
 			// the finished picture
 			props_.SetTexture(SourceId, source);
+			props_.SetVector(SourceSizeId, Size(width, height));
 			props_.SetTexture(FlareTexId, flare ? down[1] : source);
 			props_.SetVector(FlareId, flareParams);
 			props_.SetTexture(BloomId, levels > 0 ? (levels > 1 ? up[0] : down[0]) : source);
 			props_.SetVector(ParamsId, new Vector4(levels > 0 ? Bloom : 0.0f, Compensation, Contrast, Saturation));
 			props_.SetVector(ModeId, new Vector4(Tonemap, levels, 0.0f, 0.0f));
+			props_.SetVector(WhiteId, White);
 			Draw(cmd, target, PassFinal, Size(width, height));
 			if (upscaled) {
 				cmd.SetGlobalTexture(UpscaledFinalId, fullFinal_);
+			}
+		}
+
+		private RTHandle Taa(CustomPassContext ctx, CommandBuffer cmd, RTHandle current, int width, int height) {
+			if (taaA_ == null) {
+				taaA_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.R16G16B16A16_SFloat,
+					useDynamicScale: true, name: "NFX_Post_TaaA");
+				taaB_ = RTHandles.Alloc(Vector2.one, TextureXR.slices, dimension: TextureXR.dimension, colorFormat: GraphicsFormat.R16G16B16A16_SFloat,
+					useDynamicScale: true, name: "NFX_Post_TaaB");
+				taaValid_ = false;
+			}
+			var position = ctx.hdCamera.camera.transform.position;
+			// a camera cut: the history thrown away
+			if ((position - taaLastPosition_).sqrMagnitude > 25.0f * 25.0f || NativeEngine.NrdReset) {
+				taaValid_ = false;
+			}
+			taaLastPosition_ = position;
+			var history = taaFlip_ ? taaB_ : taaA_;
+			var output = taaFlip_ ? taaA_ : taaB_;
+			taaFlip_ = !taaFlip_;
+			NativeEngine.PrepareMotion(cmd, NativeEngine.Bridge, ctx, motion_, width, height, false);
+			props_.SetTexture(SourceId, current);
+			props_.SetTexture(HistoryId, history);
+			props_.SetTexture(MotionId, motion_);
+			props_.SetVector(SourceSizeId, Size(width, height));
+			var jitter = Dlaa.Jitter;
+			props_.SetVector(TaaId, new Vector4(taaValid_ ? 1.0f : 0.0f, jitter.x / Mathf.Max(1, width), jitter.y / Mathf.Max(1, height), 0.0f));
+			Draw(cmd, output, PassTaa, Size(width, height));
+			taaValid_ = true;
+			return output;
+		}
+
+		// the meter (64x36 cells of the picture's light), read back without waiting
+		private void Measure(CommandBuffer cmd, RTHandle source, float width, float height) {
+			props_.SetTexture(SourceId, source);
+			props_.SetVector(SourceSizeId, Size(width, height));
+			props_.SetVector(TargetSizeId, Size(MeterW, MeterH));
+			CoreUtils.SetRenderTarget(cmd, meter_, ClearFlag.None);
+			CoreUtils.DrawFullScreen(cmd, Material, props_, PassMeter);
+			if (!pending_) {
+				pending_ = true;
+				int frame = Time.frameCount;
+				cmd.RequestAsyncReadback(meter_, request => {
+					pending_ = false;
+					if (request.hasError) {
+						return;
+					}
+					var data = request.GetData<float>();
+					if (data.Length >= Meter.Length * 4) {
+						for (int i = 0; i < Meter.Length; ++i) {
+							Meter[i] = data[i * 4];
+							MeterColor[i] = new Vector3(data[i * 4 + 1], data[i * 4 + 2], data[i * 4 + 3]);
+						}
+						MeterFrame = frame;
+					}
+				});
 			}
 		}
 	}
@@ -271,6 +342,14 @@ namespace NatureFX.Rendering {
 		private Material material_;
 		private float ev_ = float.NaN;
 		private int lastMeter_ = -1;
+		private float lastMeterTime_ = -1.0f;
+		private const float FlashSeconds = 0.5f;
+		private readonly System.Collections.Generic.List<(float Time, float Target)> recent_ = new();
+		// the exposure is NatureFX's alone (HDRP's own automatic exposure off: VolumeOverhaul): eye adaptation on and
+		// the own post-processing running. HDRP's histogram is only the fallback while it is not
+		public static bool OwnExposure { get; private set; }
+		// HDRP's exposure now (ExposureProbe): where the own adaptation starts, so taking over does not jump
+		public static float HdrpEV = float.NaN;
 		private readonly float[] sorted_ = new float[PostPass.MeterW * PostPass.MeterH];
 		private readonly float[] weights_ = new float[PostPass.MeterW * PostPass.MeterH];
 
@@ -285,7 +364,7 @@ namespace NatureFX.Rendering {
 			}
 			root_ = new GameObject("NatureFX.Post");
 			Dlaa.Hook();
-			Dlaa.SetShader(bundle.Get(Dlaa.UpscaledShaderName));
+			Dlaa.SetShader(bundle.Get(Dlaa.UpscaledShaderName), bundle.Get(Dlaa.UpscaledFinalShaderName));
 			UnityEngine.Object.DontDestroyOnLoad(root_);
 			profile_ = ScriptableObject.CreateInstance<VolumeProfile>();
 			profile_.name = "NatureFX.Post";
@@ -328,7 +407,7 @@ namespace NatureFX.Rendering {
 		}
 
 		public void Reload(ShaderBundle bundle) {
-			Dlaa.SetShader(bundle.Get(Dlaa.UpscaledShaderName));
+			Dlaa.SetShader(bundle.Get(Dlaa.UpscaledShaderName), bundle.Get(Dlaa.UpscaledFinalShaderName));
 			var shader = bundle.Get(ShaderName);
 			if (shader != null && material_ != null) {
 				material_.shader = shader;
@@ -353,17 +432,43 @@ namespace NatureFX.Rendering {
 			if (root_ == null) {
 				return;
 			}
-			bool active = on && s.NativePost && pass_ != null;
+			bool active = on && pass_ != null;
+			// the own post-processing off: its eye adaptation still runs (only the meter), HDRP's post-processing draws
+			// the picture at the exposure worked out here
+			bool meterOnly = on && !active && pass_ != null && s.ExposureMode == 1;
+			// the game's exposure, raised as far as NatureFX raised the sun (Units): the track's exposure was set for its
+			// sun of a few lux, against real sunshine it left the picture white
+			bool gameScaled = on && s.ExposureMode == 0;
 			Active = active;
-			volume_.enabled = active;
+			volume_.enabled = active || meterOnly || gameScaled;
+			tonemapping_.active = active;
+			bloom_.active = active;
+			color_.active = active;
 			if (pass_ != null) {
-				pass_.enabled = active;
+				pass_.enabled = active || meterOnly;
+				pass_.MeterOnly = meterOnly;
 			}
+			// with the own post-processing HDRP's TAA is never used: DLSS, else the own TAA
+			Dlaa.OwnTaaWanted = active;
 			if (!active) {
 				HdrpBlur(false);
 				Dlaa.Wanted = false;
+			}
+			if (!active && !meterOnly) {
+				OwnExposure = false;
+				exposure_.active = false;
 				ev_ = float.NaN;
+				if (gameScaled) {
+					FixedExposure(s, true);
+					Status = FormattableString.Invariant($"HDRP's post-processing; fixed exposure {s.FixedExposure:0.0} EV100");
+					return;
+				}
 				Status = pass_ == null ? "not in the shader bundle (HDRP's post-processing)" : "off (HDRP's post-processing)";
+				return;
+			}
+			if (meterOnly) {
+				Adapt(s);
+				Status = FormattableString.Invariant($"HDRP's post-processing; own exposure {ev_:0.00} EV100, eye adaptation");
 				return;
 			}
 			pass_.Bloom = s.PostBloom;
@@ -382,30 +487,99 @@ namespace NatureFX.Rendering {
 			Dlaa.Wanted = s.Dlaa;
 			Dlaa.Quality = s.DlssQuality;
 			Dlaa.RayReconstructionWanted = s.DlssRayReconstruction;
+			Adapt(s);
+			string[] curves = { "ACES", "Neutral", "AgX", "none" };
+			Status = s.ExposureMode == 0
+				? FormattableString.Invariant($"own: fixed exposure {s.FixedExposure:0.0} EV100, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
+				: s.ExposureMode == 1
+				? FormattableString.Invariant($"own: exposure {ev_:0.00} EV100, eye adaptation, white balance {(warm_ >= 0 ? "cooler" : "warmer")} by {Mathf.Abs(warm_):0.00} stops (red / blue), bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
+				: FormattableString.Invariant($"own: the game's exposure {gameWhat_}, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}");
+		}
 
-			// eye adaptation (with the game's exposure chosen, HDRP keeps it)
-			exposure_.active = s.ExposureMode == 1;
-			if (s.ExposureMode == 1 && pass_.MeterFrame != lastMeter_ && pass_.MeterFrame >= 0) {
+		// The game's exposure (its highest priority volume with one), shifted by the stops NatureFX raised the sun
+		// (Units.Log2Scale): a fixed one stays fixed, an automatic one keeps its mode with its limits moved; none: HDRP's
+		// default fixed 0 EV, raised. Looked up every 2 s.
+		private float nextGameScan_;
+		private string gameWhat_ = "";
+		private ExposureMode gameMode_ = ExposureMode.Fixed;
+		private float gameFixed_, gameMin_, gameMax_, gameCompensation_;
+		// Settings.FixedExposure as HDRP's fixed exposure; without the own final pass the compensation goes in here
+		private void FixedExposure(ISettings s, bool hdrpPost) {
+			exposure_.active = true;
+			exposure_.mode.Override(ExposureMode.Fixed);
+			exposure_.fixedExposure.Override(s.FixedExposure - (hdrpPost ? s.Exposure : 0.0f));
+			OwnExposure = true;
+		}
+
+		// eye adaptation (with the game's exposure chosen, HDRP keeps it)
+		private void Adapt(ISettings s) {
+			// the game's automatic exposure under the own post-processing: HDRP would meter the picture this pass has
+			// already tone mapped (0..1), find it dark, open up, and so on down to its lowest limit (white). Metered here
+			// instead, within the game's range (its top raised for the real sun)
+			bool eye = s.ExposureMode == 1;
+			bool gameAuto = false;
+			if (s.ExposureMode == 0) {
+				// a fixed exposure (the game's own was set for its sun of a few lux: against real sunshine it left the
+				// picture white, and HDRP's automatic exposure metered the tone mapped picture)
+				ev_ = float.NaN;
+				FixedExposure(s, pass_.MeterOnly);
+			}
+			bool metering = eye || gameAuto;
+			if (metering) {
+				exposure_.active = true;
+				exposure_.mode.Override(ExposureMode.Fixed);
+			}
+			float lowest = eye ? s.AutoExposureMin : gameMin_;
+			float highest = eye ? Mathf.Max(s.AutoExposureMin + 0.5f, s.AutoExposureMax) : Mathf.Max(gameMin_ + 0.5f, gameMax_ + Units.Log2Scale);
+			if (metering && float.IsNaN(ev_)) {
+				// taking over: from the fixed exposure (what the picture had until now), not a jump to the first reading;
+				// HDRP's own automatic exposure never runs on the own picture (it metered the tone mapped picture and
+				// opened up all the way: white)
+				// (own values only: the fixed exposure the user set, not HDRP's state)
+				ev_ = Mathf.Clamp(s.FixedExposure > 0.0f ? s.FixedExposure : 13.0f, lowest, highest);
+			}
+			if (metering && pass_.MeterFrame != lastMeter_ && pass_.MeterFrame >= 0) {
 				lastMeter_ = pass_.MeterFrame;
 				// real-world EVs (the sun is raised to real sunshine, Units): a moonlit night and a sunny day where they are
-				float target = Mathf.Clamp(MeteredEV(pass_.Meter), s.AutoExposureMin, Mathf.Max(s.AutoExposureMin + 0.5f, s.AutoExposureMax));
+				float metered = MeteredEV(pass_.Meter);
+				float target = Mathf.Clamp(metered + (eye ? NightKey(metered, s.NightDarkness) : gameCompensation_ * -1.0f), lowest, highest);
+				// a flash (an afterfire, a spark, a lamp swinging past) is not adapted to: the eye closes only to light
+				// that stays, so going brighter takes the darkest reading of the last half second (the headlights' road
+				// went dark at every afterfire)
+				recent_.Add((Time.unscaledTime, target));
+				recent_.RemoveAll(r => Time.unscaledTime - r.Time > FlashSeconds);
+				float lasting = target;
+				foreach (var r in recent_) {
+					lasting = Mathf.Min(lasting, r.Target);
+				}
+				if (!float.IsNaN(ev_) && target > ev_) {
+					target = Mathf.Max(ev_, lasting);
+				}
+				// the time since the last reading (readings come every frame or two): adapting by one frame's time per
+				// reading made the eye half as fast when they came every other frame, and uneven
+				float dt = lastMeterTime_ < 0.0f ? Time.unscaledDeltaTime : Mathf.Clamp(Time.unscaledTime - lastMeterTime_, 0.0f, 0.25f);
+				lastMeterTime_ = Time.unscaledTime;
 				if (float.IsNaN(ev_)) {
 					ev_ = target;
-				} else {
+				} else if (!float.IsNaN(target)) {
 					// the eye opens up slowly in the dark and closes faster in the light
 					float speed = target > ev_ ? s.AdaptationSpeed * 2.0f : s.AdaptationSpeed;
-					ev_ += (target - ev_) * (1.0f - Mathf.Exp(-Time.unscaledDeltaTime * Mathf.Max(0.05f, speed)));
+					ev_ += (target - ev_) * (1.0f - Mathf.Exp(-dt * Mathf.Max(0.05f, speed)));
 				}
 			}
-			// until the first reading HDRP keeps its own (a fixed exposure of nothing would flash the first frames)
-			exposure_.active = s.ExposureMode == 1 && !float.IsNaN(ev_);
-			if (!float.IsNaN(ev_)) {
-				exposure_.fixedExposure.Override(ev_);
+			if (float.IsNaN(ev_) || float.IsInfinity(ev_)) {
+				ev_ = float.NaN;
 			}
-			string[] curves = { "ACES", "Neutral", "AgX", "none" };
-			Status = s.ExposureMode == 1
-				? FormattableString.Invariant($"own: exposure {ev_:0.00} EV100, eye adaptation, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}")
-				: FormattableString.Invariant($"own: the game's exposure, bloom {s.PostBloom:0.00}, tone {curves[pass_.Tonemap]}");
+			OwnExposure = metering && !float.IsNaN(ev_);
+			// until the first reading HDRP keeps its own (a fixed exposure of nothing would flash the first frames)
+			if (metering) {
+				exposure_.active = !float.IsNaN(ev_);
+			}
+			pass_.White = eye ? WhiteBalance(s) : Vector4.zero;
+			if (!float.IsNaN(ev_)) {
+				// the compensation: the own final pass's with the own post-processing, HDRP's fixed exposure without it
+				exposure_.fixedExposure.Override(pass_ != null && pass_.MeterOnly ? ev_ - s.Exposure : ev_);
+			}
 		}
 
 		// HDRP's motion blur and depth of field off on the game's camera while the own ones run (its frame settings,
@@ -448,6 +622,60 @@ namespace NatureFX.Rendering {
 			data.customRenderingSettings = true;
 		}
 
+		// The eye's white balance (chromatic adaptation): the light the surfaces in view return (the meter's colour of
+		// what is not sky, which a scene's own colours average out over) taken partly as white, along the warm / cool
+		// axis only (sunset, the blue of a shade under a clear sky, warm lamps; a green forest is not turned magenta).
+		// Partial, as the eye: Settings.WhiteBalance at daylight, less in the dark (at a street lamp's few EV the eye
+		// leaves its colour), slowly (seconds, like the eye's own).
+		private float warm_;
+		private int lastWhiteMeter_ = -1;
+		private Vector4 WhiteBalance(ISettings s) {
+			float strength = Mathf.Clamp01(s.WhiteBalance);
+			if (strength <= 0.0f || float.IsNaN(ev_)) {
+				warm_ = 0.0f;
+				return Vector4.zero;
+			}
+			if (pass_.MeterFrame != lastWhiteMeter_ && pass_.MeterFrame >= 0) {
+				lastWhiteMeter_ = pass_.MeterFrame;
+				Vector3 sum = Vector3.zero;
+				for (int i = 0; i < pass_.MeterColor.Length; ++i) {
+					var c = pass_.MeterColor[i];
+					if (float.IsNaN(c.x) || float.IsNaN(c.y) || float.IsNaN(c.z)) {
+						continue;
+					}
+					sum += c * weights_[i];
+				}
+				if (sum.x > 1e-6f && sum.z > 1e-6f) {
+					// log2 of red over blue: 0 under daylight white (D65 in the linear Rec. 709 primaries)
+					float target = Mathf.Clamp(Mathf.Log(sum.x / sum.z, 2.0f), -3.0f, 3.0f);
+					// the eye adapts to a lamp's colour less in the dark, but not at all left the rain's and the fog's
+					// haze in sodium and halogen light orange-brown: half of it at night, all of it from dusk light up
+					target *= strength * Mathf.Lerp(0.5f, 1.0f, Mathf.Clamp01((ev_ - 2.0f) / 6.0f));
+					warm_ += (target - warm_) * (1.0f - Mathf.Exp(-Time.unscaledDeltaTime * 0.7f));
+				}
+			}
+			float r = Mathf.Pow(2.0f, -warm_ * 0.5f), b = Mathf.Pow(2.0f, warm_ * 0.5f);
+			float luma = 0.2126f * r + 0.7152f + 0.0722f * b;
+			return new Vector4(r / luma, 1.0f / luma, b / luma, 0.0f);
+		}
+
+		public float WarmShift => warm_;
+
+		// The eye does not see a dark scene as a grey one: the darker the scene, the lower the brightness it settles on
+		// (Krawczyk et al. 2005, the key value a = 1.03 - 2 / (2 + log10(L + 1)) of the scene's mean luminance L, taken
+		// relative to daylight's). Stops darker than mid grey: about 0.3 at dusk light (EV 10), 2 under street lamps
+		// (EV 3), 3.6 at EV 0; times Settings.NightDarkness.
+		private static float NightKey(float ev, float strength) {
+			if (float.IsNaN(ev) || strength <= 0.0f) {
+				return 0.0f;
+			}
+			static float Key(float luminance) => 1.03f - 2.0f / (2.0f + Mathf.Log10(luminance + 1.0f));
+			float L = Mathf.Pow(2.0f, ev) * 12.5f / 100.0f;
+			float day = Key(2048.0f);
+			float key = Mathf.Max(Key(L), 0.02f);
+			return Mathf.Clamp(Mathf.Log(day / key, 2.0f), 0.0f, 5.0f) * Mathf.Clamp01(strength);
+		}
+
 		// the meter's cells as EV100 (K = 12.5): the brightness weighted to the centre, the darkest 30 % and the
 		// brightest 5 % left out (dark corners and the sun's disc would pull it)
 		private float MeteredEV(float[] meter) {
@@ -468,8 +696,16 @@ namespace NatureFX.Rendering {
 			// under the headlights in a black night opened the exposure to its darkest and blew out; the lit road there
 			// is less than a tenth of the picture, so the brightest tenth still held dark cells)
 			float bright = sorted_[(int)(sorted_.Length * 0.97f)];
+			// (2 stops: at 2.5 the road under the headlights still burnt out at night)
 			if (!float.IsNaN(bright)) {
-				log2L = Mathf.Max(log2L, bright - 2.5f);
+				log2L = Mathf.Max(log2L, bright - 2.0f);
+			}
+			// and on what is lit when it fills a tenth of the view: the street lights' pools on a night road (the black sky
+			// over half the picture held the eye wide open, the lamps' pools came out white; the brightest 3 % there are
+			// only the lamps' heads)
+			float lit = sorted_[(int)(sorted_.Length * 0.90f)];
+			if (!float.IsNaN(lit)) {
+				log2L = Mathf.Max(log2L, lit - 2.0f);
 			}
 			return log2L + Mathf.Log(100.0f / 12.5f, 2.0f);
 		}

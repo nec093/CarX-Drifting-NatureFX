@@ -14,7 +14,7 @@
 namespace {
 
 struct NrdEventData {
-	ID3D12Resource* guide;    // PrepareNrdGuide: 2 float4 per pixel
+	ID3D12Resource* guide;    // PrepareNrdGuide: a packed uint4 per pixel (NfxLoadNrdGuide in NfxPack.hlsli)
 	ID3D12Resource* surface;  // the trace's surfaces (sun: 2 float4 per pixel, ambient: 3)
 	ID3D12Resource* result;   // the trace's result (sun: float2 per pixel, ambient: float4), denoised in place
 	UINT32 width, height;
@@ -27,7 +27,7 @@ struct NrdEventData {
 	float denoisingRange;
 	float timeDelta;          // ms
 	UINT32 mode;              // event 6: 1 GI (two signals), 0 the one bounce ambient light, 2 the lamp shadows
-	UINT32 pad;
+	UINT32 flags;             // bit 0: REBLUR made cheaper (F8 > Developer > NRD parts): see NrdFast
 };
 static_assert(sizeof(NrdEventData) == 328, "NrdEventData: NativeEngine.IssueNrd writes 328 bytes");
 
@@ -439,7 +439,7 @@ void NrdFlush(ID3D12GraphicsCommandList4* list, std::vector<D3D12_RESOURCE_BARRI
 }
 
 // The frees of earlier resizes, then the list to record into (null: skip this time)
-ID3D12GraphicsCommandList4* NrdBegin(const NrdEventData* data) {
+ID3D12GraphicsCommandList4* NrdBegin(const NrdEventData* data, const char* name) {
 	if (g_dead || g_unityQueue.load() == nullptr || data == nullptr || data->guide == nullptr || data->surface == nullptr ||
 	    data->result == nullptr || data->width == 0 || data->height == 0 || !g_render.Create()) {
 		return nullptr;
@@ -452,7 +452,7 @@ ID3D12GraphicsCommandList4* NrdBegin(const NrdEventData* data) {
 			++i;
 		}
 	}
-	g_crumbTag = "nrd";
+	g_crumbTag = name;  // (the debug page's GPU time by name)
 	return g_render.Begin();
 }
 
@@ -584,17 +584,31 @@ void NrdStatusLine(NrdContext& c, const char* what, const NrdEventData* data, ui
 	}
 }
 
+// REBLUR made cheaper (flags bit 0, for comparing): this NRD has no performance mode any more, so its costliest
+// optional passes go: the pre-pass blur (spatial reuse before the accumulation), the stabilization pass and the
+// anti-firefly filter
+void NrdFast(nrd::ReblurSettings& reblur, const NrdEventData* data) {
+	if ((data->flags & 1u) == 0) {
+		return;
+	}
+	reblur.diffusePrepassBlurRadius = 0.0f;
+	reblur.specularPrepassBlurRadius = 0.0f;
+	reblur.maxStabilizedFrameNum = 0;
+	reblur.enableAntiFirefly = false;
+}
+
 // Render event 5: SIGMA over the sun trace that ran just before
 void NrdSigma(const NrdEventData* data) {
 	// with translucency: glass dims the sun instead of letting it all through (SunShadow.hlsl's share)
 	static const nrd::Denoiser kSigma[] = { nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY };
 	auto& c = g_nrdSun;
+	const char* name = "nrd: SIGMA sun";
 	if (!c.pack.pso && !c.failed &&
 	    (!NrdPackKernel(c.pack, 5, NrdCode("NrdSigmaPack", g_NrdSigmaPack, sizeof(g_NrdSigmaPack))) || !NrdUnpackKernel(c.unpack, 1, NrdCode("NrdSigmaUnpack", g_NrdSigmaUnpack, sizeof(g_NrdSigmaUnpack))))) {
 		c.failed = true;
 		SetStatus(c.status, "SIGMA pack / unpack pipelines could not be made");
 	}
-	auto* list = c.pack.pso ? NrdBegin(data) : nullptr;
+	auto* list = c.pack.pso ? NrdBegin(data, name) : nullptr;
 	if (list == nullptr) {
 		return;
 	}
@@ -629,12 +643,13 @@ void NrdSigma(const NrdEventData* data) {
 void NrdReblur(const NrdEventData* data) {
 	static const nrd::Denoiser kReblur[] = { nrd::Denoiser::REBLUR_DIFFUSE, nrd::Denoiser::REBLUR_DIFFUSE };
 	auto& c = data != nullptr && data->mode == 2 ? g_nrdLocal : g_nrdAmbient;
+	const char* name = data != nullptr && data->mode == 2 ? "nrd: REBLUR lamps" : "nrd: REBLUR ambient / GI";
 	if (!c.pack.pso && !c.failed &&
 	    (!NrdPackKernel(c.pack, 5, NrdCode("NrdReblurPack", g_NrdReblurPack, sizeof(g_NrdReblurPack))) || !NrdUnpackKernel(c.unpack, 2, NrdCode("NrdReblurUnpack", g_NrdReblurUnpack, sizeof(g_NrdReblurUnpack))))) {
 		c.failed = true;
 		SetStatus(c.status, "REBLUR pack / unpack pipelines could not be made");
 	}
-	auto* list = c.pack.pso ? NrdBegin(data) : nullptr;
+	auto* list = c.pack.pso ? NrdBegin(data, name) : nullptr;
 	if (list == nullptr) {
 		return;
 	}
@@ -665,6 +680,7 @@ void NrdReblur(const NrdEventData* data) {
 		reblur.antilagSettings.luminanceSigmaScale = 4.0f;
 		reblur.antilagSettings.luminanceSensitivity = 6.0f;
 	}
+	NrdFast(reblur, data);
 	nrd::Identifier ids[2] = { 0, 1 };
 	const void* settings[] = { &reblur, &reblur };
 	uint32_t dispatched = 0;
@@ -682,12 +698,13 @@ void NrdReblur(const NrdEventData* data) {
 void NrdReflection(const NrdEventData* data) {
 	static const nrd::Denoiser kSpecular[] = { nrd::Denoiser::REBLUR_SPECULAR };
 	auto& c = g_nrdReflection;
+	const char* name = "nrd: REBLUR reflections";
 	if (!c.pack.pso && !c.failed &&
 	    (!NrdPackKernel(c.pack, 4, NrdCode("NrdSpecPack", g_NrdSpecPack, sizeof(g_NrdSpecPack))) || !NrdUnpackKernel(c.unpack, 1, NrdCode("NrdSpecUnpack", g_NrdSpecUnpack, sizeof(g_NrdSpecUnpack))))) {
 		c.failed = true;
 		SetStatus(c.status, "REBLUR specular pack / unpack pipelines could not be made");
 	}
-	auto* list = c.pack.pso ? NrdBegin(data) : nullptr;
+	auto* list = c.pack.pso ? NrdBegin(data, name) : nullptr;
 	if (list == nullptr) {
 		return;
 	}
@@ -710,6 +727,7 @@ void NrdReflection(const NrdEventData* data) {
 	reblur.antilagSettings.luminanceSensitivity = 2.0f;
 	reblur.responsiveAccumulationSettings.roughnessThreshold = 0.2f;
 	reblur.responsiveAccumulationSettings.minAccumulatedFrameNum = 4; // 2 left one ray's noise flickering on car paint
+	NrdFast(reblur, data);
 	nrd::Identifier id = 0;
 	const void* settings[] = { &reblur };
 	uint32_t dispatched = 0;

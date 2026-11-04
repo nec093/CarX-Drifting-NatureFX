@@ -5,8 +5,7 @@
 // (see Editor/GenerateNatureFXShaders.cs). The original functions are compiled under new names
 // and wrapped, so all HDRP/Lit properties, keywords and passes keep working unchanged.
 //   NFX_WIND         : wind / foliage interaction in ApplyVertexModification
-//   NFX_ACCUMULATION : snow / leaves / dust / wetness / rain in GetSurfaceAndBuiltinData,
-//                      plus snow thickness in ApplyVertexModification (ground shader only)
+//   NFX_ACCUMULATION : wetness / rain in GetSurfaceAndBuiltinData
 
 // hex tiled texture sampling (anti-tiling), in place of HDRP's SampleUVMapping.hlsl that LitData.hlsl includes
 #include "NFX_AntiTiling.hlsl"
@@ -66,7 +65,7 @@ void ApplyVertexModification(AttributesMesh input, float3 normalWS, inout float3
 		float heightAbove = weight * bladeHeight;
 		rootRWS = positionRWS - float3(0.0, heightAbove, 0.0);
 		positionRWS += NFX_GrassBladeOffset(positionAWS, heightAbove, bladeHeight, input.color.g);
-		// tyres and snow press the blade down and shorten it; the wind and the cars then only swing it round
+		// tyres press the blade down and shorten it; the wind and the cars then only swing it round
 		bladeLength = length(positionRWS - rootRWS);
 	}
 	#endif
@@ -77,8 +76,6 @@ void ApplyVertexModification(AttributesMesh input, float3 normalWS, inout float3
 		float3 arm = positionRWS - rootRWS;
 		positionRWS = rootRWS + arm * (bladeLength / max(length(arm), 1e-4));
 	}
-#elif defined(NFX_ACCUMULATION)
-	positionRWS += NFX_SnowDisplacementWS(positionAWS, normalWS);
 #endif
 }
 
@@ -117,7 +114,7 @@ void GetSurfaceAndBuiltinData(FragInputs input, float3 V, inout PositionInputs p
 		surfaceData.baseColor *= 1.0 + k * 0.35;
 		surfaceData.perceptualSmoothness = saturate(surfaceData.perceptualSmoothness * (1.0 - k * 0.3));
 	}
-	// emission follows the texture as painted, before snow or dirt land on it
+	// emission follows the texture as painted, before the rain wets it
 	builtinData.emissiveColor += NFX_MaterialEmission(surfaceData.baseColor, builtinData.opacity, positionAWS);
 
 	NFXSurface s;
@@ -126,20 +123,20 @@ void GetSurfaceAndBuiltinData(FragInputs input, float3 V, inout PositionInputs p
 	s.metallic = surfaceData.metallic;
 	s.normalWS = surfaceData.normalWS;
 	s.occlusion = surfaceData.ambientOcclusion;
-	// the surface's height for the height fill: its height map where the material has one, else its brightness (the
-	// gaps between stones, cracks and joints are dark)
+	// the surface's height, where the water film stands first: its height map where the material has one, else its
+	// brightness (the gaps between stones, cracks and joints are dark)
 	s.height = saturate(dot(s.baseColor, float3(0.2126, 0.7152, 0.0722)) * 2.2);
 	if (_NFX_Surface2.x > 0.5) {
 		float2 heightUV = input.texCoord0.xy * _BaseColorMap_ST.xy + _BaseColorMap_ST.zw;
 		s.height = SAMPLE_TEXTURE2D(_HeightMap, sampler_HeightMap, heightUV).r;
 	}
-	// the map's vertex colour A: how open to the sky (0 under roofs, bridges and in tunnels: no snow, leaves or wet)
+	// the map's vertex colour A: how open to the sky (0 under roofs, bridges and in tunnels: no wet)
 	float exposure = 1.0;
 	#ifdef VARYINGS_NEED_COLOR
 	exposure = _NFX_VertexColors > 0.5 && _NFX_Foliage2.x < 0.5 ? input.color.a : 1.0;
 	#endif
 
-	// water surfaces (nocol_nfx_water_*, Map/MapWater.cs): dark, mirror smooth, moving ripples; no snow or leaves on it
+	// water surfaces (nocol_nfx_water_*, Map/MapWater.cs): dark, mirror smooth, moving ripples
 	if (_NFX_Water.x > 0.5) {
 		NFX_ApplyWater(s, positionAWS, geomNormalWS, _TimeParameters.x);
 		surfaceData.baseColor = s.baseColor;
@@ -151,25 +148,35 @@ void GetSurfaceAndBuiltinData(FragInputs input, float3 V, inout PositionInputs p
 	}
 
 	#ifdef NFX_WIND
-	// [foliage]: season colours, variation, back lit leaves; deciduous trees drop leaves in autumn and winter
+	// [foliage]: colour variation, back lit leaves
 	if (_NFX_Foliage.x > 0.5 || _NFX_Foliage2.x > 0.5) {
-		float cutoff = 0.5;
-		#ifdef _ALPHATEST_ON
-		cutoff = _AlphaCutoff;
-		#endif
 		#ifdef VARYINGS_NEED_COLOR
 		if (_NFX_Foliage2.x > 0.5) {
-			// grass blades: darker at the root, each blade a little brighter or darker, plumes on susuki in autumn
+			// grass blades: darker at the root, each blade a little brighter or darker
 			s.baseColor *= lerp(0.55, 1.0, input.color.r) * lerp(0.8, 1.15, input.color.a);
-			float plume = _NFX_Foliage2.z * smoothstep(0.82, 0.9, input.color.r) * step(1.6, _NFX_Season.x) * step(_NFX_Season.x, 3.2);
-			s.baseColor = lerp(s.baseColor, float3(0.78, 0.72, 0.6), plume);
 		}
 		#endif
-		float keep = NFX_ApplyFoliage(s.baseColor, s.normalWS, positionAWS, V, builtinData.opacity, cutoff);
+		NFX_ApplyFoliage(s.baseColor, s.normalWS, positionAWS, V);
+		// measured colours: a real leaf or blade of grass sends back some 4 to 12 % of the light (its luminance), an
+		// olive green; textures are painted brighter and greener (sRGB 90, 140, 50 is 22 % and far more saturated).
+		// Above 6 % the brightness is eased (a knee: 20 % comes out at 12 %), the colour a fifth less saturated
+		if (_NFX_FoliageTone.x > 0.0) {
+			float y = dot(s.baseColor, float3(0.2126, 0.7152, 0.0722));
+			float eased = y > 0.06 ? 0.06 + (y - 0.06) * 0.43 : y;
+			float3 toned = s.baseColor * (eased / max(y, 1e-4));
+			toned = lerp(eased, toned, 0.8);
+			s.baseColor = lerp(s.baseColor, max(toned, 0.0), _NFX_FoliageTone.x);
+		}
 		#ifdef _ALPHATEST_ON
-		if (keep < 0.999) {
-			// whole bunches go: smooth noise over the card, the same in every pass (depth, shadows, G-buffer)
-			clip(keep - NFX_ValueNoise(input.texCoord0.xy * 9.0 + NFX_Hash13(floor(positionAWS / 6.0)) * 17.0));
+		// the distant forest's crossed cards (ForestRenderer, _NFX_Foliage2.w 2): not close by, where they showed as
+		// flat boards (faded in from 90 to 160 m), and not seen edge-on (a card's plane from the screen's derivatives).
+		// Dithered by world position: the same in the depth prepass and the G-buffer pass
+		if (_NFX_Foliage2.w > 1.5) {
+			float dist = length(posInput.positionWS);
+			float nearFade = saturate((dist - 90.0) / 70.0);
+			float3 face = cross(ddy(posInput.positionWS), ddx(posInput.positionWS));
+			float facing = dot(face, face) > 1e-12 ? saturate((abs(dot(normalize(face), V)) - 0.15) / 0.25) : 1.0;
+			clip(nearFade * facing - NFX_Hash13(floor(positionAWS * 4.0)));
 		}
 		#endif
 	}
@@ -181,27 +188,20 @@ void GetSurfaceAndBuiltinData(FragInputs input, float3 V, inout PositionInputs p
 	}
 	#endif
 	NFX_ApplyTerrain(s.baseColor, positionAWS, geomNormalWS);
-	NFX_ApplyAgeing(s, positionAWS, geomNormalWS);
-	// where it stands in the ground, the ground's colour (not grass blades or leaf cards: they grow out of it)
-	#ifdef NFX_WIND
-	#ifndef _ALPHATEST_ON
-	if (_NFX_Foliage2.x < 0.5)
-		NFX_ApplyGroundBlend(s, positionAWS, geomNormalWS);
-	#endif
-	#else
-	NFX_ApplyGroundBlend(s, positionAWS, geomNormalWS);
-	// the ground under and around plants: shaded, damp, litter (the ground map's cover)
-	NFX_ApplyGroundCover(s, positionAWS, geomNormalWS);
-	#endif
-	// the map's painted dirt: mud up the verges, water stains down the walls, ruts
-	NFX_ApplyPaint(s, positionAWS, geomNormalWS);
-	// the map's decals under the weather: snow and leaves cover them
+	// the map's decals under the weather: the rain wets them
 	NFX_ApplyDecals(s, positionAWS, geomNormalWS, V);
+	#ifdef NFX_WIND
+	// leaves and grass: wet, only a little glossier (a soaked forest at mirror gloss sent every reflection ray deep
+	// into the alpha tested foliage: the reflections' trace went from 1.5 to 13.6 ms in rain)
+	float foliageSmoothness = s.smoothness;
+	#endif
 	NFX_ApplyAccumulation(s, positionAWS, geomNormalWS, V, porosity, exposure, _TimeParameters.x, length(posInput.positionWS));
+	#ifdef NFX_WIND
+	s.smoothness = min(s.smoothness, max(foliageSmoothness, 0.0) + 0.15);
+	#endif
 	NFX_ApplyBeading(s, positionAWS, geomNormalWS, max(_NFX_Accumulation.w, _NFX_Weather.x));
 	NFX_ApplyPuddleMarkers(s, positionAWS, geomNormalWS, exposure, _TimeParameters.x);
-	// white lines, signs and reflectors send the headlights' light back towards them (after snow and dirt: a covered
-	// marking does not shine)
+	// white lines, signs and reflectors send the headlights' light back towards them (water on the ground drowns them)
 	builtinData.emissiveColor += NFX_Retroreflection(s.baseColor, positionAWS, geomNormalWS, max(_NFX_Accumulation.w, _NFX_Weather.x) * exposure);
 
 	surfaceData.baseColor = s.baseColor;

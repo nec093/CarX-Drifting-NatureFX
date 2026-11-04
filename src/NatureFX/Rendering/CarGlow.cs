@@ -125,7 +125,10 @@ namespace NatureFX.Rendering {
 				light.transform.position = kv.Key.position + side * 0.12f;
 				var hd = light.GetComponent<HDAdditionalLightData>();
 				hd.SetColor(Color.white, Mathf.Lerp(900.0f, 1500.0f, glow));
-				hd.SetIntensity(Mathf.Lerp(2.0f, 120.0f, glow * glow), LightUnit.Lumen);
+				// candela worked out here (a point light: lm / 4 pi), the own engine's value too
+				float candela = HeadlightController.LumenToCandela(Mathf.Lerp(2.0f, 120.0f, glow * glow), LightType.Point, 0.0f);
+				hd.SetIntensity(candela, LightUnit.Candela);
+				HeadlightController.HoldIntensity(light, candela);
 			}
 		}
 
@@ -143,7 +146,9 @@ namespace NatureFX.Rendering {
 				car.Flame.transform.position = car.Body.worldCenterOfMass - t.forward * car.RearOffset - t.up * 0.25f;
 				var hd = car.Flame.GetComponent<HDAdditionalLightData>();
 				hd.SetColor(Color.white, Random.Range(1700.0f, 2600.0f));
-				hd.SetIntensity(Random.Range(2500.0f, 6000.0f), LightUnit.Lumen);
+				float candela = HeadlightController.LumenToCandela(Random.Range(2500.0f, 6000.0f), LightType.Point, 0.0f);
+				hd.SetIntensity(candela, LightUnit.Candela);
+				HeadlightController.HoldIntensity(car.Flame, candela);
 			}
 		}
 

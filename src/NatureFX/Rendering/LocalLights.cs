@@ -23,6 +23,21 @@ namespace NatureFX.Rendering {
 		private readonly Vector4[] spot_ = new Vector4[Max];    // x angle offset, y shape radius (m)
 		private readonly Dictionary<Light, float> shapes_ = new();
 		private readonly List<Light> all_ = new();
+		// the lamps whose shadow maps NatureFX took for traced shadows (RayTracingEffects.UpdateLampShadows)
+		public System.Func<Light, bool> ShadowTaken;
+		// whether a lamp came with a shadow map, as first seen before NatureFX took any (the map's or game's setting)
+		private readonly Dictionary<Light, bool> authored_ = new();
+
+		private bool Authored(Light light) {
+			if (!authored_.TryGetValue(light, out bool shadowed)) {
+				shadowed = light.shadows != LightShadows.None;
+				authored_[light] = shadowed;
+				if (authored_.Count > 8192) {
+					authored_.Clear();
+				}
+			}
+			return shadowed;
+		}
 		private readonly List<(float Distance, Light Light, int Emitter)> near_ = new();  // Light null: NativeEngine.Emitters[Emitter]
 		private float nextRefresh_;
 
@@ -37,11 +52,33 @@ namespace NatureFX.Rendering {
 		public Vector4[] Spots => spot_;
 		public int Count { get; private set; }
 		public int ShadowCount { get; private set; }
+		// About the illuminance the brightest light in use casts (lux): its intensity (cd) at half its range. The GI's
+		// clamp and its cache's fixed point scale take it as their reference besides the sun and the sky
+		// (LightCount.w, GI.hlsl / NFXCommon.hlsli CacheReference): at night with the sun's alone, a headlight's bounce
+		// was cut to a few hundredth.
+		public float LampReference { get; private set; }
+		// Developer: off gives the GI its old reference (the sun and the sky only), to compare
+		public static bool UseLampReference = true;
+		// Only lights that light a room or a road count (small ones light their own housing), seen from at least 2 m,
+		// and never above a sunlit level: with 1 m and no cap, a bright lamp of short range made the reference
+		// thousands of lux, the GI's clamp no longer caught single bright rays and the cache's steps grew coarse
+		// (coloured speckles all over a garage)
+		private const float ReferenceMinRange = 3.0f;
+		private const float ReferenceMaxLux = 2000.0f;
+
+		private static float Reference(float r, float g, float b, float range) {
+			if (!UseLampReference || range < ReferenceMinRange) {
+				return 0.0f;
+			}
+			float half = 0.5f * range;
+			return Mathf.Min(Mathf.Max(r, Mathf.Max(g, b)) / Mathf.Max(4.0f, half * half), ReferenceMaxLux);
+		}
 
 		// Once per frame: the nearest lights to the camera
 		public void Update(Camera camera) {
 			Count = 0;
 			ShadowCount = 0;
+			LampReference = 0.0f;
 			if (!Enabled || camera == null) {
 				return;
 			}
@@ -49,6 +86,8 @@ namespace NatureFX.Rendering {
 				nextRefresh_ = Time.unscaledTime + RefreshInterval;
 				all_.Clear();
 				shapes_.Clear();
+				// the lamps' own settings looked at again with the list (a map lamp NatureFX gives a shadow map or not)
+				authored_.Clear();
 				foreach (var light in Object.FindObjectsByType<Light>(FindObjectsInactive.Exclude, FindObjectsSortMode.None)) {
 					if (light.type == LightType.Point || light.type == LightType.Spot) {
 						all_.Add(light);
@@ -61,7 +100,7 @@ namespace NatureFX.Rendering {
 			var eye = camera.transform.position;
 			near_.Clear();
 			foreach (var light in all_) {
-				if (light == null || !light.isActiveAndEnabled || light.intensity <= 0.0f) {
+				if (light == null || !light.isActiveAndEnabled || HeadlightController.Intensity(light) <= 0.0f) {
 					continue;
 				}
 				float distance = Vector3.Distance(light.transform.position, eye) - light.range;
@@ -89,19 +128,25 @@ namespace NatureFX.Rendering {
 					color_[Count] = new Vector4(e.Intensity.r, e.Intensity.g, e.Intensity.b, 2.0f);
 					dir_[Count] = Vector4.zero;
 					spot_[Count] = new Vector4(0.0f, e.Radius, 0.0f, 0.0f);
+					LampReference = Mathf.Max(LampReference, Reference(e.Intensity.r, e.Intensity.g, e.Intensity.b, e.Range));
 					++ShadowCount;
 					++Count;
 					continue;
 				}
 				var t = light.transform;
-				var color = light.color.linear * light.intensity; // HDRP keeps punctual intensities in candela
+				// HDRP keeps punctual intensities in candela; a headlight NatureFX holds: its own value
+				var color = light.color.linear * HeadlightController.Intensity(light);
 				if (light.useColorTemperature) {
 					color *= Mathf.CorrelatedColorTemperatureToRGB(light.colorTemperature);
 				}
 				// small lights (indicators, interior and dash lamps) light only their own housing: no shadows for them
-				bool traceShadows = light.shadows == LightShadows.None && light.range >= 3.0f;
+				// traced: the lamps whose shadow maps NatureFX took (its own record, ShadowTaken), and those made without
+				// one (the lamp's authored setting; HDRP's shadow state is not looked at)
+				bool taken = ShadowTaken != null && ShadowTaken(light);
+				bool traceShadows = (taken || !Authored(light)) && light.range >= 3.0f;
 				pos_[Count] = new Vector4(t.position.x, t.position.y, t.position.z, Mathf.Max(0.1f, light.range));
 				color_[Count] = new Vector4(color.r, color.g, color.b, traceShadows ? 1.0f : 0.0f);
+				LampReference = Mathf.Max(LampReference, Reference(color.r, color.g, color.b, pos_[Count].w));
 				if (light.type == LightType.Spot) {
 					// HDRP's spot attenuation: saturate(cos * scale + offset), squared
 					float cosOuter = Mathf.Cos(light.spotAngle * 0.5f * Mathf.Deg2Rad);

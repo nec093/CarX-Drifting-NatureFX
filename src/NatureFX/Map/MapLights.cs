@@ -63,6 +63,7 @@ namespace NatureFX.Map {
 			public bool Drawn;
 			public bool Shadowed;
 			public float Distance;
+			public float Candela;    // its full intensity (cd): worked out here, or the author's Light's as the map has it
 		}
 
 		private readonly List<Lamp> lamps_ = new();
@@ -135,6 +136,7 @@ namespace NatureFX.Map {
 			if (m.Component is Light own) {
 				lamp.Light = own;
 				lamp.Hd = own.GetComponent<HDAdditionalLightData>();
+				lamp.Candela = own.intensity;
 				lamp.WantsShadow = own.shadows != LightShadows.None && !string.Equals(m.Get("shadow"), "off", System.StringComparison.OrdinalIgnoreCase);
 				own.enabled = false;
 				return lamp;
@@ -166,11 +168,20 @@ namespace NatureFX.Map {
 				hd.EnableColorTemperature(false);
 				hd.SetColor(preset.Tint);
 			}
-			hd.SetIntensity(m.GetFloat("lm", preset.Lumen), LightUnit.Lumen);
 			hd.SetRange(m.GetFloat("range", preset.Range));
+			float spot = Mathf.Clamp(m.GetFloat("spot", preset.Spot), 1.0f, 179.0f);
 			if (preset.Type == LightType.Spot) {
-				hd.SetSpotAngle(Mathf.Clamp(m.GetFloat("spot", preset.Spot), 1.0f, 179.0f), 40.0f);
+				hd.SetSpotAngle(spot, 40.0f);
 			}
+			// the intensity worked out here (candela, the spot's reflector into its cone) and given to HDRP in candela:
+			// HDRP converts nothing, and the own engine takes the same value (Rendering.HeadlightController.Intensity)
+			if (preset.Type == LightType.Spot) {
+				hd.enableSpotReflector = true;
+			}
+			float candela = NatureFX.Rendering.HeadlightController.LumenToCandela(m.GetFloat("lm", preset.Lumen), preset.Type, spot);
+			hd.SetIntensity(candela, LightUnit.Candela);
+			NatureFX.Rendering.HeadlightController.HoldIntensity(light, candela);
+			lamp.Candela = candela;
 			hd.shapeRadius = preset.Type == LightType.Spot ? 0.15f : 0.05f;
 			if (preset.Beam != Distribution.None && !string.Equals(m.Get("ies"), "off", System.StringComparison.OrdinalIgnoreCase)) {
 				hd.SetCookie(Cookie(preset.Beam));
@@ -242,8 +253,11 @@ namespace NatureFX.Map {
 					level *= 0.1f + 0.9f * Mathf.Pow(Mathf.Max(0.0f, Mathf.Sin((t + l.Seed) * Mathf.PI * 2.4f)), 4.0f);
 				}
 				l.Hd.lightDimmer = level;
+				// the own engine's value of it: NatureFX's own number, HDRP's dimmer is not read back
+				NatureFX.Rendering.HeadlightController.HoldIntensity(l.Light, l.Candela * level);
 				// light in fog and rain at night, as strong as the headlights' (Volumetric headlight beams)
-				l.Hd.volumetricDimmer = shafts > 0.0f ? shafts * 4.0f : 1.0f;
+				// (0: none; it was HDRP's full 1 at 0)
+				l.Hd.volumetricDimmer = Mathf.Max(shafts, 0.0f) * 4.0f;
 			}
 		}
 
