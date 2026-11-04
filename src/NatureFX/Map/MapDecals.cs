@@ -8,8 +8,7 @@ namespace NatureFX.Map {
 	// Decal markers (docs/map-authoring.md 7.2): nfx_decal_<preset> lays a pattern NatureFX paints itself (crack, patch,
 	// oil, leaves_pile, sand, skid, moss_edge) on the ground in its box. The game's HDRP asset has decals switched off,
 	// so the NatureFX ground shaders draw them (NFX_ApplyDecals: the 32 nearest the camera, projected from above,
-	// turned by the marker's yaw); they show on surfaces with NatureFX shaders only. The leaf piles follow the amount of
-	// fallen leaves. A disabled Decal Projector the author set up is switched on as it is (shows only if the game ever
+	// turned by the marker's yaw); they show on surfaces with NatureFX shaders only. A disabled Decal Projector the author set up is switched on as it is (shows only if the game ever
 	// turns decals on).
 	public class MapDecals {
 		private const int MaxDecals = 512;
@@ -125,11 +124,10 @@ namespace NatureFX.Map {
 					nearest_.RemoveRange(MaxDrawn, nearest_.Count - MaxDrawn);
 				}
 			}
-			float leaves = Mathf.SmoothStep(0.0f, 1.0f, Weather.Current.Leaves * 2.0f);
 			for (int i = 0; i < MaxDrawn; ++i) {
 				if (i < nearest_.Count) {
 					var d = nearest_[i];
-					float opacity = d.Slice == 3 ? d.Opacity * leaves : d.Opacity;
+					float opacity = d.Opacity;
 					// w packs the preset and the opacity: slice * 4 + opacity (NFX_ApplyDecals)
 					centers_[i] = new Vector4(d.Center.x, d.Center.y, d.Center.z, d.Slice * 4.0f + Mathf.Min(opacity, 0.99f));
 					sizes_[i] = new Vector4(d.Half.x, d.Half.y, d.Half.z, d.Yaw);

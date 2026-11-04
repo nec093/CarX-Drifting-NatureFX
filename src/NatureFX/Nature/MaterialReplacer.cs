@@ -696,7 +696,7 @@ namespace NatureFX.Nature {
 				}
 			}
 			if (shaderName == "HDRP/Lit" && Profiles != null && Profiles.MatchesFoliage(m, objectPath)) {
-				return FoliageShader; // [foliage]: season colours and back lit leaves need the foliage shader
+				return FoliageShader; // [foliage]: colour variation and back lit leaves need the foliage shader
 			}
 			if (shaderName == "HDRP/Lit" && Profiles != null && Profiles.Matches(m, objectPath)) {
 				return ProfileShader;

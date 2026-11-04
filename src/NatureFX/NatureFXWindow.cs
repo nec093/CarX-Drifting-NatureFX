@@ -555,24 +555,16 @@ namespace NatureFX {
 			Widgets.Info("How long a change of weather takes, the clouds included.");
 			Widgets.EndDependent();
 			var w = Weather.Current;
-			Widgets.Info($"Now: rain {w.Rain:P0} · wet {w.Wetness:P0} · snow {w.Snow:P0} · leaves {w.Leaves:P0} · clouds {w.Cloud:P0}");
+			Widgets.Info($"Now: rain {w.Rain:P0} · wet {w.Wetness:P0} · ground {mod_.Accumulation.Wetness:P0} · clouds {w.Cloud:P0}");
 			Widgets.EndCard();
 
-			Widgets.BeginCard("Season", "Colours of the trees and grass that the map's profile describes, and the floating particles. " +
-			                            "Auto: the Autumn and Snow weather, else the map's own season.");
-			int season = Mathf.Clamp(S.Season, 0, SeasonNames.Length - 1);
-			if (Widgets.Chips(ref season, SeasonNames)) {
-				S.Season = season;
-				Other(true);
-			}
-			Widgets.Info($"Now: {Seasons.Describe()}");
+			Widgets.BeginCard("Leaf colour", "The colour of the leaves and grass.");
 			Other(Widgets.Slider("Real leaf colour", S.FoliageColor, 0, 1, v => S.FoliageColor = v, "0.00"));
 			Widgets.Info("1: leaves and grass as dark and olive as real ones (a leaf sends back some 4 to 12 % of the light). 0: the textures' own colours.");
 			Widgets.EndCard();
 
-			Widgets.BeginCard("Rain and snow", "Falling rain and snow around the camera, with the weather: rain streaks that splash where they land and show in headlights and under street lights, drifting snowflakes. 0 turns them off.");
+			Widgets.BeginCard("Rain", "Falling rain around the camera, with the weather: rain streaks that splash where they land and show in headlights and under street lights. 0 turns it off.");
 			Widgets.Slider("Precipitation", S.Precipitation, 0, 2, v => S.Precipitation = v);
-			Other(Widgets.Slider("Snow depth", S.SnowDepth, 0, 0.5f, v => S.SnowDepth = v, "0.00", " m"));
 			Widgets.Info($"Now: {mod_.Rain.State}");
 			Widgets.EndCard();
 
@@ -580,45 +572,21 @@ namespace NatureFX {
 			if (S.WeatherPreset == 0) {
 				DrawManualWeather();
 			}
-			DrawBuildUp();
 		}
 
 		private void DrawManualWeather() {
 			Widgets.BeginCard("Manual values", "Used when the preset is Manual.");
 			Other(Widgets.Slider("Rain", S.Rain, 0, 1, v => S.Rain = v));
 			Other(Widgets.Slider("Wetness", S.Wetness, 0, 1, v => S.Wetness = v));
-			Other(Widgets.Slider("Snow", S.Snow, 0, 1, v => S.Snow = v));
-			Other(Widgets.Slider("Fallen leaves", S.Leaves, 0, 1, v => S.Leaves = v));
-			Other(Widgets.Slider("Dust", S.Dust, 0, 1, v => S.Dust = v));
-			Widgets.EndCard();
-		}
-
-		private void DrawBuildUp() {
-			Widgets.BeginCard("Build up over time");
-			Other(Widgets.Switch("Enable", S.AccumulateOverTime, v => S.AccumulateOverTime = v));
-			Widgets.BeginDependent(S.AccumulateOverTime);
-			Other(Widgets.Slider("Speed", S.AccumulationRate, 0.005f, 0.5f, v => S.AccumulationRate = v, "0.000", " /min"));
-			Widgets.EndDependent();
-			var c = mod_.Accumulation.Current;
-			Widgets.Info($"Now: snow {c.x:P0} · leaves {c.y:P0} · dust {c.z:P0} · wet {c.w:P0}");
-			if (Widgets.Button("Reset build up", 140)) {
-				mod_.Accumulation.ResetProgress();
-			}
 			Widgets.EndCard();
 		}
 
 		private void DrawRoad() {
-			Widgets.BeginCard("Road surface", "Marks are kept around the camera and cleared when you drive far away.");
-			Other(Widgets.Switch("Tyre marks, dry line, snow ruts", S.TireMarks, v => S.TireMarks = v));
-			Widgets.BeginDependent(S.TireMarks);
-			Other(Widgets.Slider("Rubber when sliding", S.RubberAmount, 0, 2, v => S.RubberAmount = v));
-			Widgets.EndDependent();
+			Widgets.BeginCard("Road surface", "The dry line is kept around the camera and cleared when you drive far away.");
+			Other(Widgets.Switch("Tyres on the road: dry line", S.TireMarks, v => S.TireMarks = v,
+				"The tyres squeeze the water out of the driven line on a wet road and press the grass down. Also what the tyre smoke and spray, the brake glow and the mud on the car start from."));
 			Other(Widgets.Slider("Surface detail", S.SurfaceDetail, 0, 1, v => S.SurfaceDetail = v));
-			Widgets.BeginDependent(S.ReplaceShaders);
-			Other(Widgets.Slider("Road wear", S.RoadWear, 0, 1, v => S.RoadWear = v));
-			Widgets.Info("Rubber laid down on the driven ground in long streaks, worn smooth in places (needs Replace game shaders, Shader rebuild).");
-			Widgets.EndDependent();
-			if (Widgets.Button("Clear marks", 120)) {
+			if (Widgets.Button("Clear dry line", 120)) {
 				mod_.Tracks.Clear();
 			}
 			Widgets.EndCard();
@@ -666,20 +634,20 @@ namespace NatureFX {
 			Widgets.EndDependent();
 			Widgets.EndCard();
 
-			Widgets.BeginCard("Smoke, glow and dirt", "Volumetric tyre smoke and spray lit by the sun, lamps and headlights " +
-			                                                    "(needs Tyre marks on: it starts where the tyres slide). Brake discs that glow after hard braking, afterfire.");
+			Widgets.BeginCard("Smoke, glow and mud", "Volumetric tyre smoke and spray lit by the sun, lamps and headlights " +
+			                                                    "(needs Tyres on the road on: it starts where the tyres slide). Brake discs that glow after hard braking, afterfire.");
 			Widgets.Slider("Tyre smoke and spray", S.TireSmoke, 0, 2, v => S.TireSmoke = v);
 			Widgets.BeginDependent(S.TireSmoke > 0.0f);
 			Widgets.EndDependent();
 			Widgets.Switch("Glowing brakes, afterfire", S.CarGlow, v => S.CarGlow = v);
-			Widgets.Switch("Dirt, dust and snow on the car", S.CarDirt, v => S.CarDirt = v, "Builds up as you drive: mud on wet roads, dust on dusty ones, snow on top while it snows. Rain washes it off.");
+			Widgets.Switch("Mud on the car", S.CarDirt, v => S.CarDirt = v, "Builds up as you drive on wet roads. Rain washes it off.");
 			Widgets.BeginDependent(S.CarDirt);
-			Widgets.Slider("Most dirt", S.CarDirtAmount, 0, 1, v => S.CarDirtAmount = v);
+			Widgets.Slider("Most mud", S.CarDirtAmount, 0, 1, v => S.CarDirtAmount = v);
 			if (Widgets.Button("Wash the car", 140)) {
 				mod_.CarRainFx.Wash();
 			}
 			Widgets.EndDependent();
-			Widgets.Info($"Tyre smoke: {mod_.Smoke.Particles} particles ({mod_.Smoke.ShadowedParticles} in shadow), hottest tread {mod_.Smoke.HottestTyre:0} C (smoke from 140 C)  ·  Car: mud {mod_.CarRainFx.Mud:P0}, dust {mod_.CarRainFx.Dust:P0}, snow {mod_.CarRainFx.Snow:P0}");
+			Widgets.Info($"Tyre smoke: {mod_.Smoke.Particles} particles ({mod_.Smoke.ShadowedParticles} in shadow), hottest tread {mod_.Smoke.HottestTyre:0} C (smoke from 140 C)  ·  Car: mud {mod_.CarRainFx.Mud:P0}");
 			Widgets.EndCard();
 		}
 
@@ -892,12 +860,12 @@ namespace NatureFX {
 				mod_.SetShaderReplacement(true);
 				mod_.MarkDirty();
 			}, "Off: only the materials the replacement rules name (foliage, roads).");
-			Widgets.Switch("Foliage too (wind, snow)", S.RebuildFoliage, v => {
+			Widgets.Switch("Foliage too (wind, wetness)", S.RebuildFoliage, v => {
 				S.RebuildFoliage = v;
 				mod_.SetShaderReplacement(false);
 				mod_.SetShaderReplacement(true);
 				mod_.MarkDirty();
-			}, "Off: trees, bushes and grass keep the game's shaders (no wind or snow on them).");
+			}, "Off: trees, bushes and grass keep the game's shaders (no wind or wetness on them).");
 			Other(Widgets.Slider("Anti-tiling", S.AntiTiling, 0, 1, v => S.AntiTiling = v));
 			Widgets.Info("Hex tiles against a texture's visible repeat and seams, on the materials the map's profile asks for (antitiling=). " +
 			             "Three texture reads instead of one there.");
@@ -1009,8 +977,6 @@ namespace NatureFX {
 			Widgets.EndCard();
 		}
 
-		private static readonly string[] SeasonNames = { "Auto", "Spring", "Summer", "Autumn", "Winter", "None" };
-
 		// The Map tab: what the loaded map asks for and what NatureFX is doing with it right now, card by card, so a map
 		// author sees at a glance what loaded, what shows and why something does not
 		private void DrawMapProfile() {
@@ -1081,10 +1047,9 @@ namespace NatureFX {
 			Widgets.EndCard();
 
 			// --- weather
-			Widgets.BeginCard("Weather and season", "The map's starting weather ([defaults]) and its weather zones, at the camera. A slider you moved since the map loaded is yours (\"yours\").");
+			Widgets.BeginCard("Weather", "The map's starting weather ([defaults]) and its weather zones, at the camera. A slider you moved since the map loaded is yours (\"yours\").");
 			Widgets.Info($"Map values now:  {mod_.MapWeather.Describe()}");
 			Widgets.Info(mod_.Zones.Count > 0 ? $"Zones ({mod_.Zones.Count}):  {mod_.Zones.Describe()}" : "Zones:  none");
-			Widgets.Info($"Season:  {Seasons.Describe()}  (Weather > Season)");
 			Widgets.Info($"Sky:  {mod_.Clouds.State}  ·  night: {mod_.Night.State}");
 			Widgets.Info($"Sky type:  {mod_.Volume.SkyState}");
 			Widgets.EndCard();
@@ -1103,15 +1068,7 @@ namespace NatureFX {
 			Widgets.Slider("Thicket density", S.ShrubDensity, 0, 2, v => S.ShrubDensity = v);
 			Widgets.Slider("Scanned shrubs up to", S.ShrubDistance, 5, 80, v => S.ShrubDistance = v, "0", " m");
 			Widgets.Info(mod_.Shrubs.AreaCount > 0 ? $"Thickets:  {mod_.Shrubs.Describe()}" : "Thickets:  no shrub markers");
-			Widgets.EndCard();
-
-			// --- the ground map's details
-			Widgets.BeginCard("Ground detail", "Objects take the ground's colour where they stand in it, the profile's painted dirt ([paint]) and debris along the road's edges. Needs the own engine.");
-			Widgets.Switch("Ground detail", S.MapGroundDetail, v => S.MapGroundDetail = v);
-			Widgets.Slider("Debris (pebbles, twigs, leaves)", S.Detritus, 0, 3, v => S.Detritus = v);
-			Widgets.Info($"Ground map:  {NatureFX.Rendering.GroundMap.Status}");
-			Widgets.Info($"Painted dirt:  {mod_.Paint.Status}");
-			Widgets.Info($"Debris:  {mod_.Debris.Status}");
+			Widgets.Info($"Ground map (where the plants' cards meet the ground):  {NatureFX.Rendering.GroundMap.Status}");
 			Widgets.EndCard();
 
 			// --- effects, each with what it waits for

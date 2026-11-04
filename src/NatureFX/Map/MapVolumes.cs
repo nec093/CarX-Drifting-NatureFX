@@ -6,8 +6,9 @@ using UnityEngine.Rendering.HighDefinition;
 
 namespace NatureFX.Map {
 	// Local fog (docs/map-authoring.md 7.4): nfx_volume_<preset> fills its box with HDRP Local Volumetric Fog over a
-	// drifting 3D noise, when its conditions hold: mist in the early morning and after rain, steam on cold days, smoke
-	// by 'when', road_steam on a wet road the sun comes out on after rain, haze on clear days. A disabled Local
+	// drifting 3D noise, when its conditions hold: mist in the early morning and after rain, steam in the cold hours
+	// (early morning, night), smoke by 'when', road_steam on a wet road the sun comes out on after rain, haze on clear
+	// days. A disabled Local
 	// Volumetric Fog of the map follows 'when' only. They fade in and out over several seconds; at most 32 nearest the
 	// camera run. Local fog needs volumetric fog on: MapFog switches it on while any of them shows.
 	public class MapVolumes {
@@ -185,7 +186,8 @@ namespace NatureFX.Map {
 			float elevation = sun != null ? Mathf.Asin(Mathf.Clamp(-sun.transform.forward.y, -1.0f, 1.0f)) * Mathf.Rad2Deg : 45.0f;
 			// morning: the time of day when NatureFX sets it, else a low sun
 			bool morning = s.SunOverride ? s.TimeOfDay >= 4.0f && s.TimeOfDay <= 8.5f : elevation > -3.0f && elevation < 12.0f;
-			bool cold = w.Snow > 0.1f || Seasons.Current == 3;
+			// the cold hours: the early morning and the night (there is no temperature or season to go by)
+			bool cold = morning || elevation < -3.0f;
 
 			if (Time.unscaledTime >= nextSort_) {
 				nextSort_ = Time.unscaledTime + 0.5f;
@@ -247,7 +249,7 @@ namespace NatureFX.Map {
 		private static string Waits(string preset) {
 			return preset switch {
 				"mist" => "waits for the early morning (wet ground) or after rain",
-				"steam" => "waits for a cold day (snow on the ground or winter)",
+				"steam" => "waits for the cold hours (early morning or night)",
 				"road_steam" => "waits for the sun on a wet road soon after rain",
 				"haze" => "waits for a clear day",
 				_ => "waits"

@@ -786,23 +786,17 @@ namespace NatureFX.Tools {
 			var world = new Section("world", "Weather, cars, map");
 			world.Try("weather", () => {
 				var w = NatureFX.Nature.Weather.Current;
-				return $"rain {w.Rain:P0}, wet {w.Wetness:P0}, snow {w.Snow:P0}, leaves {w.Leaves:P0}, clouds {w.Cloud:P0}";
+				return $"rain {w.Rain:P0}, wet {w.Wetness:P0}, clouds {w.Cloud:P0}";
 			});
-			world.Try("season", () => NatureFX.Map.Seasons.Describe());
-			world.Try("rain and snow", () => mod.Rain.State);
-			world.Try("build up", () => {
-				var c = mod.Accumulation.Current;
-				return $"snow {c.x:P0}, leaves {c.y:P0}, dust {c.z:P0}, wet {c.w:P0}";
-			});
+			world.Try("rain", () => mod.Rain.State);
+			world.Try("ground wetness", () => $"{mod.Accumulation.Wetness:P0}");
 			world.Try("tyre smoke", () => $"{mod.Smoke.Particles} particles ({mod.Smoke.ShadowedParticles} in shadow), hottest tread {mod.Smoke.HottestTyre:0} C");
-			world.Try("car dirt", () => $"mud {mod.CarRainFx.Mud:P0}, dust {mod.CarRainFx.Dust:P0}, snow {mod.CarRainFx.Snow:P0}");
+			world.Try("car mud", () => $"{mod.CarRainFx.Mud:P0}");
 			world.Try("game particles", () => $"{mod.GameFx.Count} drawn by NatureFX, {mod.GameFx.Skipped} kept");
 			world.Try("map", () => mod.Map.Loaded ? $"{mod.Map.Name} ({mod.Map.Source})" : "no profile");
 			world.Try("map values", () => mod.MapWeather.Describe());
 			world.Try("ground map", () => GroundMap.Status);
-			world.Try("painted dirt", () => mod.Paint.Status);
-			world.Try("debris", () => mod.Debris.Status);
-			world.Try("ground (what debris lies on)", () => $"{NativeEngine.GroundCount} instances");
+			world.Try("ground (what the ground map sees)", () => $"{NativeEngine.GroundCount} instances");
 			try {
 				var grounds = new List<(string Name, float Size)>(NativeEngine.GroundInstances);
 				grounds.Sort((a, b) => b.Size.CompareTo(a.Size));

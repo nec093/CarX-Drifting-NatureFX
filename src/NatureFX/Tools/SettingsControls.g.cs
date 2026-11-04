@@ -33,14 +33,10 @@ namespace NatureFX.Tools {
 			Setting("Weather / Weather", "WeatherCycleMinutes", "Change every", () => S.WeatherCycleMinutes, v => S.WeatherCycleMinutes = v, () => D.WeatherCycleMinutes, 2.0f, 60.0f, 0.29f, () => (S.Accumulation) && (S.WeatherCycle));
 			Setting("Weather / Weather", "CloudAmount", "Clouds", () => S.CloudAmount, v => S.CloudAmount = v, () => D.CloudAmount, 0.0f, 1.0f, 0.005f, () => (S.Accumulation));
 			Setting("Weather / Weather", "WeatherChangeTime", "Change time", () => S.WeatherChangeTime, v => S.WeatherChangeTime = v, () => D.WeatherChangeTime, 5.0f, 300.0f, 1.475f, () => (S.Accumulation));
-			SettingChips("Weather / Season", "Season", "Season", new[] { "Auto", "Spring", "Summer", "Autumn", "Winter", "None" }, () => S.Season, v => S.Season = v, () => D.Season);
-			Setting("Weather / Season", "FoliageColor", "Real leaf colour", () => S.FoliageColor, v => S.FoliageColor = v, () => D.FoliageColor, 0.0f, 1.0f, 0.005f);
-			Setting("Weather / Rain and snow", "Precipitation", "Precipitation", () => S.Precipitation, v => S.Precipitation = v, () => D.Precipitation, 0.0f, 2.0f, 0.01f);
-			Setting("Weather / Rain and snow", "SnowDepth", "Snow depth", () => S.SnowDepth, v => S.SnowDepth = v, () => D.SnowDepth, 0.0f, 0.5f, 0.0025f);
-			SettingSwitch("Road / Road surface", "TireMarks", "Tyre marks, dry line, snow ruts", () => S.TireMarks, v => S.TireMarks = v, () => D.TireMarks);
-			Setting("Road / Road surface", "RubberAmount", "Rubber when sliding", () => S.RubberAmount, v => S.RubberAmount = v, () => D.RubberAmount, 0.0f, 2.0f, 0.01f, () => (S.TireMarks));
+			Setting("Weather / Leaf colour", "FoliageColor", "Real leaf colour", () => S.FoliageColor, v => S.FoliageColor = v, () => D.FoliageColor, 0.0f, 1.0f, 0.005f);
+			Setting("Weather / Rain", "Precipitation", "Precipitation", () => S.Precipitation, v => S.Precipitation = v, () => D.Precipitation, 0.0f, 2.0f, 0.01f);
+			SettingSwitch("Road / Road surface", "TireMarks", "Tyres on the road: dry line", () => S.TireMarks, v => S.TireMarks = v, () => D.TireMarks);
 			Setting("Road / Road surface", "SurfaceDetail", "Surface detail", () => S.SurfaceDetail, v => S.SurfaceDetail = v, () => D.SurfaceDetail, 0.0f, 1.0f, 0.005f);
-			Setting("Road / Road surface", "RoadWear", "Road wear", () => S.RoadWear, v => S.RoadWear = v, () => D.RoadWear, 0.0f, 1.0f, 0.005f, () => (S.ReplaceShaders));
 			SettingChips("Cars / Headlights", "HeadlightType", "Headlights", new[] { "Game", "Halogen", "HID", "LED" }, () => S.HeadlightType, v => S.HeadlightType = v, () => D.HeadlightType);
 			SettingChips("Cars / Headlights", "HeadlightStandard", "Headlights", new[] { "Japan (left-hand traffic)", "Europe / US (right-hand traffic)" }, () => S.HeadlightStandard, v => S.HeadlightStandard = v, () => D.HeadlightStandard, () => (S.HeadlightType != 0));
 			Setting("Cars / Headlights", "HeadlightAim", "Beam aim", () => S.HeadlightAim, v => S.HeadlightAim = v, () => D.HeadlightAim, -1.0f, 3.0f, 0.02f, () => (S.HeadlightType != 0));
@@ -48,10 +44,10 @@ namespace NatureFX.Tools {
 			SettingSwitch("Cars / Cars in the rain", "CarRain", "Enable", () => S.CarRain, v => S.CarRain = v, () => D.CarRain);
 			Setting("Cars / Cars in the rain", "CarRainDrops", "Drops", () => S.CarRainDrops, v => S.CarRainDrops = v, () => D.CarRainDrops, 0.0f, 1.0f, 0.005f, () => (S.CarRain));
 			Setting("Cars / Cars in the rain", "OilFilm", "Oil film", () => S.OilFilm, v => S.OilFilm = v, () => D.OilFilm, 0.0f, 1.0f, 0.005f, () => (S.CarRain));
-			Setting("Cars / Smoke, glow and dirt", "TireSmoke", "Tyre smoke and spray", () => S.TireSmoke, v => S.TireSmoke = v, () => D.TireSmoke, 0.0f, 2.0f, 0.01f);
-			SettingSwitch("Cars / Smoke, glow and dirt", "CarGlow", "Glowing brakes, afterfire", () => S.CarGlow, v => S.CarGlow = v, () => D.CarGlow);
-			SettingSwitch("Cars / Smoke, glow and dirt", "CarDirt", "Dirt, dust and snow on the car", () => S.CarDirt, v => S.CarDirt = v, () => D.CarDirt);
-			Setting("Cars / Smoke, glow and dirt", "CarDirtAmount", "Most dirt", () => S.CarDirtAmount, v => S.CarDirtAmount = v, () => D.CarDirtAmount, 0.0f, 1.0f, 0.005f, () => (S.CarDirt));
+			Setting("Cars / Smoke, glow and mud", "TireSmoke", "Tyre smoke and spray", () => S.TireSmoke, v => S.TireSmoke = v, () => D.TireSmoke, 0.0f, 2.0f, 0.01f);
+			SettingSwitch("Cars / Smoke, glow and mud", "CarGlow", "Glowing brakes, afterfire", () => S.CarGlow, v => S.CarGlow = v, () => D.CarGlow);
+			SettingSwitch("Cars / Smoke, glow and mud", "CarDirt", "Mud on the car", () => S.CarDirt, v => S.CarDirt = v, () => D.CarDirt);
+			Setting("Cars / Smoke, glow and mud", "CarDirtAmount", "Most mud", () => S.CarDirtAmount, v => S.CarDirtAmount = v, () => D.CarDirtAmount, 0.0f, 1.0f, 0.005f, () => (S.CarDirt));
 			Setting("Reflections & glass / Ray traced reflections", "RTReflectionIntensity", "Strength", () => S.RTReflectionIntensity, v => S.RTReflectionIntensity = v, () => D.RTReflectionIntensity, 0.0f, 2.0f, 0.01f);
 			Setting("Reflections & glass / Ray traced reflections", "RTReflectionRoughness", "Rough surfaces up to", () => S.RTReflectionRoughness, v => S.RTReflectionRoughness = v, () => D.RTReflectionRoughness, 0.05f, 1.0f, 0.00475f);
 			Setting("Reflections & glass / Ray traced reflections", "RTReflectionDistance", "Ray length", () => S.RTReflectionDistance, v => S.RTReflectionDistance = v, () => D.RTReflectionDistance, 10.0f, 500.0f, 2.45f);
@@ -102,8 +98,6 @@ namespace NatureFX.Tools {
 			Setting("Map / Grass and forest", "GrassDistance", "3D grass distance", () => S.GrassDistance, v => S.GrassDistance = v, () => D.GrassDistance, 10.0f, 120.0f, 0.55f);
 			Setting("Map / Grass and forest", "ShrubDensity", "Thicket density", () => S.ShrubDensity, v => S.ShrubDensity = v, () => D.ShrubDensity, 0.0f, 2.0f, 0.01f);
 			Setting("Map / Grass and forest", "ShrubDistance", "Scanned shrubs up to", () => S.ShrubDistance, v => S.ShrubDistance = v, () => D.ShrubDistance, 5.0f, 80.0f, 0.375f);
-			SettingSwitch("Map / Ground detail", "MapGroundDetail", "Ground detail", () => S.MapGroundDetail, v => S.MapGroundDetail = v, () => D.MapGroundDetail);
-			Setting("Map / Ground detail", "Detritus", "Debris (pebbles, twigs, leaves)", () => S.Detritus, v => S.Detritus = v, () => D.Detritus, 0.0f, 3.0f, 0.015f);
 			SettingSwitch("Map / Effects", "MapEffects", "Map effects", () => S.MapEffects, v => S.MapEffects = v, () => D.MapEffects);
 		}
 	}

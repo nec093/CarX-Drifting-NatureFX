@@ -30,8 +30,6 @@ namespace NatureFX {
 		internal readonly TrackMap Tracks = new();
 		internal readonly CarRain CarRainFx = new();
 		internal readonly MapProfile Map = new();
-		internal readonly MapPaint Paint = new();
-		internal readonly Detritus Debris = new();
 		internal readonly ShrubRenderer Shrubs = new();
 		internal readonly MarkerScanner Markers = new();
 		internal readonly MaterialProfiles MaterialLooks = new();
@@ -307,8 +305,6 @@ namespace NatureFX {
 			TrackProbes.Restore();
 			Grass.Destroy();
 			Decals.Destroy();
-			Paint.Destroy();
-			Debris.Destroy();
 			Water.Destroy();
 			Volumes.Destroy();
 			Particles.Destroy();
@@ -349,7 +345,8 @@ namespace NatureFX {
 			NatureFX.Tools.CpuTimings.Section("weather");
 			MapWeather.Update(s, Zones, camPos, s.UseMapProfile && Map.Loaded);
 			WeatherCtl.Update(s);
-			Seasons.Update(s, WeatherCtl.ActivePreset, s.UseMapProfile && Map.Loaded ? MapWeather.Season : null, s.Enabled);
+			// leaves and grass at measured colours (NFX_LitData)
+			Shader.SetGlobalVector(ShaderGlobals.FoliageTone, new Vector4(s.Enabled ? Mathf.Clamp01(s.FoliageColor) : 0.0f, 0.0f, 0.0f, 0.0f));
 			// the own engine draws the fog: the local fog and the tyre smoke are its boxes (AtmospherePass)
 			NatureFX.Tools.CpuTimings.Section("fog and clouds");
 			Fog.Update(s.Enabled, camPos, false, s.AerialHaze, true);
@@ -379,7 +376,6 @@ namespace NatureFX {
 				off.Update(cam, s.Enabled && PostProcess.Active);
 			}
 			Volume.UpdateSky(Sun.Sun, s.Enabled && s.SunOverride, s.Enabled);
-			Weather.UpdateIce(s.Enabled && s.Accumulation, Sun.Sun);
 			PhotoMode.Update(cam);
 			Clouds.Update(s.Enabled, s, Sun.Sun, s.UseMapProfile && Map.Loaded && MapValues.TryFloat(Map.Get("clouds", "sea"), out float sea) ? sea : float.NaN);
 
@@ -400,13 +396,12 @@ namespace NatureFX {
 				RT.Apply(s);
 			}
 
-			// the rebuilt shaders' road surface (grain, wear, tyre rubber)
+			// the rebuilt shaders: the 3D grass and the thickets draw with them
 			bool rebuiltSurface = s.Enabled && s.ReplaceShaders;
 			Wind.DrawnSway = Map.FoliageWind;
-			NatureFX.Tools.CpuTimings.Section("wind, build-up, sun");
+			NatureFX.Tools.CpuTimings.Section("wind, wetness, sun");
 			Wind.Update(s);
 			Accumulation.Update(s);
-			Accumulation.UpdateRoad(rebuiltSurface ? s.RoadWear : 0.0f);
 			// the time of day running on (F8 > Sun & time); saved with the rest when the window closes
 			if (s.Enabled && s.SunOverride && s.TimePasses && s.TimeSpeed > 0.0f) {
 				float hours = Mathf.Min(Time.unscaledDeltaTime, 0.1f) * s.TimeSpeed / 3600.0f;
@@ -440,11 +435,8 @@ namespace NatureFX {
 			}
 			Shrubs.Update(mapOn && rebuiltSurface, cam, s.ShrubDistance);
 			bool effects = mapOn && s.MapEffects;
-			NatureFX.Tools.CpuTimings.Section("decals, paint, debris, water, volumes, particles");
+			NatureFX.Tools.CpuTimings.Section("decals, water, volumes, particles");
 			Decals.Update(effects, camPos);
-			// the ground map's painted dirt and debris (the ground blend itself is RT's)
-			Paint.Update(effects && s.MapGroundDetail, camPos);
-			Debris.Update(effects && s.MapGroundDetail, s.Detritus, camPos);
 			Water.Update(effects, camPos);
 			Volumes.Update(effects, s, Sun.Sun, camPos);
 			Particles.Update(effects, Sun.Sun, camPos, Lights.LitPositions);
@@ -593,8 +585,6 @@ namespace NatureFX {
 			// (the map's reflection probes are not made: the traced reflections and the own sky stand in for them)
 			Grass.Load(Map, Markers, Bundle, Settings.Data.GrassDensity);
 			Decals.Load(Markers);
-			Paint.Load(Map);
-			Debris.Create(Bundle);
 			Water.Load(Markers, Bundle);
 			Volumes.Load(Markers);
 			Particles.Load(Markers, Bundle);

@@ -540,8 +540,6 @@ namespace NatureFX.Rendering {
 				shadows_.LampMasks = s.RTLampMasks;
 				shadows_.FullRelight = s.RTFullRelight;
 				shadows_.TransparentShadows = s.RTTransparentShadows;
-				shadows_.GroundDetail = s.MapGroundDetail;
-				shadows_.GroundBlend = NatureFX.Map.MapDefaults.Value(NatureFX.Map.MapKey.GroundBlend, 0.35f);
 				shadows_.LeafTranslucency = s.RTLeafTranslucency;
 				shadows_.Shafts = s.RTShafts;
 				lights_.Enabled = true;

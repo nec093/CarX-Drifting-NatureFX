@@ -189,6 +189,10 @@ namespace NatureFX.Tools {
 			"NativeSky", "OwnSkyLighting", "OwnSunLight", "OwnLampLight", "OwnBrdf", "OwnTransparentLight", "NativeFog", "NativeLighting",
 			"NativeParticles", "NativeGlass", "NativePost", "RTShadows", "RTAO", "RTReflections", "RTLocalLights", "RTLampShadows",
 			"RTGlassReflections", "RTGIBounce", "RTGIMultiBounce", "LightShafts", "RealisticShadows", "SunTemperature", "MapProbes",
+			// removed features: snow, fallen leaves, dust, the build-up over time, the seasons, the road's rubber and wear,
+			// the ground blend, painted dirt and debris
+			"Snow", "Leaves", "Dust", "SnowDepth", "AccumulateOverTime", "AccumulationRate", "Season", "RubberAmount", "RoadWear",
+			"MapGroundDetail", "Detritus",
 		};
 
 		private static void BuildSettings() {
@@ -230,7 +234,7 @@ namespace NatureFX.Tools {
 			Switch(views, "view-gi", "Show ambient light / GI only", () => mod.RT.GIDebugView, v => mod.RT.GIDebugView = v,
 				"Mid grey where the ambient light is unchanged, darker where the sky is blocked, brighter and tinted where light bounces in.");
 			Switch(views, "view-albedo", "Albedo check (the map's colours against real materials)", () => mod.RT.AlbedoDebugView, v => mod.RT.AlbedoDebugView = v,
-				"The surfaces' base colour lit evenly. Red: brighter than 80 % (only snow, white paint). Blue: darker than 3 %. Magenta: a colour more vivid than nature's. Needs the exact sun light (Lighting & shadows). Not saved.");
+				"The surfaces' base colour lit evenly. Red: brighter than 80 % (only white paint). Blue: darker than 3 %. Magenta: a colour more vivid than nature's. Needs the exact sun light (Lighting & shadows). Not saved.");
 			Info(views, "albedo", () => mod.MaterialLooks.AlbedoStatus);
 			Button(views, "identify", "What is this? (then click the scene in the game)", () => mod.Identify.Arm(),
 				() => mod.Identify.Armed ? "click the scene in the game..." : mod.Identify.Result);
@@ -260,7 +264,7 @@ namespace NatureFX.Tools {
 			Switch(tools, "record-variants", "Record shader variants", () => S.RecordShaderVariants, v => {
 				S.RecordShaderVariants = v;
 				ShaderVariantRecorder.Recording = v;
-			}, "Records which NatureFX shader variants the game uses: play maps (DX12) by day and night, rain and snow, then save.", true);
+			}, "Records which NatureFX shader variants the game uses: play maps (DX12) by day and night, dry and in the rain, then save.", true);
 			Button(tools, "save-variants", "Save recorded variants", () => ShaderVariantRecorder.Save(),
 				() => ShaderVariantRecorder.LastMessage ?? ShaderVariantRecorder.FilePath);
 			Switch(tools, "material-inventory", "Write the material inventory at each map load", () => S.WriteMaterialInventory, v => S.WriteMaterialInventory = v,

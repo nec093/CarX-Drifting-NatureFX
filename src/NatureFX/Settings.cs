@@ -20,13 +20,13 @@ namespace NatureFX {
 		public float LeafFlutter { get; set; }
 		public bool InteractiveFoliage { get; set; }
 
-		// accumulation / weather
+		// the weather: rain and wetness on or off
 		public bool Accumulation { get; set; }
-		public bool AccumulateOverTime { get; set; }
-		public float AccumulationRate { get; set; }
-		public float Snow { get; set; }
-		public float Leaves { get; set; }
-		public float Dust { get; set; }
+		public bool AccumulateOverTime { get; set; }  // removed (the build-up over time): kept only so old files load
+		public float AccumulationRate { get; set; }   // removed
+		public float Snow { get; set; }               // removed (snow)
+		public float Leaves { get; set; }             // removed (fallen leaves)
+		public float Dust { get; set; }               // removed (dust)
 		public float Wetness { get; set; }
 		public bool WetGameMaterials { get; set; }
 		public bool CalibrateAlbedo { get; set; }     // the map's materials brought to their real material's albedo ([materials], MaterialProfiles)
@@ -69,7 +69,7 @@ namespace NatureFX {
 
 		// --- added in config version 4: weather and shadows ---
 		public float Rain { get; set; }               // 0..1 ripples, drips, wet surfaces
-		public float SnowDepth { get; set; }          // metres of real snow thickness at full snow
+		public float SnowDepth { get; set; }          // removed (snow): kept only so old files load
 		public bool RealisticShadows { get; set; }
 		public float SunSize { get; set; }            // angular diameter in degrees (PCSS, needs High shadow filtering)
 
@@ -92,9 +92,9 @@ namespace NatureFX {
 		public float HeadlightKelvin { get; set; }          // the lamps' colour temperature (K); 0: the type's own
 		public float SurfaceDetail { get; set; }
 
-		// tire marks / car rain
+		// tyres on the road (the dry line, the wheels' contacts) / car rain
 		public bool TireMarks { get; set; }
-		public float RubberAmount { get; set; }
+		public float RubberAmount { get; set; }       // removed (tyre rubber): kept only so old files load
 		public bool CarRain { get; set; }
 		public float CarRainDrops { get; set; }
 		public float OilFilm { get; set; }
@@ -129,7 +129,7 @@ namespace NatureFX {
 		public bool RTLampMasks { get; set; }              // roadmap A4: each lamp shadowed by its own mask (with RTExactSun)
 		public bool RTFullRelight { get; set; }            // roadmap A4: HDRP's pixel taken apart and lit again by the own engine
 		public bool RTHideFakeShadows { get; set; }        // hide the game's painted shadow planes while the ray traced shadows run
-		public bool RebuildFoliage { get; set; }           // shader rebuild: foliage too (wind, snow); off leaves it to the game's shaders
+		public bool RebuildFoliage { get; set; }           // shader rebuild: foliage too (wind, wetness); off leaves it to the game's shaders
 		public bool RTWind { get; set; }                   // own engine: the traced foliage sways with the wind as it is drawn
 		public float RTLeafTranslucency { get; set; }      // sunlight through back-lit leaves (0: off)
 		public bool RTShafts { get; set; }                 // ray traced light shafts
@@ -158,12 +158,11 @@ namespace NatureFX {
 		public float RTSkyOcclusion { get; set; }          // m: overhangs further than the ambient distance take the sky (0: off)
 		public float RTContactShadows { get; set; }        // darkening where surfaces meet (0: off)
 
-		// shader rebuild: road surface detail of the NatureFX shaders (grain, rubber laid down on the driven line)
+		// removed (the road's rubber and wear): kept only so old files load
 		public float RoadWear { get; set; }
 
-		// map extension (docs/map-authoring.md 5 and 7): season of the foliage colours and the floating particles
-		// (0 automatic: the weather preset, else the map's [defaults] season; 1 spring .. 4 winter; 5 none), the 3D
-		// grass (density multiplier, metres from the camera) and the map's decals, water, local fog and particles
+		// map extension (docs/map-authoring.md 5 and 7): the 3D grass (density multiplier, metres from the camera) and
+		// the map's decals, water, local fog and particles. Season: removed (the seasonal colours), kept so old files load
 		public int Season { get; set; }
 		// leaves and grass brought to measured colours (0 the textures' own, 1 a real leaf's: some 4 to 12 % of the light
 		// back, an olive green, not a painted one; NFX_LitData)
@@ -194,7 +193,7 @@ namespace NatureFX {
 		// camera's exposure does not reach), and how long a change of weather takes (s)
 		public float StarBrightness { get; set; }
 		public float WeatherChangeTime { get; set; }
-		// falling rain (with splashes) and snow around the camera: how dense (0 off)
+		// falling rain (with splashes) around the camera: how dense (0 off)
 		public float Precipitation { get; set; }
 		// shader rebuild: hex tiled textures where the map's [materials] ask for it (antitiling=), 0 off .. 1
 		public float AntiTiling { get; set; }
@@ -203,7 +202,7 @@ namespace NatureFX {
 		public float TireSmoke { get; set; }
 		public bool ReplaceGameSmoke { get; set; }
 		public bool CarGlow { get; set; }
-		// dirt, dust and snow building up on the car nearest the camera (how much at most)
+		// mud building up on the car nearest the camera (how much at most)
 		public bool CarDirt { get; set; }
 		public float CarDirtAmount { get; set; }
 		// the camera and the eye: night vision (Purkinje shift and grain, 0 off), lens flare (0 off), depth of field on
@@ -221,8 +220,8 @@ namespace NatureFX {
 		public float MotionBlur { get; set; }              // own post: the shutter's share of a frame (0.5: 180°), 0 off
 		public float DofFStop { get; set; }                // own post's depth of field: the lens's f-number
 		public bool RTTransparentShadows { get; set; }     // the sun's ray traced shadow on transparent surfaces (SunShadowMap)
-		public bool MapGroundDetail { get; set; }          // the ground map: ground blend, painted dirt and debris on the map
-		public float Detritus { get; set; }                // debris (pebbles, twigs, leaves) along the road's edges: density, 0 off
+		public bool MapGroundDetail { get; set; }          // removed (ground blend, painted dirt, debris): kept only so old files load
+		public float Detritus { get; set; }                // removed (debris)
 		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
 		public bool MapProbes { get; set; }
 		// draw the map's markers over the picture (F8 > Map), for map authors
@@ -251,13 +250,13 @@ namespace NatureFX {
 		public float LeafFlutter { get; set; }
 		public bool InteractiveFoliage { get; set; }
 
-		// accumulation / weather
+		// the weather: rain and wetness on or off
 		public bool Accumulation { get; set; }
-		public bool AccumulateOverTime { get; set; }
-		public float AccumulationRate { get; set; }
-		public float Snow { get; set; }
-		public float Leaves { get; set; }
-		public float Dust { get; set; }
+		public bool AccumulateOverTime { get; set; }  // removed (the build-up over time): kept only so old files load
+		public float AccumulationRate { get; set; }   // removed
+		public float Snow { get; set; }               // removed (snow)
+		public float Leaves { get; set; }             // removed (fallen leaves)
+		public float Dust { get; set; }               // removed (dust)
 		public float Wetness { get; set; }
 		public bool WetGameMaterials { get; set; }
 		public bool CalibrateAlbedo { get; set; }     // the map's materials brought to their real material's albedo ([materials], MaterialProfiles)
@@ -300,7 +299,7 @@ namespace NatureFX {
 
 		// --- added in config version 4: weather and shadows ---
 		public float Rain { get; set; }               // 0..1 ripples, drips, wet surfaces
-		public float SnowDepth { get; set; }          // metres of real snow thickness at full snow
+		public float SnowDepth { get; set; }          // removed (snow): kept only so old files load
 		public bool RealisticShadows { get; set; }
 		public float SunSize { get; set; }            // angular diameter in degrees (PCSS, needs High shadow filtering)
 
@@ -323,9 +322,9 @@ namespace NatureFX {
 		public float HeadlightKelvin { get; set; }          // the lamps' colour temperature (K); 0: the type's own
 		public float SurfaceDetail { get; set; }
 
-		// tire marks / car rain
+		// tyres on the road (the dry line, the wheels' contacts) / car rain
 		public bool TireMarks { get; set; }
-		public float RubberAmount { get; set; }
+		public float RubberAmount { get; set; }       // removed (tyre rubber): kept only so old files load
 		public bool CarRain { get; set; }
 		public float CarRainDrops { get; set; }
 		public float OilFilm { get; set; }
@@ -360,7 +359,7 @@ namespace NatureFX {
 		public bool RTLampMasks { get; set; }              // roadmap A4: each lamp shadowed by its own mask (with RTExactSun)
 		public bool RTFullRelight { get; set; }            // roadmap A4: HDRP's pixel taken apart and lit again by the own engine
 		public bool RTHideFakeShadows { get; set; }        // hide the game's painted shadow planes while the ray traced shadows run
-		public bool RebuildFoliage { get; set; }           // shader rebuild: foliage too (wind, snow); off leaves it to the game's shaders
+		public bool RebuildFoliage { get; set; }           // shader rebuild: foliage too (wind, wetness); off leaves it to the game's shaders
 		public bool RTWind { get; set; }                   // own engine: the traced foliage sways with the wind as it is drawn
 		public float RTLeafTranslucency { get; set; }      // sunlight through back-lit leaves (0: off)
 		public bool RTShafts { get; set; }                 // ray traced light shafts
@@ -389,12 +388,11 @@ namespace NatureFX {
 		public float RTSkyOcclusion { get; set; }          // m: overhangs further than the ambient distance take the sky (0: off)
 		public float RTContactShadows { get; set; }        // darkening where surfaces meet (0: off)
 
-		// shader rebuild: road surface detail of the NatureFX shaders (grain, rubber laid down on the driven line)
+		// removed (the road's rubber and wear): kept only so old files load
 		public float RoadWear { get; set; }
 
-		// map extension (docs/map-authoring.md 5 and 7): season of the foliage colours and the floating particles
-		// (0 automatic: the weather preset, else the map's [defaults] season; 1 spring .. 4 winter; 5 none), the 3D
-		// grass (density multiplier, metres from the camera) and the map's decals, water, local fog and particles
+		// map extension (docs/map-authoring.md 5 and 7): the 3D grass (density multiplier, metres from the camera) and
+		// the map's decals, water, local fog and particles. Season: removed (the seasonal colours), kept so old files load
 		public int Season { get; set; }
 		// leaves and grass brought to measured colours (0 the textures' own, 1 a real leaf's: some 4 to 12 % of the light
 		// back, an olive green, not a painted one; NFX_LitData)
@@ -425,7 +423,7 @@ namespace NatureFX {
 		// camera's exposure does not reach), and how long a change of weather takes (s)
 		public float StarBrightness { get; set; }
 		public float WeatherChangeTime { get; set; }
-		// falling rain (with splashes) and snow around the camera: how dense (0 off)
+		// falling rain (with splashes) around the camera: how dense (0 off)
 		public float Precipitation { get; set; }
 		// shader rebuild: hex tiled textures where the map's [materials] ask for it (antitiling=), 0 off .. 1
 		public float AntiTiling { get; set; }
@@ -434,7 +432,7 @@ namespace NatureFX {
 		public float TireSmoke { get; set; }
 		public bool ReplaceGameSmoke { get; set; }
 		public bool CarGlow { get; set; }
-		// dirt, dust and snow building up on the car nearest the camera (how much at most)
+		// mud building up on the car nearest the camera (how much at most)
 		public bool CarDirt { get; set; }
 		public float CarDirtAmount { get; set; }
 		// the camera and the eye: night vision (Purkinje shift and grain, 0 off), lens flare (0 off), depth of field on
@@ -452,8 +450,8 @@ namespace NatureFX {
 		public float MotionBlur { get; set; }              // own post: the shutter's share of a frame (0.5: 180°), 0 off
 		public float DofFStop { get; set; }                // own post's depth of field: the lens's f-number
 		public bool RTTransparentShadows { get; set; }     // the sun's ray traced shadow on transparent surfaces (SunShadowMap)
-		public bool MapGroundDetail { get; set; }          // the ground map: ground blend, painted dirt and debris on the map
-		public float Detritus { get; set; }                // debris (pebbles, twigs, leaves) along the road's edges: density, 0 off
+		public bool MapGroundDetail { get; set; }          // removed (ground blend, painted dirt, debris): kept only so old files load
+		public float Detritus { get; set; }                // removed (debris)
 		// the map's reflection probes (markers and along the road; off: HDRP's own reflections only)
 		public bool MapProbes { get; set; }
 		// draw the map's markers over the picture (F8 > Map), for map authors
@@ -934,6 +932,15 @@ namespace NatureFX {
 				// back lit leaves as real ones: a share of the sun through them, not a glow
 				d.RTLeafTranslucency = 0.35f;
 				d.ConfigVersion = 81;
+			}
+			if (d.ConfigVersion < 82) {
+				// the Snow and Autumn weather were removed (WeatherController.Names): they become Clear, Fog moves from 7 to 5
+				if (d.WeatherPreset == 5 || d.WeatherPreset == 6) {
+					d.WeatherPreset = 1;
+				} else if (d.WeatherPreset == 7) {
+					d.WeatherPreset = 5;
+				}
+				d.ConfigVersion = 82;
 			}
 			FixOwnEngine(d);
 		}

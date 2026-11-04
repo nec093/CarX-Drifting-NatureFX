@@ -67,8 +67,7 @@ namespace NatureFX.Rendering {
 		public long TracedRays { get; private set; }
 		public Vector4 SunDirection;
 		public bool TransparentShadows = true; // the sun's ray traced shadow map for transparent surfaces (SunShadowMap)
-		public bool GroundDetail = true;       // the ground map (GroundMap): ground blend, painted dirt, debris
-		public float GroundBlend = 0.35f;      // m: how high objects take the ground's colour where a material does not say
+		public bool GroundDetail = true;       // the ground map (GroundMap): where the plants' cards meet the ground
 		public Vector4 SunIlluminance;
 
 		public bool TraceShadows = true;
@@ -553,8 +552,8 @@ namespace NatureFX.Rendering {
 			NativeEngine.BeginFrame(ctx.hdCamera.camera, SunDirection, sunRadius, SunIlluminance, frame_, ambientParams, Lights, probe);
 			// the sun's shadow on transparent surfaces (their forward pass reads the map)
 			SunShadowMap.Update(cmd, ctx.hdCamera.camera, SunDirection, TransparentShadows && TraceShadows);
-			// the ground seen from above: the map's ground blend, painted dirt and debris read it
-			GroundMap.Update(cmd, ctx.hdCamera.camera, GroundDetail, GroundBlend);
+			// the ground seen from above: the foot of the plants' cards reads it (NFX_ApplyFoliageFoot)
+			GroundMap.Update(cmd, ctx.hdCamera.camera, GroundDetail);
 			Surfaces.EnsureTraced(ctx);
 			bool skyUsed = false; // the sky is the atmosphere pass's (AtmospherePass), drawn after this one
 			float cameraHeight = 1.0f;

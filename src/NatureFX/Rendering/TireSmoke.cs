@@ -64,7 +64,7 @@ namespace NatureFX.Rendering {
 		public float HottestTyre { get; private set; } = 20.0f;
 
 		private float AmbientTemperature(WeatherState w) {
-			return Mathf.Lerp(20.0f, -2.0f, Mathf.Clamp01(w.Snow * 2.0f)) - 5.0f * Mathf.Clamp01(w.Rain);
+			return 20.0f - 5.0f * Mathf.Clamp01(w.Rain);
 		}
 
 		// the tyre's smoke now (0 none .. 1 a full cloud), its temperature brought up to date

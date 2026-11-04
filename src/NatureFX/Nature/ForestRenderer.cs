@@ -9,7 +9,7 @@ namespace NatureFX.Nature {
 	// Distant forest (docs/map-authoring.md 5.5): nocol_nfx_forest_<conifer|broadleaf|mixed> surfaces (MeshFilter only)
 	// are covered with trees as crossed cards (impostors) out to 2 km, so a map can fill whole mountainsides that it
 	// does not model. The card picture is painted by NatureFX (a cedar, a broadleaf crown); they draw with
-	// NatureFX/Foliage, so they sway, take the season's colours and drop leaves in winter like the map's own trees.
+	// NatureFX/Foliage, so they sway and are lit like the map's own trees.
 	// 64 m cells; far cells draw a quarter, then half of their trees; shadows near the camera only.
 	public class ForestRenderer {
 		private const float CellSize = 64.0f;
