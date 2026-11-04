@@ -102,27 +102,83 @@ namespace NatureFX {
 		private float nextVolumeRefresh_;
 		private float pendingShrubDensity_ = float.NaN, shrubReloadAt_;
 
+		// ---- all or nothing: NatureFX runs whole on its own engine, or not at all. On DX11, without a DXR 1.1 GPU, with
+		// the engine's DLL missing or after the last session crashed in a scene build, it changes nothing and says why
+		// (needsDx12_ / offReason_). An engine that stops while running switches the whole of NatureFX off at once
+		// (engineLost_) until the game is restarted: never a picture with some parts the own engine's and some HDRP's.
 		private bool needsDx12_;
-		private bool dx12NoticeHidden_;
+		private string offReason_;
+		private string lostReason_;
+		private bool noticeHidden_;
+		private bool engineSeen_;
+		private float engineGoneSince_ = -1.0f;
+		private bool restoreEnabled_;
 
-		// on DX11: what NatureFX shows instead of itself
-		private void DrawDx12Notice() {
-			if (dx12NoticeHidden_) {
+		private void DrawNotice() {
+			string text = needsDx12_ ? "NatureFX needs DirectX 12. It is off while the game runs on " + GraphicsApiSwitcher.Current + "."
+				: offReason_ != null ? "NatureFX is off: " + offReason_
+				: lostReason_ != null ? "NatureFX switched itself off: " + lostReason_ + " Restart the game to use it again."
+				: null;
+			if (text == null || noticeHidden_) {
 				return;
 			}
-			GUILayout.BeginArea(new Rect(20, 20, 460, 130), GUI.skin.box);
-			GUILayout.Label("NatureFX needs DirectX 12. It is off while the game runs on " + GraphicsApiSwitcher.Current + ".");
-			GUILayout.Label("Steam launch options: " + GraphicsApiSwitcher.LaunchOption);
+			GUILayout.BeginArea(new Rect(20, 20, 520, 140), GUI.skin.box);
+			GUILayout.Label(text);
+			if (needsDx12_) {
+				GUILayout.Label("Steam launch options: " + GraphicsApiSwitcher.LaunchOption);
+			}
 			GUILayout.BeginHorizontal();
-			if (GUILayout.Button("Restart in DirectX 12", GUILayout.Width(200))) {
+			if (needsDx12_ && GUILayout.Button("Restart in DirectX 12", GUILayout.Width(200))) {
 				Settings.Save();
 				GraphicsApiSwitcher.RestartInDx12();
 			}
 			if (GUILayout.Button("Hide", GUILayout.Width(80))) {
-				dx12NoticeHidden_ = true;
+				noticeHidden_ = true;
 			}
 			GUILayout.EndHorizontal();
 			GUILayout.EndArea();
+		}
+
+		// once a frame: the own engine stopped (it was tracing since the scene loaded, and has not for 20 s while wanted)
+		private void WatchEngine(ISettings s) {
+			if (lostReason_ != null) {
+				// stays off this session, the switch too
+				if (s.Enabled) {
+					s.Enabled = false;
+				}
+				return;
+			}
+			if (!s.Enabled) {
+				return;
+			}
+			// the bundle without the engine's bridge (an old bundle): nothing of the own engine can run
+			if (NativeEngine.Bridge == null && Time.frameCount > 10) {
+				lostReason_ = "the shader bundle has no NFX_NativeBridge (build the bundle again).";
+				Kino.Log.Error($"[NatureFX] {lostReason_} NatureFX is off until the game restarts");
+				s.Enabled = false;
+				restoreEnabled_ = true;
+				return;
+			}
+			if (NativeEngine.Active) {
+				engineSeen_ = true;
+				engineGoneSince_ = -1.0f;
+				return;
+			}
+			if (!engineSeen_ || !NativeEngine.Enabled) {
+				return;
+			}
+			if (engineGoneSince_ < 0.0f) {
+				engineGoneSince_ = Time.unscaledTime;
+				return;
+			}
+			if (Time.unscaledTime - engineGoneSince_ < 20.0f) {
+				return;
+			}
+			lostReason_ = $"the own engine stopped ({NativeEngine.Info}; {NativeEngine.CheckStatus}).";
+			Kino.Log.Error($"[NatureFX] {lostReason_} NatureFX is off until the game restarts");
+			// off as the switch does it (every part back to HDRP's own at once), not saved: on next start it is on again
+			s.Enabled = false;
+			restoreEnabled_ = true;
 		}
 
 		private void Start() {
@@ -137,6 +193,17 @@ namespace NatureFX {
 			if (!GraphicsApiSwitcher.IsD3D12) {
 				needsDx12_ = true;
 				Kino.Log.Error($"[NatureFX] NatureFX needs DirectX 12 (running on {GraphicsApiSwitcher.Current}): start the game with {GraphicsApiSwitcher.LaunchOption}");
+				return;
+			}
+			// the own engine first: without it NatureFX does not run at all
+			NativeEngine.TryStart();
+			if (NativeEngine.CrashedLastTime) {
+				offReason_ = "the last session crashed while the own engine built the scene. It runs again on the next start.";
+			} else if (!NativeEngine.Ready) {
+				offReason_ = $"the own engine is not available ({NativeEngine.Info}; {NativeEngine.TestResult}). It needs a DXR 1.1 GPU (RTX 20, RX 6000, Arc or newer) and NFXNative.dll in the mod folder.";
+			}
+			if (offReason_ != null) {
+				Kino.Log.Error($"[NatureFX] NatureFX is off: {offReason_}");
 				return;
 			}
 			if (!Capabilities.IsHdrp) {
@@ -194,8 +261,13 @@ namespace NatureFX {
 		}
 
 		private void OnDestroy() {
-			if (needsDx12_) {
+			if (needsDx12_ || offReason_ != null) {
 				return;
+			}
+			if (restoreEnabled_ && Settings.Data != null) {
+				// switched off for this session only
+				Settings.Data.Enabled = true;
+				Settings.Save();
 			}
 			if (Settings.Data != null && Settings.Data.RecordShaderVariants) {
 				NatureFX.Tools.ShaderVariantRecorder.Save();
@@ -256,9 +328,10 @@ namespace NatureFX {
 
 		private void Update() {
 			var s = Settings.Data;
-			if (s == null || needsDx12_) {
+			if (s == null || needsDx12_ || offReason_ != null) {
 				return;
 			}
+			WatchEngine(s);
 			// the debug page (a browser on this PC): whether NatureFX is on or not
 			// the page's own work timed too (its snapshot once a second: a hitch there shows in the slow frames as
 			// 'debug page')
@@ -428,10 +501,11 @@ namespace NatureFX {
 		}
 
 		private void OnGUI() {
-			if (needsDx12_) {
-				DrawDx12Notice();
+			if (needsDx12_ || offReason_ != null) {
+				DrawNotice();
 				return;
 			}
+			DrawNotice();
 			if (Settings.Data == null) {
 				return;
 			}
@@ -544,6 +618,9 @@ namespace NatureFX {
 		private void OnSceneLoaded(Scene scene, LoadSceneMode mode) {
 			NatureFX.Tools.DebugPage.MarkStep($"scene loaded: {scene.name} ({mode})");
 			if (mode == LoadSceneMode.Single) {
+				// the engine watch starts over (a menu has no scene to trace)
+				engineSeen_ = false;
+				engineGoneSince_ = -1.0f;
 				newMap_ = true; // the own engine starts its scene over at the rescan (not for the small additive scenes)
 				NatureFX.Tools.MapDataProbe.Reset();
 				Shrubs.Unload(); // they draw the old map's meshes, destroyed with its scene
