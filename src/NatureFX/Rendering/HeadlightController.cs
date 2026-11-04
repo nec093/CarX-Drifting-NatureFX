@@ -118,24 +118,15 @@ namespace NatureFX.Rendering {
 		// whatever the game wrote over it this frame (it writes Light.intensity itself, not through HDRP's setters, and
 		// the own engine read the game's 4775 cd: the beam dim on the throttle)
 		private static readonly Dictionary<Light, float> intended_ = new();
-		// what a lamp shines now (cd) as the own engine sees it: NatureFX's value for a headlight it holds, else the light's
-		// own; times HDRP's dimmer, which HDRP applies when it lights and the own engine did not (the map lamps' warm-up,
-		// flicker and blink, MapLights, are dimmer only: they were lost under the own lamp light)
+		// what a lamp shines now (cd) as the own engine sees it: the value NatureFX holds for it (a headlight's, a map
+		// lamp's with its warm-up, flicker and blink, a game headlight silenced to 0), else the light's own as the game
+		// or map set it. HDRP's dimmer is not read
 		public static float Intensity(Light light) {
 			if (light == null) {
 				return 0.0f;
 			}
-			float cd = intended_.TryGetValue(light, out float held) ? held : light.intensity;
-			if (!hdOf_.TryGetValue(light, out var hd)) {
-				hd = light.GetComponent<HDAdditionalLightData>();
-				hdOf_[light] = hd;
-				if (hdOf_.Count > 4096) {
-					hdOf_.Clear();
-				}
-			}
-			return hd != null ? cd * Mathf.Max(hd.lightDimmer, 0.0f) : cd;
+			return intended_.TryGetValue(light, out float held) ? held : light.intensity;
 		}
-		private static readonly Dictionary<Light, HDAdditionalLightData> hdOf_ = new();
 
 		// a lamp NatureFX makes (MapLights, CarGlow): its intensity in candela as NatureFX works it out, what the own
 		// engine uses (not read back from HDRP's unit conversion)
@@ -208,14 +199,14 @@ namespace NatureFX.Rendering {
 			return lamp;
 		}
 
-		// the game's lamp: no light of its own while NatureFX's shines
+		// the game's lamp: no light of its own while NatureFX's shines (for HDRP its dimmer, for the own engine 0 held)
 		private static void Silence(HDAdditionalLightData game) {
-			if (game.lightDimmer != 0.0f) {
-				game.lightDimmer = 0.0f;
+			var light = game.GetComponent<Light>();
+			if (light != null) {
+				intended_[light] = 0.0f;
 			}
-			if (game.volumetricDimmer != 0.0f) {
-				game.volumetricDimmer = 0.0f;
-			}
+			game.lightDimmer = 0.0f;
+			game.volumetricDimmer = 0.0f;
 		}
 
 		// back to the game's lamp alone
@@ -236,6 +227,7 @@ namespace NatureFX.Rendering {
 			}
 			if (gameHd != null) {
 				gameHd.lightDimmer = o.Dimmer;
+				intended_.Remove(game);
 			}
 		}
 		private static bool applying_;
@@ -370,10 +362,9 @@ namespace NatureFX.Rendering {
 				// lit a bright dome of the air right in front of the car), 0 none; every frame (the game sets it again).
 				// The game's own value only with NatureFX off: at 0 it was put back, the game's haze round the headlights
 				float volumetric = s.Enabled ? shafts * 1.5f : o.Volumetric;
-				if (!isFront || type == 0) {
-					if (!Mathf.Approximately(hd.volumetricDimmer, volumetric)) {
-						hd.volumetricDimmer = volumetric;
-					}
+				// (set when a setting changed, not read back from HDRP)
+				if ((!isFront || type == 0) && changed) {
+					hd.volumetricDimmer = volumetric;
 				}
 				if (!isFront) {
 					continue;
@@ -394,7 +385,7 @@ namespace NatureFX.Rendering {
 				if (lampHd == null) {
 					continue;
 				}
-				if (!Mathf.Approximately(lampHd.volumetricDimmer, volumetric)) {
+				if (changed) {
 					lampHd.volumetricDimmer = volumetric;
 				}
 				cars_.TryGetValue(light, out var car);
@@ -458,7 +449,7 @@ namespace NatureFX.Rendering {
 			if (transitionsLogged_ >= 40) {
 				return;
 			}
-			string state = $"enabled {light.enabled}, active {light.gameObject.activeInHierarchy}, dimmer {hd.lightDimmer:0.00}, intensity {light.intensity:0}, " +
+			string state = $"enabled {light.enabled}, active {light.gameObject.activeInHierarchy}, intensity {light.intensity:0}, " +
 			               $"layer mask {light.renderingLayerMask}, culling {light.cullingMask}";
 			if (lampStates_.TryGetValue(light, out var before) && before != state) {
 				++transitionsLogged_;
@@ -819,7 +810,6 @@ namespace NatureFX.Rendering {
 			}
 			foreach (var l in goneHeld) {
 				intended_.Remove(l);
-				hdOf_.Remove(l);
 			}
 			var goneOwn = new List<Light>();
 			foreach (var kv in own_) {
