@@ -5,7 +5,8 @@
 
 static const float3 NFX_SnowColor = float3(0.88, 0.90, 0.94);
 static const float3 NFX_SnowShadowTint = float3(0.80, 0.86, 0.97);
-static const float3 NFX_DustColor = float3(0.52, 0.45, 0.36);
+// dry road dust and soil, about a quarter of the light back (measured 0.2 to 0.3; 0.46 whitened everything)
+static const float3 NFX_DustColor = float3(0.30, 0.26, 0.21);
 static const float3 NFX_LeafColorA = float3(0.55, 0.20, 0.05);
 static const float3 NFX_LeafColorB = float3(0.72, 0.46, 0.08);
 static const float3 NFX_LeafColorC = float3(0.32, 0.19, 0.08);
@@ -184,6 +185,10 @@ void NFX_ApplyAccumulation(inout NFXSurface s, float3 positionAWS, float3 geomNo
 	s.smoothness = lerp(s.smoothness, 0.5, rubber * 0.6);
 
 	// --- dust: settles on upward faces, breaks up with noise
+	#ifdef NFX_WIND
+	// leaves and grass hold little dust (they move, the dew and rain wash it off): a coat of it whitened the verges
+	dust *= 0.25;
+	#endif
 	float dustMask = NFX_HeightFill(saturate(dust * (0.4 + up * 0.8) * (0.6 + detail * 0.8)), s.height);
 	s.baseColor = lerp(s.baseColor, NFX_DustColor * (0.85 + detail * 0.3), dustMask * 0.75);
 	s.smoothness = lerp(s.smoothness, 0.12, dustMask);

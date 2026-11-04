@@ -182,6 +182,16 @@ void GetSurfaceAndBuiltinData(FragInputs input, float3 V, inout PositionInputs p
 			// whole bunches go: smooth noise over the card, the same in every pass (depth, shadows, G-buffer)
 			clip(keep - NFX_ValueNoise(input.texCoord0.xy * 9.0 + NFX_Hash13(floor(positionAWS / 6.0)) * 17.0));
 		}
+		// the distant forest's crossed cards (ForestRenderer, _NFX_Foliage2.w 2): not close by, where they showed as
+		// flat boards (faded in from 90 to 160 m), and not seen edge-on (a card's plane from the screen's derivatives).
+		// Dithered by world position: the same in the depth prepass and the G-buffer pass
+		if (_NFX_Foliage2.w > 1.5) {
+			float dist = length(posInput.positionWS);
+			float nearFade = saturate((dist - 90.0) / 70.0);
+			float3 face = cross(ddy(posInput.positionWS), ddx(posInput.positionWS));
+			float facing = dot(face, face) > 1e-12 ? saturate((abs(dot(normalize(face), V)) - 0.15) / 0.25) : 1.0;
+			clip(nearFade * facing - NFX_Hash13(floor(positionAWS * 4.0)));
+		}
 		#endif
 	}
 	#endif

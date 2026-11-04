@@ -101,7 +101,8 @@ namespace NatureFX.Nature {
 			m.SetFloat("_ZTestDepthEqualForOpaque", (float)CompareFunction.Equal);
 			m.renderQueue = (int)RenderQueue.AlphaTest;
 			m.SetVector("_NFX_Foliage", new Vector4(type, type == 1.0f ? 0.25f : 0.6f, 0.35f, 0.0f));
-			m.SetVector("_NFX_Foliage2", new Vector4(0.0f, 0.0f, 0.0f, 1.0f)); // the cards' vertex colours drive the sway
+			// the cards' vertex colours drive the sway; w 2: the distant forest's cards (they fade out close by and edge-on)
+			m.SetVector("_NFX_Foliage2", new Vector4(0.0f, 0.0f, 0.0f, 2.0f));
 			return m;
 		}
 
@@ -283,11 +284,12 @@ namespace NatureFX.Nature {
 						var corners = new[] { basePos - side, basePos + side, basePos - side + Vector3.up * h, basePos + side + Vector3.up * h };
 						foreach (var c in corners) {
 							positions.Add(c);
-							// a rounded crown: the normal points away from the crown's middle and up, so the sunny side
-							// is light and the side away from the sun and the bottom are in shade, as on a real tree
+							// a rounded crown: the normal points a little away from the crown's middle and mostly up, so
+							// the sunny side is somewhat lighter (the crossed cards' halves split light and dark along
+							// their meeting line when it pointed mostly outward; the painted shading does the rest)
 							var outward = c - crown;
 							outward.y *= 0.6f;
-							normals.Add((outward.normalized * 0.7f + Vector3.up * 0.6f).normalized);
+							normals.Add((outward.normalized * 0.35f + Vector3.up * 0.95f).normalized);
 						}
 						float ua = flip ? u0 + 0.25f : u0, ub = flip ? u0 : u0 + 0.25f;
 						uvs.Add(new Vector2(ua, 0.0f));
