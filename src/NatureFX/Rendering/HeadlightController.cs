@@ -137,6 +137,30 @@ namespace NatureFX.Rendering {
 		}
 		private static readonly Dictionary<Light, HDAdditionalLightData> hdOf_ = new();
 
+		// a lamp NatureFX makes (MapLights, CarGlow): its intensity in candela as NatureFX works it out, what the own
+		// engine uses (not read back from HDRP's unit conversion)
+		public static void HoldIntensity(Light light, float candela) {
+			if (light != null) {
+				intended_[light] = candela;
+			}
+		}
+
+		public static void ReleaseIntensity(Light light) {
+			if (light != null) {
+				intended_.Remove(light);
+			}
+		}
+
+		// luminous flux (lm) to intensity (cd): a point light sends it all round (4 pi sr), a spot with its reflector
+		// into its cone (2 pi (1 - cos half angle) sr)
+		public static float LumenToCandela(float lumen, LightType type, float spotAngle) {
+			if (type == LightType.Spot) {
+				float solid = 2.0f * Mathf.PI * (1.0f - Mathf.Cos(Mathf.Clamp(spotAngle, 1.0f, 179.0f) * 0.5f * Mathf.Deg2Rad));
+				return lumen / Mathf.Max(solid, 1e-4f);
+			}
+			return lumen / (4.0f * Mathf.PI);
+		}
+
 		// ---- NatureFX's own lamp in place of each of the game's headlights. The game writes its lights again and again
 		// on the throttle (Light.intensity to 4775 cd every frame, the light switched off and on with its rendering layer
 		// back at HDRP's: its own beam lit the road again, the own one went dim), not through anything NatureFX can
@@ -786,6 +810,17 @@ namespace NatureFX.Rendering {
 				cars_.Remove(l);
 			}
 
+			// lamps that are gone (a map's, a car's glow): their held intensities go too
+			var goneHeld = new List<Light>();
+			foreach (var kv in intended_) {
+				if (kv.Key == null) {
+					goneHeld.Add(kv.Key);
+				}
+			}
+			foreach (var l in goneHeld) {
+				intended_.Remove(l);
+				hdOf_.Remove(l);
+			}
 			var goneOwn = new List<Light>();
 			foreach (var kv in own_) {
 				if (kv.Key == null || kv.Value == null) {

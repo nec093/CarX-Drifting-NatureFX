@@ -166,11 +166,19 @@ namespace NatureFX.Map {
 				hd.EnableColorTemperature(false);
 				hd.SetColor(preset.Tint);
 			}
-			hd.SetIntensity(m.GetFloat("lm", preset.Lumen), LightUnit.Lumen);
 			hd.SetRange(m.GetFloat("range", preset.Range));
+			float spot = Mathf.Clamp(m.GetFloat("spot", preset.Spot), 1.0f, 179.0f);
 			if (preset.Type == LightType.Spot) {
-				hd.SetSpotAngle(Mathf.Clamp(m.GetFloat("spot", preset.Spot), 1.0f, 179.0f), 40.0f);
+				hd.SetSpotAngle(spot, 40.0f);
 			}
+			// the intensity worked out here (candela, the spot's reflector into its cone) and given to HDRP in candela:
+			// HDRP converts nothing, and the own engine takes the same value (Rendering.HeadlightController.Intensity)
+			if (preset.Type == LightType.Spot) {
+				hd.enableSpotReflector = true;
+			}
+			float candela = NatureFX.Rendering.HeadlightController.LumenToCandela(m.GetFloat("lm", preset.Lumen), preset.Type, spot);
+			hd.SetIntensity(candela, LightUnit.Candela);
+			NatureFX.Rendering.HeadlightController.HoldIntensity(light, candela);
 			hd.shapeRadius = preset.Type == LightType.Spot ? 0.15f : 0.05f;
 			if (preset.Beam != Distribution.None && !string.Equals(m.Get("ies"), "off", System.StringComparison.OrdinalIgnoreCase)) {
 				hd.SetCookie(Cookie(preset.Beam));

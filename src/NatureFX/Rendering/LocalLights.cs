@@ -23,6 +23,21 @@ namespace NatureFX.Rendering {
 		private readonly Vector4[] spot_ = new Vector4[Max];    // x angle offset, y shape radius (m)
 		private readonly Dictionary<Light, float> shapes_ = new();
 		private readonly List<Light> all_ = new();
+		// the lamps whose shadow maps NatureFX took for traced shadows (RayTracingEffects.UpdateLampShadows)
+		public System.Func<Light, bool> ShadowTaken;
+		// whether a lamp came with a shadow map, as first seen before NatureFX took any (the map's or game's setting)
+		private readonly Dictionary<Light, bool> authored_ = new();
+
+		private bool Authored(Light light) {
+			if (!authored_.TryGetValue(light, out bool shadowed)) {
+				shadowed = light.shadows != LightShadows.None;
+				authored_[light] = shadowed;
+				if (authored_.Count > 8192) {
+					authored_.Clear();
+				}
+			}
+			return shadowed;
+		}
 		private readonly List<(float Distance, Light Light, int Emitter)> near_ = new();  // Light null: NativeEngine.Emitters[Emitter]
 		private float nextRefresh_;
 
@@ -71,6 +86,8 @@ namespace NatureFX.Rendering {
 				nextRefresh_ = Time.unscaledTime + RefreshInterval;
 				all_.Clear();
 				shapes_.Clear();
+				// the lamps' own settings looked at again with the list (a map lamp NatureFX gives a shadow map or not)
+				authored_.Clear();
 				foreach (var light in Object.FindObjectsByType<Light>(FindObjectsInactive.Exclude, FindObjectsSortMode.None)) {
 					if (light.type == LightType.Point || light.type == LightType.Spot) {
 						all_.Add(light);
@@ -123,7 +140,10 @@ namespace NatureFX.Rendering {
 					color *= Mathf.CorrelatedColorTemperatureToRGB(light.colorTemperature);
 				}
 				// small lights (indicators, interior and dash lamps) light only their own housing: no shadows for them
-				bool traceShadows = light.shadows == LightShadows.None && light.range >= 3.0f;
+				// traced: the lamps whose shadow maps NatureFX took (its own record, ShadowTaken), and those made without
+				// one (the lamp's authored setting; HDRP's shadow state is not looked at)
+				bool taken = ShadowTaken != null && ShadowTaken(light);
+				bool traceShadows = (taken || !Authored(light)) && light.range >= 3.0f;
 				pos_[Count] = new Vector4(t.position.x, t.position.y, t.position.z, Mathf.Max(0.1f, light.range));
 				color_[Count] = new Vector4(color.r, color.g, color.b, traceShadows ? 1.0f : 0.0f);
 				LampReference = Mathf.Max(LampReference, Reference(color.r, color.g, color.b, pos_[Count].w));

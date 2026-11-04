@@ -72,13 +72,12 @@ namespace NatureFX.Rendering {
 
 		private static float Half(ushort h) => Mathf.HalfToFloat(h);
 
-		// HDRP's own ambient probe (what it made of its sky) against the engine's, straight up: whether HDRP lights
-		// with the cube at all
+		// the engine's own sky probe, straight up (the Sky tab's status): HDRP's is no longer read
 		public static string ProbeStatus { get; private set; } = "not read yet";
-		private static float nextProbeRead_, nextStatusRead_;
+		private static float nextProbeRead_;
 
-		private static void ReadProbes(GraphicsBuffer hdrp) {
-			if (hdrp == null || NativeEngine.SkyProbe == null || Time.unscaledTime < nextProbeRead_) {
+		private static void ReadProbes() {
+			if (NativeEngine.SkyProbe == null || Time.unscaledTime < nextProbeRead_) {
 				return;
 			}
 			// often: the sky's hand-over (SunController.SkyMeasured) matches the sky's brightness by these readings
@@ -89,24 +88,8 @@ namespace NatureFX.Rendering {
 				if (!s.hasError) {
 					var up = Up(s.GetData<Vector4>());
 					SunController.SkyMeasured(generation, 0.2126f * up.x + 0.7152f * up.y + 0.0722f * up.z, rawAbove, scale);
+					ProbeStatus = $"engine {up:G3} (irradiance / pi from straight up)";
 				}
-			});
-			if (Time.unscaledTime < nextStatusRead_) {
-				return;
-			}
-			nextStatusRead_ = Time.unscaledTime + 2.0f;
-			UnityEngine.Rendering.AsyncGPUReadback.Request(hdrp, a => {
-				if (a.hasError) {
-					return;
-				}
-				var h = a.GetData<Vector4>();
-				UnityEngine.Rendering.AsyncGPUReadback.Request(NativeEngine.SkyProbe, b => {
-					if (b.hasError) {
-						return;
-					}
-					var e = b.GetData<Vector4>();
-					ProbeStatus = $"HDRP {Up(h):G3}, engine {Up(e):G3} (irradiance / pi from straight up)";
-				});
 			});
 		}
 
@@ -244,14 +227,10 @@ namespace NatureFX.Rendering {
 			var lightDir = new Vector4(dir.x, dir.y, dir.z, dir.y > SunController.DiscGoneY ? 1.0f : 0.0f);
 			var lightGround = new Vector4(ground.x, ground.y, ground.z, 0.0f);
 			// the frame's constants (the ray traced shadow pass, if it runs, adds its own ambient values)
-			// the sky tables and the fog are issued with a probe's buffer bound: the engine's own (HDRP's is read only for
-			// the status, how HDRP's sky light compares)
+			// the sky tables and the fog are issued with a probe's buffer bound: the engine's own
 			var ownProbe = NativeEngine.EnsureSkyProbe();
 			NativeEngine.BeginFrame(cam, lightDir, SunController.SkyLightRadius, lightGround, frame_++, Vector4.zero, Lights, ownProbe);
-			var hdrpProbe = HdrpBindings.AmbientProbe(ctx.hdCamera);
-			if (hdrpProbe != null) {
-				ReadProbes(hdrpProbe);
-			}
+			ReadProbes();
 
 			float lux = SunController.SkyLightAbove;
 			cameraHeight_ = Mathf.Max(1.0f, camPos.y);
@@ -372,49 +351,56 @@ namespace NatureFX.Rendering {
 		private static readonly Vector4[] boxes_ = new Vector4[64 * 5];
 		private static LocalVolumetricFog[] found_ = System.Array.Empty<LocalVolumetricFog>();
 		private static float nextFind_;
-		private static readonly System.Collections.Generic.List<(float Distance, LocalVolumetricFog Fog)> near_ = new();
+		private static readonly System.Collections.Generic.List<(float Distance, NatureFX.Map.MapVolumes.FogBox Box)> near_ = new();
 		public static int BoxCount { get; private set; }
 
+		// the map's volumes (MapVolumes.Boxes: NatureFX's own values; a map's own fog component read as the map's data),
+		// then any other Local Volumetric Fog in the scene that is not NatureFX's (the tyre smoke is particles)
 		private static int GatherBoxes(Vector3 camera) {
 			if (Time.unscaledTime >= nextFind_) {
 				nextFind_ = Time.unscaledTime + 0.5f;
 				found_ = Object.FindObjectsByType<LocalVolumetricFog>(FindObjectsSortMode.None);
 			}
 			near_.Clear();
+			foreach (var box in NatureFX.Map.MapVolumes.Boxes) {
+				Add(box, camera);
+			}
 			foreach (var f in found_) {
-				// NatureFX's own fog puffs (TireSmoke without its particles) are not the fog's: smoke is particles
-				if (f == null || !f.isActiveAndEnabled || f.parameters.meanFreePath <= 0.0f || f.name == "NatureFX.Puff") {
+				if (f == null || !f.isActiveAndEnabled || f.parameters.meanFreePath <= 0.0f || NatureFX.Map.MapVolumes.Driven.Contains(f)
+				    || f.name.StartsWith("NatureFX.", System.StringComparison.Ordinal)) {
 					continue;
 				}
-				float d = (f.transform.position - camera).sqrMagnitude;
-				if (d < 3000.0f * 3000.0f) {
-					near_.Add((d, f));
-				}
+				Add(NatureFX.Map.MapVolumes.BoxOf(f), camera);
 			}
 			near_.Sort((a, b) => a.Distance.CompareTo(b.Distance));
 			int count = Mathf.Min(near_.Count, 64);
 			for (int i = 0; i < count; ++i) {
-				var f = near_[i].Fog;
-				var p = f.parameters;
-				var t = f.transform;
-				var half = Vector3.Max(p.size * 0.5f, Vector3.one * 0.05f);
-				var c = t.position;
-				var albedo = p.albedo.linear;
-				boxes_[i * 5] = new Vector4(c.x, c.y, c.z, 1.0f / p.meanFreePath);
-				var ax = t.right / half.x;
-				var ay = t.up / half.y;
-				var az = t.forward / half.z;
+				var box = near_[i].Box;
+				var half = box.Half;
+				var c = box.Center;
+				var albedo = box.Albedo.linear;
+				boxes_[i * 5] = new Vector4(c.x, c.y, c.z, 1.0f / box.MeanFreePath);
+				var ax = box.Right / half.x;
+				var ay = box.Up / half.y;
+				var az = box.Forward / half.z;
 				boxes_[i * 5 + 1] = new Vector4(ax.x, ax.y, ax.z, albedo.r);
 				boxes_[i * 5 + 2] = new Vector4(ay.x, ay.y, ay.z, albedo.g);
 				boxes_[i * 5 + 3] = new Vector4(az.x, az.y, az.z, albedo.b);
-				// HDRP's look of it: how far in it fades, the size of its noise, round (exponential falloff) or a box
-				float fadeShare = Mathf.Clamp((p.positiveFade.x + p.positiveFade.y + p.positiveFade.z + p.negativeFade.x + p.negativeFade.y + p.negativeFade.z) / 6.0f, 0.05f, 1.0f);
-				float noiseSize = p.textureTiling.x > 0.0f ? p.size.x / p.textureTiling.x : Mathf.Max(p.size.x / 3.0f, 0.5f);
-				boxes_[i * 5 + 4] = new Vector4(fadeShare, Mathf.Clamp(noiseSize, 0.3f, 50.0f),
-					p.falloffMode == LocalVolumetricFogFalloffMode.Exponential ? 1.0f : 0.0f, 0.0f);
+				// how far in it fades, the size of its noise, round (exponential falloff) or a box
+				boxes_[i * 5 + 4] = new Vector4(box.FadeShare, Mathf.Clamp(box.NoiseSize, 0.3f, 50.0f), box.Exponential ? 1.0f : 0.0f, 0.0f);
 			}
 			BoxCount = count;
 			return count;
+		}
+
+		private static void Add(NatureFX.Map.MapVolumes.FogBox box, Vector3 camera) {
+			if (box.MeanFreePath <= 0.0f) {
+				return;
+			}
+			float d = (box.Center - camera).sqrMagnitude;
+			if (d < 3000.0f * 3000.0f) {
+				near_.Add((d, box));
+			}
 		}
 
 		// the sky pixels and the fog over the finished opaque image

@@ -24,6 +24,7 @@ namespace NatureFX.Rendering {
 		private RTShadowPass shadows_;
 		private readonly RTSurfaceTrace surfaces_ = new();  // camera rays shared by reflections and shadows
 		private readonly LocalLights lights_ = new();       // headlights and lamps near the camera
+		private bool lampRecordHooked_;
 		private AtmospherePass atmosphereTrace_, atmosphereComposite_;
 		private Material transparentFogMaterial_;
 		private Light shadowlessSun_;                        // sun whose HDRP shadows the ray traced ones replace
@@ -204,6 +205,10 @@ namespace NatureFX.Rendering {
 				return;
 			}
 			Benchmark.Update();
+			if (!lampRecordHooked_) {
+				lampRecordHooked_ = true;
+				lights_.ShadowTaken = l => lampShadowsBefore_.ContainsKey(l);
+			}
 			lights_.Update(Camera.main);
 			RTTimings.BeginSceneUpdate();
 			dxrScene_.Update();

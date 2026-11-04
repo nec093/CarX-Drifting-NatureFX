@@ -166,15 +166,6 @@ namespace NatureFX.Rendering {
 				clouds_.erosionOcclusion.Override(0.2f);
 				State = $"sky, cover {cover:P0} (cumulus {cumulus:0.00}, altostratus {alto:0.00}, cumulonimbus {tower:0.00}), wind {windKmh_:0} km/h";
 			}
-			// what HDRP renders with in the end (another volume could still win), and the fog the clouds are seen
-			// through: thick enough, it hides clouds kilometres away entirely
-			var stack = VolumeOverhaul.Stack();
-			var drawn = stack?.GetComponent<VolumetricClouds>();
-			var fog = stack?.GetComponent<Fog>();
-			if (drawn != null) {
-				State += drawn.enable.value ? $" [HDRP: {drawn.cloudControl.value}" : " [HDRP: clouds OFF";
-				State += fog != null && fog.enabled.value ? $", fog {fog.meanFreePath.value:0} m up to {fog.maximumHeight.value:0} m]" : ", no fog]";
-			}
 			if (GraphicsSettings.currentRenderPipeline is HDRenderPipelineAsset asset && !asset.currentPlatformRenderPipelineSettings.supportVolumetricClouds) {
 				State += " - NOT DRAWN: the game's HDRP asset has volumetric clouds off";
 			}

@@ -48,6 +48,33 @@ namespace NatureFX.Map {
 			public Marker Marker;
 		}
 
+		// ---- the own engine's 3D fog boxes (AtmospherePass), from the volumes' own values, not read back from HDRP's
+		// component (that is only for HDRP's volumetric fog, with the own fog off); a map's own Local Volumetric Fog is
+		// the map's data, read from it
+		public struct FogBox {
+			public Vector3 Center, Right, Up, Forward, Half;
+			public float MeanFreePath, FadeShare, NoiseSize;
+			public Color Albedo;
+			public bool Exponential;
+		}
+		public static readonly List<FogBox> Boxes = new();
+		// the components these volumes drive (AtmospherePass leaves them to Boxes)
+		public static readonly HashSet<LocalVolumetricFog> Driven = new();
+
+		public static FogBox BoxOf(LocalVolumetricFog f) {
+			var p = f.parameters;
+			var t = f.transform;
+			return new FogBox {
+				Center = t.position, Right = t.right, Up = t.up, Forward = t.forward,
+				Half = Vector3.Max(p.size * 0.5f, Vector3.one * 0.05f),
+				MeanFreePath = p.meanFreePath,
+				Albedo = p.albedo,
+				FadeShare = Mathf.Clamp((p.positiveFade.x + p.positiveFade.y + p.positiveFade.z + p.negativeFade.x + p.negativeFade.y + p.negativeFade.z) / 6.0f, 0.05f, 1.0f),
+				NoiseSize = p.textureTiling.x > 0.0f ? p.size.x / p.textureTiling.x : Mathf.Max(p.size.x / 3.0f, 0.5f),
+				Exponential = p.falloffMode == LocalVolumetricFogFalloffMode.Exponential,
+			};
+		}
+
 		private readonly List<Volume> volumes_ = new();
 		private readonly List<Volume> sorted_ = new();
 		private Texture3D noise_;
@@ -125,6 +152,8 @@ namespace NatureFX.Map {
 			}
 			volumes_.Clear();
 			sorted_.Clear();
+			Boxes.Clear();
+			Driven.Clear();
 			AnyVisible = false;
 		}
 
@@ -147,6 +176,7 @@ namespace NatureFX.Map {
 				sinceRain_ += Time.deltaTime;
 			}
 			lastRain_ = w.Rain;
+			Boxes.Clear();
 			if (volumes_.Count == 0) {
 				AnyVisible = false;
 				return;
@@ -173,6 +203,7 @@ namespace NatureFX.Map {
 				if (v.Fog == null) {
 					continue;
 				}
+				Driven.Add(v.Fog);
 				bool suits = v.HasWhen ? Matches(v.When, elevation) : Condition(v.Preset, elevation, morning, cold, w);
 				bool wanted = on && v.Near && suits;
 				v.Level = Mathf.MoveTowards(v.Level, wanted ? 1.0f : 0.0f, Time.deltaTime / FadeSeconds);
@@ -187,12 +218,27 @@ namespace NatureFX.Map {
 				}
 				any = true;
 				if (v.Created) {
+					float meanFreePath = v.Look.MeanFreePath / (v.Density * Mathf.Max(v.Level, 0.02f));
 					var p = v.Fog.parameters;
-					p.meanFreePath = v.Look.MeanFreePath / (v.Density * Mathf.Max(v.Level, 0.02f));
+					p.meanFreePath = meanFreePath;
 					// drift with the wind (smoke along its yaw when given)
 					var drift = float.IsNaN(v.Yaw) ? new Vector3(windDir.x, 0.0f, windDir.z) * windDir.w : Quaternion.Euler(0.0f, v.Yaw, 0.0f) * Vector3.forward;
 					p.textureScrollingSpeed = v.Look.Scroll + drift * 0.6f;
 					v.Fog.parameters = p;
+					// the own fog's box from the volume's own values (as Load made the component: 0.3 / 0.4 fades, the
+					// noise 12 m across, round)
+					var size = v.Marker != null && v.Marker.Size.x > 0.5f && v.Marker.Size.y > 0.5f ? v.Marker.Size : v.Look.Size;
+					var rot = v.Marker != null ? v.Marker.Rotation : v.Fog.transform.rotation;
+					Boxes.Add(new FogBox {
+						Center = v.Marker != null ? v.Marker.Position : v.Fog.transform.position,
+						Right = rot * Vector3.right, Up = rot * Vector3.up, Forward = rot * Vector3.forward,
+						Half = Vector3.Max(size * 0.5f, Vector3.one * 0.05f),
+						MeanFreePath = meanFreePath, Albedo = v.Look.Albedo,
+						FadeShare = (0.3f + 0.4f + 0.3f) / 3.0f, NoiseSize = 12.0f, Exponential = true,
+					});
+				} else {
+					// the map's own component: its values are the map's data
+					Boxes.Add(BoxOf(v.Fog));
 				}
 			}
 			AnyVisible = any;

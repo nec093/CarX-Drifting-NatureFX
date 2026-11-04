@@ -32,8 +32,8 @@
   - 太陽・ライトの値：合成では HDRP が加えた光を差し引くため、HDRP と同じ Light の値を読む必要がある。
   - 反射の空の差し引き（HDRP の空の種類・反射倍率）、深度・法線・モーションベクトル・G バッファ・HDRP の画像。
 - マップのデータとして残るもの：マップのライト、霧の設定と霧ボリューム、マテリアル。独自のマップ形式を作るまでは入力データとして使う。
-- 残作業：霧の箱（`MapVolumes` が作る NatureFX 自身の箱も HDRP の `LocalVolumetricFog` を経由して渡している）を独自のデータで直接渡す。挙動は変わらない。
-- 関連ファイル：`Rendering/PostProcess.cs`、`Rendering/AtmospherePass.cs`、`Rendering/RTReflectionPass.cs`、`Map/MapVolumes.cs`、`Rendering/LocalLights.cs`
+- 対応済み（2026-11）：霧の箱は `MapVolumes.Boxes` で NatureFX 自身の値を直接渡す。マップの街灯・ブレーキ・アフターファイアの明るさは NatureFX がカンデラで計算して HDRP と独自エンジンに渡す。HDRP のプローブ・雲・霧の状態表示の読み取りを廃止。ランプの影の判定は NatureFX の記録（`lampShadowsBefore_`）とランプ自身の設定で行う。DLSS の HDRP TAAU 経由の経路を削除。
+- 関連ファイル：`Rendering/PostProcess.cs`、`Rendering/AtmospherePass.cs`、`Rendering/RTReflectionPass.cs`、`Map/MapVolumes.cs`、`Map/MapLights.cs`、`Rendering/CarGlow.cs`、`Rendering/LocalLights.cs`、`Rendering/Dlaa.cs`
 
 ### 1.3 独自 BSDF（実験的機能）
 
