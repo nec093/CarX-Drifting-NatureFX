@@ -493,7 +493,6 @@ namespace NatureFX.Rendering {
 				atmosphereTrace_.Anisotropy = s.RTShaftAnisotropy;
 				atmosphereComposite_.StarBrightness = s.StarBrightness;
 			}
-			NativeEngine.Pipeline = s.RTBackend == 0;
 			NativeEngine.Dxr12Sun = NativeEngine.Enabled && s.RTDxr12Sun;
 			NativeEngine.Wind = s.RTWind;
 			NativeEngine.Dxr12SunPaused = (benchmarkOff_ & RTStage.Dxr12Sun) != 0;

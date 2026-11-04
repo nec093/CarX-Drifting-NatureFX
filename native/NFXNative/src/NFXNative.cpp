@@ -52,29 +52,6 @@
 #include "GroundMap.h"        // g_GroundMap: the ground seen from above (ground blend, painted dirt, debris)
 #include "SanitizeIndices.h"  // g_SanitizeIndices: shaders/SanitizeIndices.hlsl as DXIL
 #include "ExtractUvs.h"       // g_ExtractUvs: shaders/ExtractUvs.hlsl as DXIL
-// the same traces as DXR 1.0 libraries (NFX_PIPELINE: TraceRay in a ray tracing pipeline), g_<name>Lib
-#include "SunShadowLib.h"
-#include "AmbientLib.h"
-#include "LocalShadowsLib.h"
-#include "ShaftsLib.h"
-#include "SurfaceLib.h"
-#include "ReflectionLib.h"
-#include "GILib.h"
-#include "GICacheResolveLib.h"
-#include "GlassLib.h"
-#include "SkyTransmittanceLib.h"
-#include "SkyMultiScatterLib.h"
-#include "SkyViewLib.h"
-#include "CloudNoiseLib.h"
-#include "CloudsLib.h"
-#include "CloudShadowLib.h"
-#include "SkyAmbientLib.h"
-#include "FogLib.h"
-#include "FogVolumeLib.h"
-#include "SkyCubeLib.h"
-#include "LampMaskLib.h"
-#include "SunMapLib.h"
-#include "GroundMapLib.h"
 #include "CopyRaw.h"          // g_CopyRaw: shaders/CopyRaw.hlsl as DXIL
 #include "WindDisplace.h"     // g_WindDisplace: shaders/WindDisplace.hlsl (foliage swayed by the wind)
 #include "BakeAlpha.h"        // g_BakeAlpha: shaders/BakeAlpha.hlsl as DXIL
@@ -421,81 +398,6 @@ constexpr UINT64 kCacheBytes = (1ull << 19) * 48;
 ComPtr<ID3D12Resource> g_cache;
 ComPtr<ID3D12RootSignature> g_traceRoot;
 ComPtr<ID3D12PipelineState> g_tracePso[kTraceKinds];
-// DXR 1.0: the traces as ray tracing pipelines (state objects) and their shader tables (ray generation, miss, hit
-// group records, kTableStride apart); used while g_pipeline is set (NFX_Native_SetPipeline)
-ComPtr<ID3D12StateObject> g_traceState[kTraceKinds];
-ComPtr<ID3D12Resource> g_traceTables;
-constexpr UINT kTableStride = 64;  // D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT
-std::atomic<bool> g_pipeline{ false };
-
-// The payload of NFXCommon.hlsli's NfxPayload: t, instance, primitive, barycentrics, object to world 3x4
-constexpr UINT kPayloadBytes = 4 + 4 + 4 + 8 + 48;
-
-bool CreateTraceStateObjects() {
-	if (g_traceState[kTraceKinds - 1]) {
-		return true;
-	}
-	const D3D12_SHADER_BYTECODE libraries[kTraceKinds] = {
-		ShaderCode("SunShadowLib", g_SunShadowLib, sizeof(g_SunShadowLib)), ShaderCode("AmbientLib", g_AmbientLib, sizeof(g_AmbientLib)),
-		ShaderCode("LocalShadowsLib", g_LocalShadowsLib, sizeof(g_LocalShadowsLib)), ShaderCode("ShaftsLib", g_ShaftsLib, sizeof(g_ShaftsLib)),
-		ShaderCode("SurfaceLib", g_SurfaceLib, sizeof(g_SurfaceLib)), ShaderCode("ReflectionLib", g_ReflectionLib, sizeof(g_ReflectionLib)),
-		ShaderCode("GILib", g_GILib, sizeof(g_GILib)), ShaderCode("GICacheResolveLib", g_GICacheResolveLib, sizeof(g_GICacheResolveLib)),
-		ShaderCode("GlassLib", g_GlassLib, sizeof(g_GlassLib)),
-		ShaderCode("SkyTransmittanceLib", g_SkyTransmittanceLib, sizeof(g_SkyTransmittanceLib)),
-		ShaderCode("SkyMultiScatterLib", g_SkyMultiScatterLib, sizeof(g_SkyMultiScatterLib)), ShaderCode("SkyViewLib", g_SkyViewLib, sizeof(g_SkyViewLib)),
-		ShaderCode("CloudNoiseLib", g_CloudNoiseLib, sizeof(g_CloudNoiseLib)), ShaderCode("CloudsLib", g_CloudsLib, sizeof(g_CloudsLib)),
-		ShaderCode("CloudShadowLib", g_CloudShadowLib, sizeof(g_CloudShadowLib)), ShaderCode("SkyAmbientLib", g_SkyAmbientLib, sizeof(g_SkyAmbientLib)),
-		ShaderCode("FogLib", g_FogLib, sizeof(g_FogLib)), ShaderCode("FogVolumeLib", g_FogVolumeLib, sizeof(g_FogVolumeLib)),
-		ShaderCode("SkyCubeLib", g_SkyCubeLib, sizeof(g_SkyCubeLib)), ShaderCode("LampMaskLib", g_LampMaskLib, sizeof(g_LampMaskLib)),
-		ShaderCode("SunMapLib", g_SunMapLib, sizeof(g_SunMapLib)), ShaderCode("GroundMapLib", g_GroundMapLib, sizeof(g_GroundMapLib))
-	};
-	// every kind: 3 records (ray generation, miss, hit group), one table row
-	if (!g_traceTables) {
-		g_traceTables = CreateBuffer(static_cast<UINT64>(kTableStride) * 3 * kTraceKinds, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE,
-		                             D3D12_RESOURCE_STATE_GENERIC_READ);
-		if (!g_traceTables) {
-			return false;
-		}
-	}
-	unsigned char* tables = nullptr;
-	if (FAILED(g_traceTables->Map(0, nullptr, reinterpret_cast<void**>(&tables))) || tables == nullptr) {
-		return false;
-	}
-	bool ok = true;
-	for (int k = 0; k < kTraceKinds && ok; ++k) {
-		if (g_traceState[k]) {
-			continue;
-		}
-		D3D12_EXPORT_DESC exports[4] = { { L"NfxRayGen", nullptr, D3D12_EXPORT_FLAG_NONE }, { L"NfxAnyHit", nullptr, D3D12_EXPORT_FLAG_NONE },
-		                                 { L"NfxClosestHit", nullptr, D3D12_EXPORT_FLAG_NONE }, { L"NfxMiss", nullptr, D3D12_EXPORT_FLAG_NONE } };
-		D3D12_DXIL_LIBRARY_DESC library = { libraries[k], 4, exports };
-		D3D12_HIT_GROUP_DESC hitGroup = { L"NfxHitGroup", D3D12_HIT_GROUP_TYPE_TRIANGLES, L"NfxAnyHit", L"NfxClosestHit", nullptr };
-		D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = { kPayloadBytes, 8 };
-		D3D12_GLOBAL_ROOT_SIGNATURE globalRoot = { g_traceRoot.Get() };
-		D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig = { 1 };
-		D3D12_STATE_SUBOBJECT subobjects[] = {
-			{ D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &library },
-			{ D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP, &hitGroup },
-			{ D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG, &shaderConfig },
-			{ D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE, &globalRoot },
-			{ D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pipelineConfig },
-		};
-		D3D12_STATE_OBJECT_DESC desc = { D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, _countof(subobjects), subobjects };
-		ComPtr<ID3D12StateObjectProperties> props;
-		if (FAILED(g_device->CreateStateObject(&desc, IID_PPV_ARGS(&g_traceState[k]))) || FAILED(g_traceState[k].As(&props))) {
-			g_traceState[k].Reset();
-			ok = false;
-			break;
-		}
-		unsigned char* row = tables + static_cast<size_t>(k) * kTableStride * 3;
-		memcpy(row, props->GetShaderIdentifier(L"NfxRayGen"), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		memcpy(row + kTableStride, props->GetShaderIdentifier(L"NfxMiss"), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-		memcpy(row + kTableStride * 2, props->GetShaderIdentifier(L"NfxHitGroup"), D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-	}
-	g_traceTables->Unmap(0, nullptr);
-	return ok;
-}
-
 bool CreateTracePipelines() {
 	if (g_tracePso[kTraceKinds - 1]) {
 		return true;
@@ -561,8 +463,6 @@ bool CreateTracePipelines() {
 			return false;
 		}
 	}
-	// the DXR 1.0 pipelines too (failing them only keeps the inline traces)
-	CreateTraceStateObjects();
 	return true;
 }
 
@@ -2578,22 +2478,7 @@ void Trace(const TraceEventData* data) {
 	list->SetComputeRootShaderResourceView(5, data->probe->GetGPUVirtualAddress());
 	list->SetComputeRootShaderResourceView(6, (data->screen != nullptr ? data->screen : data->surface)->GetGPUVirtualAddress());
 	list->SetComputeRootUnorderedAccessView(7, g_cache->GetGPUVirtualAddress());
-	if (g_pipeline && g_traceState[data->kind]) {
-		// DXR 1.0: the same trace as a ray generation shader over width x height (the root arguments above are the
-		// global root signature's)
-		list->SetPipelineState1(g_traceState[data->kind].Get());
-		D3D12_GPU_VIRTUAL_ADDRESS row = g_traceTables->GetGPUVirtualAddress() + static_cast<UINT64>(data->kind) * kTableStride * 3;
-		D3D12_DISPATCH_RAYS_DESC rays = {};
-		rays.RayGenerationShaderRecord = { row, kTableStride };
-		rays.MissShaderTable = { row + kTableStride, kTableStride, kTableStride };
-		rays.HitGroupTable = { row + kTableStride * 2, kTableStride, kTableStride };
-		rays.Width = data->width;
-		rays.Height = data->height;
-		rays.Depth = 1;
-		list->DispatchRays(&rays);
-	} else {
-		list->Dispatch((data->width + 7) / 8, (data->height + 7) / 8, 1);
-	}
+	list->Dispatch((data->width + 7) / 8, (data->height + 7) / 8, 1);
 	D3D12_RESOURCE_BARRIER barrier = UavBarrier(nullptr);
 	list->ResourceBarrier(1, &barrier);
 	g_render.Submit(queue);
@@ -2712,13 +2597,6 @@ NFX_EXPORT void NFX_Native_UpdateTransforms(const int* indices, const float* tra
 			memcpy(g_rtResolved[index].Transform, transforms + i * 12, sizeof(g_rtResolved[index].Transform));
 		}
 	}
-}
-
-// How the traces run: 1 DXR 1.0 (TraceRay in ray tracing pipelines), 0 DXR 1.1 (inline ray queries). Returns 1 when
-// the pipelines exist (else the inline traces keep running).
-NFX_EXPORT int NFX_Native_SetPipeline(int pipeline) {
-	g_pipeline = pipeline != 0 && g_traceState[kTraceKinds - 1] != nullptr;
-	return g_traceState[kTraceKinds - 1] ? 1 : 0;
 }
 
 // Whether the sun shadows can run (Unity's queue known, scene built, pipeline ready): 1 / 0
@@ -2920,7 +2798,6 @@ void ReloadShaders() {
 	}
 	for (int k = 0; k < kTraceKinds; ++k) {
 		g_tracePso[k].Reset();
-		g_traceState[k].Reset();
 	}
 	bool ok = CreateTracePipelines();
 	NrdDropKernels();
@@ -3040,7 +2917,7 @@ NFX_EXPORT int NFX_Native_MemoryStats(unsigned long long* out, int capacity) {
 		for (const auto& r : g_renderInstances) {
 			v[6] += ResourceBytes(r.Get());
 		}
-		v[7] = ResourceBytes(g_records.Get()) + ResourceBytes(g_traceTables.Get()) + ResourceBytes(g_frameConstants.Get());
+		v[7] = ResourceBytes(g_records.Get()) + ResourceBytes(g_frameConstants.Get());
 		v[8] = ResourceBytes(g_cache.Get());
 		// (their BLAS are in the BLAS pool's numbers)
 		v[9] = ResourceBytes(g_windScratch.Get()) + ResourceBytes(g_windFrames.Get()) + g_windPool.Reserved();

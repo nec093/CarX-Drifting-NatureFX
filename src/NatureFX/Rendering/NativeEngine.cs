@@ -37,7 +37,6 @@ namespace NatureFX.Rendering {
 		[DllImport(DllName)] private static extern int NFX_Native_MemoryStats(ulong[] values, int capacity);
 		[DllImport(DllName)] private static extern int NFX_Native_GpuTimings(byte[] buffer, int size);
 		[DllImport(DllName)] private static extern void NFX_Native_SetRtOmm(int enabled);
-		[DllImport(DllName)] private static extern int NFX_Native_SetPipeline(int pipeline);
 		[DllImport(DllName)] private static extern int NFX_Native_GpuMemory(out ulong usedMb, out ulong budgetMb);
 
 		// The game's video memory use and budget (MB), as the OS counts them; logged every 30 s while the engine runs
@@ -179,26 +178,8 @@ namespace NatureFX.Rendering {
 		private static int loggedEmitters_;
 		private const float EmitterMinLuminance = 200.0f;  // nits: neon, lit signs and lamp shades, not glowing paint
 
-		// DXR 1.0 (TraceRay in ray tracing pipelines) or DXR 1.1 (inline ray queries), Settings.RTBackend 0 / 1
-		public static bool Pipeline { get; set; }
-		private static int pipelineSet_ = -1;
-		private static bool pipelineAvailable_ = true;
-		public static string ModeName => pipelineSet_ == 1 ? "DXR 1.0" : "DXR 1.1";
-
-		private static void UpdatePipeline() {
-			int wanted = Pipeline && pipelineAvailable_ ? 1 : 0;
-			if (wanted == pipelineSet_) {
-				return;
-			}
-			int available = NFX_Native_SetPipeline(wanted);
-			if (wanted == 1 && available != 1) {
-				// the pipelines are made with the scene's first build: until then, and if they fail, inline queries
-				pipelineSet_ = 0;
-				return;
-			}
-			pipelineSet_ = wanted;
-			Kino.Log.Info($"[NatureFX] Native engine: traces with {ModeName}");
-		}
+		// the engine traces inline (DXR 1.1 ray queries); DXR 1.0's ray tracing pipelines are gone
+		public const string ModeName = "DXR 1.1";
 
 		// The traced foliage sways with the wind NatureFX/Foliage draws (Settings.RTWind)
 		public static bool Wind { get; set; }
@@ -492,12 +473,6 @@ namespace NatureFX.Rendering {
 				}
 				Kino.Log.Info($"[NatureFX] Camera {sizeWidth_}x{sizeHeight_}: GPU memory {GpuMemory}; trace buffers {bytes / 1048576} MB " +
 				              $"(+ NRD guides {guideBytes / 1048576} MB), {retired_.Count} replaced ones still held ({retiredBytes / 1048576} MB); by kind (MB):{parts}");
-			}
-			try {
-				UpdatePipeline();
-			} catch (Exception e) {
-				pipelineAvailable_ = false;
-				Kino.Log.Warning($"[NatureFX] Native engine: DXR 1.0 pipelines unavailable ({e.GetType().Name}: {e.Message})");
 			}
 			try {
 				UpdateWind();

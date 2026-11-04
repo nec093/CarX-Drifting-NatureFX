@@ -183,7 +183,7 @@ namespace NatureFX.Tools {
 			                  Set = v => set(Mathf.Clamp(Mathf.RoundToInt(v), 0, options.Length - 1)), Default = () => def(), Saved = true, Tab = "settings" });
 		}
 
-		private static readonly HashSet<string> Retired = new() { "ReplaceGameSmoke" };
+		private static readonly HashSet<string> Retired = new() { "ReplaceGameSmoke", "RTBackend" };
 
 		private static void BuildSettings() {
 			BuildWindowSettings();

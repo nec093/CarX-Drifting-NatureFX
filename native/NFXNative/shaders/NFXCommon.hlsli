@@ -222,10 +222,8 @@ bool AlphaSolid(uint instance, uint primitive, float2 barycentrics)
 }
 
 // ------------------------------------------------------------------ rays
-// Two ways to trace the same rays: inline ray queries (DXR 1.1, compute shaders: the default) or, with NFX_PIPELINE,
-// TraceRay in a ray tracing pipeline (DXR 1.0: each trace kind compiled as a library with a ray generation shader,
-// one hit group whose any hit shader runs the alpha test, and a miss shader). The traces only use these helpers, and
-// NFX_ENTRY for their entry point, so they compile either way.
+// The rays are traced inline (DXR 1.1 ray queries in compute shaders; DXR 1.0's ray tracing pipelines are gone). The
+// traces only use these helpers, and NFX_ENTRY for their entry point.
 
 bool CoarseAt(float3 pointAWS)
 {
@@ -252,108 +250,6 @@ RayDesc MakeRay(float3 origin, float3 direction, float maxDist)
     return ray;
 }
 
-#ifdef NFX_PIPELINE
-
-// TraceRay's payload: what the closest hit shader saw (t < 0: missed)
-struct NfxPayload
-{
-    float t;
-    uint instance;
-    uint primitive;
-    float2 barycentrics;
-    float4 row0;
-    float4 row1;
-    float4 row2;
-};
-
-[shader("anyhit")]
-void NfxAnyHit(inout NfxPayload p, BuiltInTriangleIntersectionAttributes attributes)
-{
-    // only non opaque (alpha tested) instances get here
-    if (!AlphaSolid(InstanceID(), PrimitiveIndex(), attributes.barycentrics))
-        IgnoreHit();
-}
-
-[shader("closesthit")]
-void NfxClosestHit(inout NfxPayload p, BuiltInTriangleIntersectionAttributes attributes)
-{
-    p.t = RayTCurrent();
-    p.instance = InstanceID();
-    p.primitive = PrimitiveIndex();
-    p.barycentrics = attributes.barycentrics;
-    float3x4 m = ObjectToWorld3x4();
-    p.row0 = m[0];
-    p.row1 = m[1];
-    p.row2 = m[2];
-}
-
-[shader("miss")]
-void NfxMiss(inout NfxPayload p)
-{
-    p.t = -1.0;
-}
-
-NfxPayload NfxTrace(float3 origin, float3 direction, float maxDist, uint flags, uint mask)
-{
-    NfxPayload p = (NfxPayload)0;
-    p.t = -1.0;
-    TraceRay(Scene, flags | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, mask, 0, 0, 0, MakeRay(origin, direction, maxDist), p);
-    return p;
-}
-
-bool NfxToHit(NfxPayload p, out Hit hit)
-{
-    hit = (Hit)0;
-    if (p.t < 0.0)
-        return false;
-    hit.t = p.t;
-    hit.instance = p.instance;
-    hit.primitive = p.primitive;
-    hit.barycentrics = p.barycentrics;
-    hit.objectToWorld = float3x4(p.row0, p.row1, p.row2);
-    return true;
-}
-
-// Whether anything lies within maxDist along the ray; alpha tested surfaces cut their holes unless coarse
-bool Blocked(float3 origin, float3 direction, float maxDist, bool coarse)
-{
-    NfxPayload p = (NfxPayload)0;
-    p.t = 1.0;  // the miss shader clears it; with the closest hit shader skipped a hit leaves it
-    TraceRay(Scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES |
-             (coarse ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE), NFX_SCENE_MASK, 0, 0, 0, MakeRay(origin, direction, maxDist), p);
-    return p.t >= 0.0;
-}
-
-// The distance to the first blocker found (any, not the closest: the sun's penumbra), < 0 when none
-float FirstBlocker(float3 origin, float3 direction, float maxDist, bool coarse)
-{
-    return NfxTrace(origin, direction, maxDist, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | (coarse ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE),
-                    NFX_SCENE_MASK).t;
-}
-
-bool Closest(float3 origin, float3 direction, float maxDist, bool coarse, out Hit hit)
-{
-    return NfxToHit(NfxTrace(origin, direction, maxDist, coarse ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, NFX_SCENE_MASK), hit);
-}
-
-// the closest of the instances in mask (alpha tested)
-bool ClosestMasked(float3 origin, float3 direction, float maxDist, uint mask, out Hit hit)
-{
-    return NfxToHit(NfxTrace(origin, direction, maxDist, RAY_FLAG_NONE, mask), hit);
-}
-
-// The closest glass along the ray (glass is opaque to this query: no alpha test)
-bool ClosestGlass(float3 origin, float3 direction, float maxDist, out Hit hit)
-{
-    return NfxToHit(NfxTrace(origin, direction, maxDist, RAY_FLAG_FORCE_OPAQUE, NFX_GLASS_MASK), hit);
-}
-
-// the trace's entry point: a ray generation shader over the dispatch's width x height
-#define NFX_ENTRY(id) void NfxTraceMain(uint3 id); \
-    [shader("raygeneration")] void NfxRayGen() { NfxTraceMain(DispatchRaysIndex()); } \
-    void NfxTraceMain(uint3 id)
-
-#else
 
 // Whether anything lies within maxDist along the ray; alpha tested surfaces cut their holes unless coarse
 bool Blocked(float3 origin, float3 direction, float maxDist, bool coarse)
@@ -451,7 +347,6 @@ bool ClosestGlass(float3 origin, float3 direction, float maxDist, out Hit hit)
 // the trace's entry point: a compute shader in 8 x 8 groups
 #define NFX_ENTRY(id) [numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID)
 
-#endif
 
 bool SunVisible(float3 originAWS)
 {

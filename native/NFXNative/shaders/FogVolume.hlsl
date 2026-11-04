@@ -156,11 +156,9 @@ NFX_ENTRY(id)
         uint4 mask = (Flags & NFX_FLAG_FOG_LISTS) != 0u
             ? Surface.Load4((FogListBase + ((y >> 3) * FogTilesX + (x >> 3)) * FogBands + (s >> 4)) * 16)
             : (uint4)0xFFFFFFFFu;
-#ifndef NFX_PIPELINE
         // a thread group straddling two rows of tiles (90 rows are not a multiple of 8): one list for the wave, so the
         // light index stays uniform (the constant buffer reads are broadcast; per lane they would be serialised)
         mask = WaveActiveBitOr(mask);
-#endif
         [loop] for (uint w = 0; w < 4u; ++w)
         {
             uint bits = mask[w];

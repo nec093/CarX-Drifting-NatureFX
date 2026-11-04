@@ -27,7 +27,6 @@ namespace NatureFX {
 		};
 		private static readonly string[] TonemapNames = { "ACES", "Neutral", "Filmic (GT) / AgX", "None" };
 		private static readonly string[] ReflectionQualityNames = { "Performance", "Balanced", "Quality" };
-		private static readonly string[] BackendNames = { "DXR 1.0", "DXR 1.1" };
 
 		private readonly NatureFXMod mod_;
 		private Vector2 position_ = new(60, 60);
@@ -194,7 +193,7 @@ namespace NatureFX {
 			GUILayout.Label("NatureFX", Theme.Title, GUILayout.Height(24));
 			GUILayout.Space(10);
 			string api = SystemInfo.graphicsDeviceType.ToString().Replace("Direct3D", "DX");
-			string engine = BackendNames[Mathf.Clamp(S.RTBackend, 0, BackendNames.Length - 1)];
+			string engine = NativeEngine.ModeName;
 			GUILayout.Label($"{api}  ·  {engine}", Theme.Subtitle, GUILayout.Height(24));
 			GUILayout.FlexibleSpace();
 
@@ -937,7 +936,7 @@ namespace NatureFX {
 			Other(Widgets.Switch("Bounce light", S.RTGIBounce, v => S.RTGIBounce = v,
 				"Surfaces pass on their colour and the sun they catch (a red wall tints the road, sunlit tarmac lights the underside of a car). " +
 				"Off: blocking only (ambient occlusion), lighter."));
-			Widgets.BeginDependent(S.RTGIBounce && S.RTBackend == 1);
+			Widgets.BeginDependent(S.RTGIBounce);
 			Other(Widgets.Switch("Global illumination (every bounce)", S.RTGIMultiBounce, v => S.RTGIMultiBounce = v,
 				"Own engine only: light keeps bouncing (floor to wall to ceiling under a roof), lit signs and lamps light their " +
 				"surroundings. Builds up over a few seconds in a world space cache. Off: one bounce."));
@@ -1050,15 +1049,7 @@ namespace NatureFX {
 
 		// One choice for every ray traced effect: surfaces, shadows, ambient light, lamps, light shafts and reflections
 		private void DrawRayTracingBackend() {
-			Widgets.BeginCard("Ray tracing engine", "How NatureFX's own engine (NFXNative.dll) traces every ray traced effect (surfaces, shadows, ambient light, lamps, light shafts, reflections). DX12 only.");
-			int backend = Mathf.Clamp(S.RTBackend, 0, BackendNames.Length - 1);
-			if (Widgets.Chips(ref backend, BackendNames)) {
-				S.RTBackend = backend;
-				Other(true);
-			}
-			Widgets.Info(backend == 1
-				? "DXR 1.1: inline ray queries in compute shaders."
-				: "DXR 1.0: ray tracing pipelines (TraceRay with hit shaders). " + $"Now: {NativeEngine.ModeName}.");
+			Widgets.BeginCard("Ray tracing engine", "NatureFX's own engine (NFXNative.dll) traces every ray traced effect (surfaces, shadows, ambient light, lamps, light shafts, reflections) with DXR 1.1's inline ray queries. DX12 and a DXR 1.1 GPU (RTX 20, RX 6000, Arc or newer) needed.");
 			if (!NativeEngine.Ready) {
 				Widgets.Info($"<color=#F5B14C>The own engine is not available: {NativeEngine.Info}. No ray traced effects.</color>");
 			}
@@ -1080,11 +1071,9 @@ namespace NatureFX {
 				: "NVIDIA Real-Time Denoisers: SIGMA for the sun shadows, REBLUR for the ambient light and GI (at quarter resolution " +
 				  $"without the frame to frame offset), the lamp shadows and the reflections. Now: {NativeEngine.NrdStatus}");
 			Widgets.Info("Timings, rays, lamps, the scene and GPU memory: the debug page (Developer > Debug page, in a browser).");
-			if (backend == 1) {
-				Other(Widgets.Switch("Sun shadows on DXR 1.2 (test)", S.RTDxr12Sun, v => S.RTDxr12Sun = v,
-					"Stage 1 of the move to DXR 1.2: the sun shadows are traced on a Shader Model 6.9 device next to the game's. Same look; compare the frame rate."));
-				Widgets.Info($"DXR 1.2 sun shadows: {NativeEngine.Dxr12SunStatus}");
-			}
+			Other(Widgets.Switch("Sun shadows on DXR 1.2 (test)", S.RTDxr12Sun, v => S.RTDxr12Sun = v,
+				"Stage 1 of the move to DXR 1.2: the sun shadows are traced on a Shader Model 6.9 device next to the game's. Same look; compare the frame rate."));
+			Widgets.Info($"DXR 1.2 sun shadows: {NativeEngine.Dxr12SunStatus}");
 			if (Widgets.Button("Test DXR 1.2", 200)) {
 				NativeEngine.RunDxr12Probe();
 			}

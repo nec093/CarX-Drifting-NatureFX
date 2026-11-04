@@ -29,12 +29,6 @@ foreach ($shader in @(@{ Name = 'RayQueryTest'; Profile = 'cs_6_5' }, @{ Name = 
 	if ($LASTEXITCODE -ne 0) { throw "dxc failed on $($shader.Name)" }
 }
 
-# the traces again as DXR 1.0 libraries (TraceRay in a ray tracing pipeline): g_<name>Lib
-foreach ($name in @('SunShadow', 'Ambient', 'LocalShadows', 'Shafts', 'Surface', 'Reflection', 'GI', 'GICacheResolve', 'Glass', 'SkyTransmittance', 'SkyMultiScatter', 'SkyView', 'CloudNoise', 'Clouds', 'CloudShadow', 'SkyAmbient', 'Fog', 'FogVolume', 'SkyCube', 'LampMask', 'SunMap', 'GroundMap')) {
-	& $dxc -nologo -T lib_6_6 -O3 -D NFX_PIPELINE -Vn "g_$($name)Lib" -Fh (Join-Path $out "$($name)Lib.h") -Fo (Join-Path $out "$($name)Lib.cso") (Join-Path $src "shaders\$name.hlsl")
-	if ($LASTEXITCODE -ne 0) { throw "dxc failed on $name (library)" }
-}
-
 # DXR 1.2 probe (native/Dxr12Probe): Shader Model 6.9 shaders from DXC 1.9, and the Agility SDK 1.619 headers ahead
 # of the Windows SDK's (they declare its device factory and the DXR 1.2 API)
 $agility = if ($env:NFX_AGILITY) { $env:NFX_AGILITY } else { Join-Path $env:USERPROFILE 'NatureFX-Deps\agility-1.619.6' }
