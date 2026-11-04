@@ -489,9 +489,6 @@ namespace NatureFX {
 			                                          "lit by the own engine's sun or moon, sky and lamps and inside its 3D fog. Fire, sparks and glows keep their own.");
 			Widgets.Info($"Now: {mod_.GameFx.Count} particle systems drawn by NatureFX, {mod_.GameFx.Skipped} kept (additive, mesh or no texture)");
 			Widgets.EndCard();
-
-		}
-
 		}
 
 		private void DrawSun() {
