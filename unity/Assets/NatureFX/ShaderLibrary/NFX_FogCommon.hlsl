@@ -190,4 +190,22 @@ float3 NFX_ApplyFog(float3 color, float4 fog)
     return color * fog.a + fog.rgb * GetCurrentExposureMultiplier();
 }
 
+// HDRP's forward pass of the NatureFX/* shaders on transparent surfaces (the generated NFX_ShaderPassForward.hlsl), on
+// the light loop's output before HDRP's blend: the 3D fog between the camera and the surface, what the air lets through
+// and, as far as the surface covers (the blend weighs it by the opacity), the air's own light; an additive surface adds
+// none. exposure: 1 where the light loop's output is not exposed yet, else the current multiplier. This is what the
+// see-through objects' second drawing (TransparentFog.cs) did for these surfaces.
+void NFX_FogForwardLighting(PositionInputs posInput, float3 V, float exposure, inout float3 diffuseLighting, inout float3 specularLighting)
+{
+    if (_NFX_FogVolumeParams.x < 0.5)
+        return;
+    float distance = length(posInput.positionWS);
+    float4 fog = NFX_Fog(posInput.positionNDC, posInput.linearDepth, distance, -V);
+    diffuseLighting *= fog.a;
+    specularLighting *= fog.a;
+#ifndef _BLENDMODE_ADD
+    diffuseLighting += fog.rgb * exposure;
+#endif
+}
+
 #endif

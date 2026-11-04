@@ -52,6 +52,7 @@ Shader "Hidden/NatureFX/TransparentFog"
             float _AlphaCutoff;
             float _BlendMode;      // HDRP: 0 alpha, 1 additive, 4 premultiplied
             float4 _NFX_PTiles;    // NatureFX/Particle's own (y >= 1): those fog themselves
+            float _NFX_SelfFog;    // the NatureFX/* lit shaders' (MaterialProfiles): their forward pass fogs them
 
             struct Attributes
             {
@@ -79,7 +80,7 @@ Shader "Hidden/NatureFX/TransparentFog"
 
             float4 Frag(Varyings v) : SV_Target
             {
-                if (_NFX_PTiles.y > 0.5)
+                if (_NFX_PTiles.y > 0.5 || _NFX_SelfFog > 0.5)
                     discard;
                 // whichever of the names the material has (an unset colour is 0: that name contributes nothing)
                 float lit = _BaseColor.a * SAMPLE_TEXTURE2D(_BaseColorMap, s_linear_repeat_sampler, v.uv * _BaseColorMap_ST.xy + _BaseColorMap_ST.zw).a;

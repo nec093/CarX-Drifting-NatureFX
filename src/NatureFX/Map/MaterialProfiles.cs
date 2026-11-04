@@ -62,6 +62,7 @@ namespace NatureFX.Map {
 		};
 
 		private static readonly int MaterialId = Shader.PropertyToID("_NFX_Material");
+		private static readonly int SelfFogId = Shader.PropertyToID("_NFX_SelfFog");
 		private static readonly int Material2Id = Shader.PropertyToID("_NFX_Material2");
 		private static readonly int SurfaceId = Shader.PropertyToID("_NFX_Surface");
 		private static readonly int Surface2Id = Shader.PropertyToID("_NFX_Surface2");
@@ -160,6 +161,9 @@ namespace NatureFX.Map {
 				return;
 			}
 			var look = Find(materials_, m, objectPath)?.Look ?? new Look();
+			// the NatureFX/* shaders' forward pass puts the own engine's fog on their transparent surfaces itself: the
+			// see-through objects' second drawing (TransparentFog) leaves them out
+			m.SetFloat(SelfFogId, 1.0f);
 			var emissive = Find(emissive_, m, objectPath);
 			m.SetVector(MaterialId, new Vector4(look.Porosity, look.Moss, look.Rust, look.Stain));
 			m.SetVector(Material2Id, new Vector4(look.Wear, look.Dirt, look.Beading, look.Retro));
